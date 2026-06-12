@@ -409,7 +409,9 @@ export class AppController {
       isAceV10Family: isAceV10Family(playerType, this.engineConfigs),
       isLocalMcts: isLocalMctsEngine(playerType, this.engineConfigs),
       isRemote: isRemoteEngine(playerType, this.engineConfigs),
-      strengthLevel: current?.strengthLevel ?? StrengthLevel.Alpha,
+      strengthLevel: isAceV10Family(playerType, this.engineConfigs)
+        ? normalizeAceV10Strength(current?.strengthLevel ?? 0)
+        : (current?.strengthLevel ?? StrengthLevel.Alpha),
       timeToMove: current?.timeToMove ?? TimeToMove.Short,
       wallClockSeconds: current?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds,
       visitsBudget: clampVisits(current?.visitsBudget ?? LOCAL_VISITS_RANGE.default),
