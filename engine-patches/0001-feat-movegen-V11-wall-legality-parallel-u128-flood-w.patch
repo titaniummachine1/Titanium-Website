@@ -1,0 +1,1024 @@
+From fe6f617d9a06cd079e3a189cfbf8704e1e390f15 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 12 Jun 2026 18:24:44 +0000
+Subject: [PATCH] =?UTF-8?q?feat(movegen):=20V11=20wall=20legality=20?=
+ =?UTF-8?q?=E2=80=94=20parallel=20u128=20flood=20with=20bit=20theft?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Replace the per-trial set_wall + zobrist + DirMasks-rebuild BFS with a
+speculative bitboard pipeline (path::parallel):
+
+- WallGrids: four directional blocked-step u128 masks in the centered
+  11-stride flood layout; a wall trial is a mask flip (place/remove of a
+  precomputed const delta), no board mutation.
+- Linear flood fill: one-step parallel dilation in all four directions per
+  iteration, early exit on goal contact or stagnation.
+- Bit theft: P2's flood annexes P1's cached visited region on first contact
+  (pawn connectivity is undirected), goal-testing the annexed pool
+  immediately.
+
+Fixes two V10 movegen soundness bugs:
+
+1. False negatives: both_players_reach_goals_with_masks concluded from P1's
+   *partial* early-exit component that P2 was trapped (empty board with
+   P1(7,4)/P2(6,4) returned false). Replaced the shortcut with a seeded
+   bit-theft flood. Three replay tests had asserted these false negatives
+   as expected behavior (a5h ply14, g1v, a6h) — naive can_step BFS confirms
+   all three walls keep both goal paths open; tests updated and the full
+   external replay test re-enabled.
+2. False positives: can_wall_block_topology compared the H-wall right edge
+   against js_col == 9, unreachable for 0-based slots, so right-edge H walls
+   skipped the path check and trapping walls were accepted. This was the
+   canta oracle perft mismatch (game 0 depth 2: 5980 != 5978); all 15 canta
+   games now match at depths 1-3.
+
+Perf (release, perft): canta midgames d3 4.35 -> 24.14 Mnodes/s (5.5x),
+startpos d4 83.3 -> 150.6 Mnodes/s (1.8x).
+---
+ examples/bench_movegen.rs |  28 +++
+ src/ace/mod.rs            |  20 +-
+ src/movegen/legal.rs      | 175 ++++-----------
+ src/path/bfs.rs           |  15 +-
+ src/path/flood.rs         |  30 +++
+ src/path/mod.rs           |   5 +
+ src/path/parallel.rs      | 435 ++++++++++++++++++++++++++++++++++++++
+ src/test_replay.rs        |  56 ++---
+ 8 files changed, 576 insertions(+), 188 deletions(-)
+ create mode 100644 examples/bench_movegen.rs
+ create mode 100644 src/path/parallel.rs
+
+diff --git a/examples/bench_movegen.rs b/examples/bench_movegen.rs
+new file mode 100644
+index 0000000..c82c18c
+--- /dev/null
++++ b/examples/bench_movegen.rs
+@@ -0,0 +1,28 @@
++//! Wall-movegen throughput: perft over the 15 canta midgame positions.
++use std::time::Instant;
++use titanium::oracle::canta::board_after_canta_game;
++use titanium::util::perft::perft_fast;
++
++fn main() {
++    // Warmup
++    for game in 0..15 {
++        let mut b = board_after_canta_game(game);
++        let _ = perft_fast(&mut b, 2);
++    }
++    let start = Instant::now();
++    let mut total = 0u64;
++    for game in 0..15 {
++        let mut b = board_after_canta_game(game);
++        total += perft_fast(&mut b, 3);
++    }
++    let dt = start.elapsed();
++    println!("perft d3 x15 canta: {} nodes in {:?} ({:.2} Mnodes/s)",
++        total, dt, total as f64 / dt.as_secs_f64() / 1e6);
++
++    let start = Instant::now();
++    let mut b = titanium::core::board::Board::new();
++    let n = perft_fast(&mut b, 4);
++    let dt = start.elapsed();
++    println!("perft d4 startpos: {} nodes in {:?} ({:.2} Mnodes/s)",
++        n, dt, n as f64 / dt.as_secs_f64() / 1e6);
++}
+diff --git a/src/ace/mod.rs b/src/ace/mod.rs
+index 1f7277f..e5b82c8 100644
+--- a/src/ace/mod.rs
++++ b/src/ace/mod.rs
+@@ -242,20 +242,14 @@ mod tests {
+             .collect();
+         let ace_ok = g.wall_legal(0, slot);
+         let can_block = can_wall_block_topology(&board, row, col, WallOrientation::Horizontal);
+-        eprintln!(
+-            "ti={} ace={} can_block={} ti_count={}",
+-            ti_legal.iter().any(|m| m == "a6h"),
+-            ace_ok,
+-            can_block,
+-            ti_legal.len()
+-        );
++        // a6h keeps both goal paths open here (naive BFS confirms); the old
++        // rejection was V10's partial-component false negative. ACE and the
++        // Titanium oracle must agree on acceptance.
++        assert!(can_block, "a6h touches topology — path flood must run");
++        assert!(ace_ok, "ACE must accept a6h when both goal paths survive");
+         assert!(
+-            !g.wall_legal(0, slot),
+-            "ACE must reject a6h when Titanium path check fails"
+-        );
+-        assert!(
+-            !ti_legal.iter().any(|m| m == "a6h"),
+-            "Titanium oracle must reject a6h on h3v line"
++            ti_legal.iter().any(|m| m == "a6h"),
++            "Titanium oracle must accept a6h on h3v line"
+         );
+     }
+ }
+diff --git a/src/movegen/legal.rs b/src/movegen/legal.rs
+index 887ae35..480b82c 100644
+--- a/src/movegen/legal.rs
++++ b/src/movegen/legal.rs
+@@ -1,13 +1,15 @@
+ //! Legal move generation — pawn jumps + wall placements with path validation.
+ 
+ use crate::core::board::{Board, Move, Player, WallOrientation};
+-use crate::core::zobrist;
+ use crate::movegen::pawn_bits::{
+     generate_pawn_moves_bitboard_with_masks, generate_pawn_moves_shift_slice,
+ };
+ use crate::path::masks::DirMasks;
++use crate::path::parallel::{
++    both_players_reach_goals_grids, pawn_bit, wall_delta, WallGrids,
++};
+ use crate::path::BfsScratch;
+-use crate::util::grid::{can_step, goal_row, has_wall, set_wall, square_index, unpack_square};
++use crate::util::grid::{can_step, has_wall};
+ 
+ const DIRS: [(i8, i8); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+ 
+@@ -194,37 +196,37 @@ pub fn generate_wall_moves_into(board: &mut Board, out: &mut Vec<Move>, scratch:
+ fn generate_wall_moves_slice(
+     board: &mut Board,
+     out: &mut [Move],
+-    scratch: &mut BfsScratch,
++    _scratch: &mut BfsScratch,
+ ) -> usize {
+-    let mut path_cache = None;
++    // Movegen V11: wall topology + pawn bits packed once, then every candidate
++    // wall is a speculative mask flip + parallel flood — no per-trial
++    // `set_wall`/zobrist juggling or `DirMasks` rebuild.
++    let mut ctx = WallTrialCtx::new(board);
+     let mut n = 0usize;
+     n += collect_wall_orientation(
+         board,
+         !board.horizontal_walls,
+         WallOrientation::Horizontal,
+         &mut out[n..],
+-        scratch,
+-        &mut path_cache,
++        &mut ctx,
+     );
+     n += collect_wall_orientation(
+         board,
+         !board.vertical_walls,
+         WallOrientation::Vertical,
+         &mut out[n..],
+-        scratch,
+-        &mut path_cache,
++        &mut ctx,
+     );
+     n
+ }
+ 
+ /// Iterate only **empty** wall slots via `trailing_zeros` — skips occupied bits early.
+ fn collect_wall_orientation(
+-    board: &mut Board,
++    board: &Board,
+     mut free: u64,
+     orientation: WallOrientation,
+     out: &mut [Move],
+-    scratch: &mut BfsScratch,
+-    path_cache: &mut Option<WallPathCache>,
++    ctx: &mut WallTrialCtx,
+ ) -> usize {
+     let mut n = 0usize;
+     while free != 0 {
+@@ -232,7 +234,7 @@ fn collect_wall_orientation(
+         free &= free - 1;
+         let row = (bit / 8) as u8;
+         let col = (bit % 8) as u8;
+-        if is_legal_wall(board, row, col, orientation, scratch, path_cache) {
++        if is_legal_wall(board, row, col, orientation, ctx) {
+             out[n] = Move::Wall {
+                 row,
+                 col,
+@@ -245,12 +247,11 @@ fn collect_wall_orientation(
+ }
+ 
+ fn is_legal_wall(
+-    board: &mut Board,
++    board: &Board,
+     row: u8,
+     col: u8,
+     orientation: WallOrientation,
+-    scratch: &mut BfsScratch,
+-    _path_cache: &mut Option<WallPathCache>,
++    ctx: &mut WallTrialCtx,
+ ) -> bool {
+     if wall_collides(board, row, col, orientation) {
+         return false;
+@@ -259,130 +260,40 @@ fn is_legal_wall(
+     if !can_wall_block_topology(board, row, col, orientation) {
+         return true;
+     }
+-    // Do NOT skip BFS when the wall is off the witness shortest path — unsound (a1h/a5h).
+-    path_ok_after_wall(board, row, col, orientation, scratch)
++    // Do NOT skip the flood when the wall is off the witness shortest path — unsound (a1h/a5h).
++    ctx.wall_keeps_paths_open(row, col, orientation)
+ }
+ 
+-struct WallPathCache {
+-    p1: [u8; 81],
+-    p2: [u8; 81],
+-    p1_len: usize,
+-    p2_len: usize,
++/// Per-node wall-trial state: directional blocked-step grids + pawn flood bits.
++struct WallTrialCtx {
++    grids: WallGrids,
++    p1_bit: u128,
++    p2_bit: u128,
+ }
+ 
+-impl WallPathCache {
+-    fn new(board: &Board, scratch: &mut BfsScratch) -> Self {
+-        let mut p1 = [u8::MAX; 81];
+-        let mut p2 = [u8::MAX; 81];
+-        let p1_len = shortest_path(board, Player::One, scratch, &mut p1);
+-        let p2_len = shortest_path(board, Player::Two, scratch, &mut p2);
++impl WallTrialCtx {
++    fn new(board: &Board) -> Self {
++        let (r1, c1) = board.pawn(Player::One);
++        let (r2, c2) = board.pawn(Player::Two);
+         Self {
+-            p1,
+-            p2,
+-            p1_len,
+-            p2_len,
++            grids: WallGrids::from_board(board),
++            p1_bit: pawn_bit(r1, c1),
++            p2_bit: pawn_bit(r2, c2),
+         }
+     }
+ 
++    /// Speculative trial: place the wall's blocked-edge delta, flood both
++    /// players (P2 reuses P1's visited cache via bit theft), roll back.
+     #[inline]
+-    fn wall_intersects_either_path(&self, row: u8, col: u8, orientation: WallOrientation) -> bool {
+-        wall_intersects_path(row, col, orientation, &self.p1, self.p1_len)
+-            || wall_intersects_path(row, col, orientation, &self.p2, self.p2_len)
+-    }
+-}
+-
+-fn shortest_path(
+-    board: &Board,
+-    player: Player,
+-    scratch: &mut BfsScratch,
+-    path_out: &mut [u8; 81],
+-) -> usize {
+-    let mut next_out = [u8::MAX; 81];
+-    scratch.fill_next_toward_goal(board, player, &mut next_out);
+-
+-    let (pr, pc) = board.pawn(player);
+-    let mut current = square_index(pr, pc);
+-    let mut len = 0usize;
+-    while len < path_out.len() {
+-        path_out[len] = current;
+-        len += 1;
+-
+-        let (row, _) = unpack_square(current);
+-        if row == goal_row(player) {
+-            break;
+-        }
+-
+-        let next = next_out[current as usize];
+-        if next == u8::MAX {
+-            break;
+-        }
+-        current = next;
+-    }
+-    len
+-}
+-
+-#[inline]
+-fn wall_intersects_path(
+-    row: u8,
+-    col: u8,
+-    orientation: WallOrientation,
+-    path: &[u8; 81],
+-    len: usize,
+-) -> bool {
+-    if len <= 1 {
+-        return false;
+-    }
+-    for i in 0..(len - 1) {
+-        if wall_blocks_path_step(row, col, orientation, path[i], path[i + 1]) {
+-            return true;
+-        }
+-    }
+-    false
+-}
+-
+-#[inline]
+-fn wall_blocks_path_step(row: u8, col: u8, orientation: WallOrientation, sq1: u8, sq2: u8) -> bool {
+-    let (r1, c1) = unpack_square(sq1);
+-    let (r2, c2) = unpack_square(sq2);
+-    match orientation {
+-        WallOrientation::Horizontal => {
+-            if c1 == c2 && r1.abs_diff(r2) == 1 {
+-                let min_r = r1.min(r2);
+-                min_r == row && (c1 == col || c1 == col + 1)
+-            } else {
+-                false
+-            }
+-        }
+-        WallOrientation::Vertical => {
+-            if r1 == r2 && c1.abs_diff(c2) == 1 {
+-                let min_c = c1.min(c2);
+-                min_c == col && (r1 == row || r1 == row + 1)
+-            } else {
+-                false
+-            }
+-        }
++    fn wall_keeps_paths_open(&mut self, row: u8, col: u8, orientation: WallOrientation) -> bool {
++        let delta = wall_delta(row, col, orientation);
++        self.grids.place(delta);
++        let ok = both_players_reach_goals_grids(self.p1_bit, self.p2_bit, &self.grids);
++        self.grids.remove(delta);
++        ok
+     }
+ }
+ 
+-/// Trial wall in-place — set, BFS both goals, unset. No `Board::clone`.
+-#[inline]
+-fn path_ok_after_wall(
+-    board: &mut Board,
+-    row: u8,
+-    col: u8,
+-    orientation: WallOrientation,
+-    scratch: &mut BfsScratch,
+-) -> bool {
+-    // `set_wall` does not update `board.hash`; XOR so `dir_masks` rebuilds for the trial
+-    // topology instead of reusing a stale cache (a1h ply-22 illegal-move bug).
+-    zobrist::xor_wall(&mut board.hash, orientation, row, col);
+-    set_wall(board, row, col, orientation, true);
+-    let ok = scratch.both_players_reach_goals(board);
+-    set_wall(board, row, col, orientation, false);
+-    zobrist::xor_wall(&mut board.hash, orientation, row, col);
+-    ok
+-}
+-
+ /// Trial wall placement — both players must still reach goals (website rules oracle).
+ pub fn wall_path_ok_after_place(
+     board: &mut Board,
+@@ -390,8 +301,8 @@ pub fn wall_path_ok_after_place(
+     col: u8,
+     orientation: WallOrientation,
+ ) -> bool {
+-    let mut scratch = BfsScratch::new();
+-    path_ok_after_wall(board, row, col, orientation, &mut scratch)
++    let mut ctx = WallTrialCtx::new(board);
++    ctx.wall_keeps_paths_open(row, col, orientation)
+ }
+ 
+ /// Matches scraped `collidesWithExistingWall`.
+@@ -437,8 +348,10 @@ pub fn can_wall_block_topology(
+     let js_row = row + 1;
+ 
+     let (on_a, on_b) = match orientation {
+-        // Scraped `sideOnEdge`: horizontal right edge is col 9 (`numCols`), not wall slot h (js_col 8).
+-        WallOrientation::Horizontal => (js_col == 1, js_col == 9),
++        // Scraped `sideOnEdge` compared against col 9 (`numCols`) — unreachable for our
++        // 0-based slots (rightmost H slot is js_col 8), so right-edge H walls skipped the
++        // path flood and trapping walls were accepted (canta game 0 depth 2: 5980 ≠ 5978).
++        WallOrientation::Horizontal => (js_col == 1, js_col == 8),
+         WallOrientation::Vertical => (js_row == 8, js_row == 1),
+     };
+ 
+diff --git a/src/path/bfs.rs b/src/path/bfs.rs
+index f4f8f18..634c461 100644
+--- a/src/path/bfs.rs
++++ b/src/path/bfs.rs
+@@ -3,7 +3,9 @@
+ use crate::cat::attention::CorridorAttention;
+ use crate::cat::build::{build_corridor_attention, corridor_bottleneck_count};
+ use crate::core::board::{Board, Player};
+-use crate::path::flood::{expand_frontier, flood_fill_flood_bits, flood_to_goal, goal_square_mask};
++use crate::path::flood::{
++    expand_frontier, flood_fill_flood_bits, flood_to_goal, flood_to_goal_seeded, goal_square_mask,
++};
+ use crate::path::masks::DirMasks;
+ use crate::util::grid::{
+     can_step, flood_bit_sq, goal_row, pack_flood_mask, square_index, unpack_square, FLOOD_PLAYABLE,
+@@ -187,13 +189,12 @@ pub fn both_players_reach_goals_with_masks(board: &Board, masks: DirMasks) -> bo
+     let (r2, c2) = board.pawn(Player::Two);
+     let start2 = square_index(r2, c2);
+     let goal2 = goal_square_mask(Player::Two);
+-    let start2_bit = flood_bit_sq(start2);
+-
+-    if comp1 & start2_bit != 0 {
+-        return comp1 & goal2 != 0;
+-    }
+ 
+-    flood_to_goal(start2, masks, goal2).0
++    // `comp1` is a *partial* component (P1's flood exits early at its goal), so
++    // "start2 ∈ comp1 ⇒ answer is comp1 ∩ goal2" was a false negative whenever
++    // P2 needed cells beyond P1's early exit. Seeded flood annexes comp1 on
++    // contact and keeps expanding instead.
++    flood_to_goal_seeded(start2, comp1, masks, goal2)
+ }
+ 
+ #[inline]
+diff --git a/src/path/flood.rs b/src/path/flood.rs
+index 9a07f1f..cdf8cad 100644
+--- a/src/path/flood.rs
++++ b/src/path/flood.rs
+@@ -41,6 +41,36 @@ pub fn flood_fill(start_sq: u8, masks: DirMasks) -> u128 {
+     pack_flood_mask(flood_fill_flood_bits(start_sq, masks))
+ }
+ 
++/// Flood with bit theft: on first contact with `cache` (a flood component the
++/// other player already visited) annex the whole region — pawn connectivity is
++/// undirected — and goal-test the annexed pool immediately, since those cells
++/// never re-enter the frontier.
++#[inline]
++pub fn flood_to_goal_seeded(start_sq: u8, cache: u128, masks: DirMasks, goal_mask: u128) -> bool {
++    let mut reached = flood_bit_sq(start_sq);
++    if reached & goal_mask != 0 {
++        return true;
++    }
++    let mut frontier = reached;
++    let mut pool = cache & !reached;
++    while frontier != 0 {
++        if frontier & pool != 0 {
++            if pool & goal_mask != 0 {
++                return true;
++            }
++            reached |= pool;
++            frontier |= pool;
++            pool = 0;
++        }
++        frontier = expand_frontier(frontier, masks) & !reached & FLOOD_PLAYABLE;
++        if frontier & goal_mask != 0 {
++            return true;
++        }
++        reached |= frontier;
++    }
++    false
++}
++
+ #[inline]
+ pub fn flood_to_goal(start_sq: u8, masks: DirMasks, goal_mask: u128) -> (bool, u128) {
+     let mut reached = flood_bit_sq(start_sq);
+diff --git a/src/path/mod.rs b/src/path/mod.rs
+index 5465bf2..cd26609 100644
+--- a/src/path/mod.rs
++++ b/src/path/mod.rs
+@@ -4,12 +4,17 @@ pub mod bfs;
+ pub mod distance;
+ pub mod flood;
+ pub mod masks;
++pub mod parallel;
+ 
+ pub use bfs::{
+     both_players_reach_goals, both_players_reach_goals_with_masks, can_reach_goal,
+     shortest_distance, BfsScratch,
+ };
+ pub use masks::DirMasks;
++pub use parallel::{
++    both_players_reach_goals_grids, both_players_reach_goals_parallel, flood_to_goal_grids,
++    flood_to_goal_with_cache, wall_delta, WallGrids,
++};
+ 
+ #[cfg(test)]
+ mod tests;
+diff --git a/src/path/parallel.rs b/src/path/parallel.rs
+new file mode 100644
+index 0000000..692d386
+--- /dev/null
++++ b/src/path/parallel.rs
+@@ -0,0 +1,435 @@
++//! Movegen V11 wall-legality core — fixed port of the `quoridor_parallel_engine` POC.
++//!
++//! One u128 register holds the whole 9×9 board (centered 11-wide flood layout,
++//! shared with `path::flood`). Wall topology lives in four directional
++//! "step out of this square is blocked" bitboards, so a speculative wall trial
++//! is two OR/AND-NOT mask flips instead of a `DirMasks::from_board` rebuild.
++//! Legality of a wall is then a linear-time SIMD-style flood: every frontier
++//! cell expands in all four directions per iteration via four shifts.
++//!
++//! Fixes applied to the original POC:
++//! 1. Layout: 9 rows × 16-bit stride needs 144 bits — does not fit u128
++//!    (the "row 8 = bits 128..137" comment was out of range). The centered
++//!    11-stride layout tops out at bit 108 and its buffer ring absorbs every
++//!    off-board shift.
++//! 2. Expansion: the POC's "directional ray sweeps" (`!f & f.wrapping_neg()`,
++//!    `first_blocker - 1`, …) treat the whole register as a single ray — with
++//!    more than one frontier bit the carry chains leak across rows and skip
++//!    blockers. Replaced with the correct one-step parallel dilation: all
++//!    frontier cells advance one square in all four directions per iteration.
++//! 3. Wall gating: blocked-step masks must gate the *source* square before the
++//!    shift (`(wave & !blocked) << k`), not be subtracted from destinations.
++//! 4. Bit theft: when Player 2's wave first touches Player 1's cached flood it
++//!    annexes the whole region (pawn connectivity is undirected), but the POC
++//!    never re-tested the annexed cells against Player 2's goal — a flood that
++//!    inherited goal-row cells could still report "trapped". The annexed pool
++//!    is now goal-tested at theft time.
++
++use crate::core::board::{Board, Player, WallOrientation};
++use crate::util::grid::{flood_bit_index, FLOOD_PLAYABLE, FLOOD_STRIDE};
++
++/// Per-direction blocked-step masks in flood-bit layout.
++/// Bit set ⇒ a pawn on that square may NOT step in that direction.
++/// `south` = toward row 8 (Player 1's goal), `north` = toward row 0.
++#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
++pub struct WallGrids {
++    pub east: u128,
++    pub west: u128,
++    pub north: u128,
++    pub south: u128,
++}
++
++#[inline]
++const fn cell(row: u8, col: u8) -> u128 {
++    1u128 << flood_bit_index(row, col)
++}
++
++const fn goal_row_bits(row: u8) -> u128 {
++    let mut mask = 0u128;
++    let mut col = 0u8;
++    while col < 9 {
++        mask |= cell(row, col);
++        col += 1;
++    }
++    mask
++}
++
++/// Player 1 wins on row 8.
++pub const P1_GOAL_BITS: u128 = goal_row_bits(8);
++/// Player 2 wins on row 0.
++pub const P2_GOAL_BITS: u128 = goal_row_bits(0);
++
++#[inline]
++pub const fn goal_bits(player: Player) -> u128 {
++    match player {
++        Player::One => P1_GOAL_BITS,
++        Player::Two => P2_GOAL_BITS,
++    }
++}
++
++/// Flood bit of a pawn square.
++#[inline]
++pub const fn pawn_bit(row: u8, col: u8) -> u128 {
++    cell(row, col)
++}
++
++/// Horizontal wall at slot (r, c) closes the edges (r,c)↕(r+1,c) and (r,c+1)↕(r+1,c+1).
++const fn h_wall_delta(slot: usize) -> WallGrids {
++    let r = (slot / 8) as u8;
++    let c = (slot % 8) as u8;
++    WallGrids {
++        east: 0,
++        west: 0,
++        north: cell(r + 1, c) | cell(r + 1, c + 1),
++        south: cell(r, c) | cell(r, c + 1),
++    }
++}
++
++/// Vertical wall at slot (r, c) closes the edges (r,c)↔(r,c+1) and (r+1,c)↔(r+1,c+1).
++const fn v_wall_delta(slot: usize) -> WallGrids {
++    let r = (slot / 8) as u8;
++    let c = (slot % 8) as u8;
++    WallGrids {
++        east: cell(r, c) | cell(r + 1, c),
++        west: cell(r, c + 1) | cell(r + 1, c + 1),
++        north: 0,
++        south: 0,
++    }
++}
++
++const H_WALL_DELTAS: [WallGrids; 64] = {
++    let mut t = [WallGrids::ZERO; 64];
++    let mut i = 0;
++    while i < 64 {
++        t[i] = h_wall_delta(i);
++        i += 1;
++    }
++    t
++};
++
++const V_WALL_DELTAS: [WallGrids; 64] = {
++    let mut t = [WallGrids::ZERO; 64];
++    let mut i = 0;
++    while i < 64 {
++        t[i] = v_wall_delta(i);
++        i += 1;
++    }
++    t
++};
++
++impl WallGrids {
++    pub const ZERO: Self = Self {
++        east: 0,
++        west: 0,
++        north: 0,
++        south: 0,
++    };
++
++    /// Build from the board's packed u64 wall sets — O(#walls placed).
++    pub fn from_board(board: &Board) -> Self {
++        let mut grids = Self::ZERO;
++        let mut h = board.horizontal_walls;
++        while h != 0 {
++            grids.place(&H_WALL_DELTAS[h.trailing_zeros() as usize]);
++            h &= h - 1;
++        }
++        let mut v = board.vertical_walls;
++        while v != 0 {
++            grids.place(&V_WALL_DELTAS[v.trailing_zeros() as usize]);
++            v &= v - 1;
++        }
++        grids
++    }
++
++    /// Speculatively apply a wall (Step 1 of the validation pipeline).
++    #[inline]
++    pub fn place(&mut self, delta: &WallGrids) {
++        self.east |= delta.east;
++        self.west |= delta.west;
++        self.north |= delta.north;
++        self.south |= delta.south;
++    }
++
++    /// Roll back a speculative wall. Non-colliding walls never share blocked
++    /// edges, so clearing the delta's bits restores the previous state exactly.
++    #[inline]
++    pub fn remove(&mut self, delta: &WallGrids) {
++        self.east &= !delta.east;
++        self.west &= !delta.west;
++        self.north &= !delta.north;
++        self.south &= !delta.south;
++    }
++}
++
++/// Blocked-step delta for one wall (internal slot coords, row/col in 0..8).
++#[inline]
++pub fn wall_delta(row: u8, col: u8, orientation: WallOrientation) -> &'static WallGrids {
++    let slot = (row as usize) * 8 + col as usize;
++    match orientation {
++        WallOrientation::Horizontal => &H_WALL_DELTAS[slot],
++        WallOrientation::Vertical => &V_WALL_DELTAS[slot],
++    }
++}
++
++/// One parallel dilation step: every wave cell advances one square in all four
++/// directions; blocked-step masks gate sources, the buffer ring + playable
++/// mask kill off-board shifts. 12 bit-ops on two registers, branch-free.
++#[inline]
++pub fn expand_wave(wave: u128, grids: &WallGrids) -> u128 {
++    let east = (wave & !grids.east) << 1;
++    let west = (wave & !grids.west) >> 1;
++    let south = (wave & !grids.south) << FLOOD_STRIDE;
++    let north = (wave & !grids.north) >> FLOOD_STRIDE;
++    (east | west | south | north) & FLOOD_PLAYABLE
++}
++
++/// Selfish flood with early goal exit. Returns (goal reached, visited bits) —
++/// the visited set doubles as the history cache for the second player's run.
++#[inline]
++pub fn flood_to_goal_grids(start: u128, grids: &WallGrids, goal: u128) -> (bool, u128) {
++    let mut visited = start & FLOOD_PLAYABLE;
++    if visited & goal != 0 {
++        return (true, visited);
++    }
++    let mut wave = visited;
++    while wave != 0 {
++        wave = expand_wave(wave, grids) & !visited;
++        if wave & goal != 0 {
++            return (true, visited | wave);
++        }
++        visited |= wave;
++    }
++    (false, visited)
++}
++
++/// Second-player flood with bit theft: on first contact with the cached first-
++/// player region the whole region is annexed (and goal-tested — POC fix #4),
++/// so shared corridors are never re-flooded.
++#[inline]
++pub fn flood_to_goal_with_cache(start: u128, cache: u128, grids: &WallGrids, goal: u128) -> bool {
++    let mut visited = start & FLOOD_PLAYABLE;
++    if visited & goal != 0 {
++        return true;
++    }
++    let mut wave = visited;
++    let mut pool = cache & !visited;
++    while wave != 0 {
++        if wave & pool != 0 {
++            if pool & goal != 0 {
++                return true;
++            }
++            visited |= pool;
++            wave |= pool;
++            pool = 0;
++        }
++        wave = expand_wave(wave, grids) & !visited;
++        if wave & goal != 0 {
++            return true;
++        }
++        visited |= wave;
++    }
++    false
++}
++
++/// Step 3 of the POC pipeline: Player 1 floods selfishly (filling the cache),
++/// Player 2 floods with bit theft. Either flood stagnating ⇒ illegal wall.
++#[inline]
++pub fn both_players_reach_goals_grids(p1_start: u128, p2_start: u128, grids: &WallGrids) -> bool {
++    let (ok1, p1_visited) = flood_to_goal_grids(p1_start, grids, P1_GOAL_BITS);
++    if !ok1 {
++        return false;
++    }
++    flood_to_goal_with_cache(p2_start, p1_visited, grids, P2_GOAL_BITS)
++}
++
++/// Convenience wrapper for one-off queries (oracle / replay validation).
++pub fn both_players_reach_goals_parallel(board: &Board) -> bool {
++    let grids = WallGrids::from_board(board);
++    let (r1, c1) = board.pawn(Player::One);
++    let (r2, c2) = board.pawn(Player::Two);
++    both_players_reach_goals_grids(pawn_bit(r1, c1), pawn_bit(r2, c2), &grids)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::core::board::{Board, Player, WallOrientation};
++    use crate::util::grid::{can_step, goal_row, set_wall, square_index, unpack_square};
++
++    /// Queue BFS over `can_step` — the obviously-correct reference.
++    fn reach_goal_naive(board: &Board, start: (u8, u8), player: Player) -> bool {
++        let mut seen = [false; 81];
++        let mut queue = [0u8; 81];
++        let (mut head, mut tail) = (0usize, 1usize);
++        queue[0] = square_index(start.0, start.1);
++        seen[queue[0] as usize] = true;
++        while head < tail {
++            let sq = queue[head];
++            head += 1;
++            let (r, c) = unpack_square(sq);
++            if r == goal_row(player) {
++                return true;
++            }
++            for (dr, dc) in [(1i8, 0i8), (-1, 0), (0, 1), (0, -1)] {
++                if !can_step(board, r, c, dr, dc) {
++                    continue;
++                }
++                let nsq = square_index((r as i8 + dr) as u8, (c as i8 + dc) as u8);
++                if !seen[nsq as usize] {
++                    seen[nsq as usize] = true;
++                    queue[tail] = nsq;
++                    tail += 1;
++                }
++            }
++        }
++        false
++    }
++
++    fn grids_match_board(board: &Board) {
++        let grids = WallGrids::from_board(board);
++        for r in 0..9u8 {
++            for c in 0..9u8 {
++                let bit = cell(r, c);
++                assert_eq!(
++                    can_step(board, r, c, 1, 0),
++                    r < 8 && grids.south & bit == 0,
++                    "south step mismatch at ({r},{c})"
++                );
++                assert_eq!(
++                    can_step(board, r, c, -1, 0),
++                    r > 0 && grids.north & bit == 0,
++                    "north step mismatch at ({r},{c})"
++                );
++                assert_eq!(
++                    can_step(board, r, c, 0, 1),
++                    c < 8 && grids.east & bit == 0,
++                    "east step mismatch at ({r},{c})"
++                );
++                assert_eq!(
++                    can_step(board, r, c, 0, -1),
++                    c > 0 && grids.west & bit == 0,
++                    "west step mismatch at ({r},{c})"
++                );
++            }
++        }
++    }
++
++    #[test]
++    fn wall_grids_match_can_step_for_every_single_wall() {
++        for orientation in [WallOrientation::Horizontal, WallOrientation::Vertical] {
++            for row in 0..8u8 {
++                for col in 0..8u8 {
++                    let mut board = Board::new();
++                    set_wall(&mut board, row, col, orientation, true);
++                    grids_match_board(&board);
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn empty_board_both_reach() {
++        assert!(both_players_reach_goals_parallel(&Board::new()));
++    }
++
++    #[test]
++    fn adjacent_pawns_near_goal_regression() {
++        // V10's partial-component shortcut returned false here (false negative).
++        let mut board = Board::new();
++        board.pawns[Player::One as usize] = (7, 4);
++        board.pawns[Player::Two as usize] = (6, 4);
++        assert!(both_players_reach_goals_parallel(&board));
++    }
++
++    #[test]
++    fn fully_caged_pawn_is_detected() {
++        // Box P2's pawn start (8,4): walls below and on both sides.
++        let mut board = Board::new();
++        set_wall(&mut board, 7, 3, WallOrientation::Horizontal, true);
++        set_wall(&mut board, 7, 3, WallOrientation::Vertical, true);
++        set_wall(&mut board, 7, 4, WallOrientation::Vertical, true);
++        assert!(!reach_goal_naive(&board, (8, 4), Player::Two));
++        assert!(!both_players_reach_goals_parallel(&board));
++    }
++
++    #[test]
++    fn theft_pool_goal_is_detected() {
++        // P1 ahead of P2 so that P1's early-exit flood owns the row-0 cells
++        // P2 needs; the annexed pool itself must satisfy P2's goal (fix #4).
++        let mut board = Board::new();
++        board.pawns[Player::One as usize] = (1, 4);
++        board.pawns[Player::Two as usize] = (2, 4);
++        assert!(both_players_reach_goals_parallel(&board));
++    }
++
++    #[test]
++    fn random_walls_match_naive_reference() {
++        // Deterministic LCG — no rand dependency.
++        let mut state = 0x9E3779B97F4A7C15u64;
++        let mut next = move || {
++            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
++            (state >> 33) as u32
++        };
++
++        for _ in 0..500 {
++            let mut board = Board::new();
++            let wall_count = next() % 12;
++            for _ in 0..wall_count {
++                let row = (next() % 8) as u8;
++                let col = (next() % 8) as u8;
++                let orientation = if next() & 1 == 0 {
++                    WallOrientation::Horizontal
++                } else {
++                    WallOrientation::Vertical
++                };
++                // Raw overlap guard only — trapping configurations are wanted here.
++                if crate::util::grid::has_wall(&board, row, col, WallOrientation::Horizontal)
++                    || crate::util::grid::has_wall(&board, row, col, WallOrientation::Vertical)
++                {
++                    continue;
++                }
++                set_wall(&mut board, row, col, orientation, true);
++            }
++            let p1 = ((next() % 9) as u8, (next() % 9) as u8);
++            let mut p2 = ((next() % 9) as u8, (next() % 9) as u8);
++            if p2 == p1 {
++                p2 = ((p2.0 + 1) % 9, p2.1);
++            }
++            board.pawns[Player::One as usize] = p1;
++            board.pawns[Player::Two as usize] = p2;
++
++            grids_match_board(&board);
++
++            let grids = WallGrids::from_board(&board);
++            let expected = reach_goal_naive(&board, p1, Player::One)
++                && reach_goal_naive(&board, p2, Player::Two);
++            let got =
++                both_players_reach_goals_grids(pawn_bit(p1.0, p1.1), pawn_bit(p2.0, p2.1), &grids);
++            assert_eq!(got, expected, "walls h={:#x} v={:#x} p1={:?} p2={:?}",
++                board.horizontal_walls, board.vertical_walls, p1, p2);
++
++            // Single-player floods must match the reference too.
++            let (got1, _) = flood_to_goal_grids(pawn_bit(p1.0, p1.1), &grids, P1_GOAL_BITS);
++            assert_eq!(got1, reach_goal_naive(&board, p1, Player::One));
++            let (got2, _) = flood_to_goal_grids(pawn_bit(p2.0, p2.1), &grids, P2_GOAL_BITS);
++            assert_eq!(got2, reach_goal_naive(&board, p2, Player::Two));
++        }
++    }
++
++    #[test]
++    fn place_remove_round_trips() {
++        let board = Board::new();
++        let base = WallGrids::from_board(&board);
++        for orientation in [WallOrientation::Horizontal, WallOrientation::Vertical] {
++            for row in 0..8u8 {
++                for col in 0..8u8 {
++                    let mut grids = base;
++                    let delta = wall_delta(row, col, orientation);
++                    grids.place(delta);
++                    grids.remove(delta);
++                    assert_eq!(grids, base);
++                }
++            }
++        }
++    }
++}
+diff --git a/src/test_replay.rs b/src/test_replay.rs
+index 59c46cf..43a305a 100644
+--- a/src/test_replay.rs
++++ b/src/test_replay.rs
+@@ -60,7 +60,11 @@ fn d3h_legal_off_topology_matches_js() {
+ }
+ 
+ #[test]
+-fn user_replay_a5h_ply14_js_mismatch() {
++fn user_replay_a5h_ply14_is_legal() {
++    // After a5h the row-4 barrier spans cols a..f only — both pawns route via
++    // the g..i gap (P1) and the a/b + i gaps on row 2 (P2). Naive BFS confirms
++    // both goals stay reachable. V10's partial-component shortcut returned a
++    // false negative here, and this test used to assert that bug as expected.
+     let prefix = [
+         "e2", "e8", "e3", "e7", "e4", "e6", "e5", "e4", "e3h", "e5h", "c3h", "c5h", "g3h",
+     ];
+@@ -77,41 +81,14 @@ fn user_replay_a5h_ply14_js_mismatch() {
+ 
+     let a5h = parse_algebraic("a5h").unwrap();
+     let n = generate_legal_moves_slice(&mut board, &mut buf, &mut bfs);
+-    let legal_a5h = buf[..n].contains(&a5h);
+-
+-    use crate::path::flood::{flood_to_goal, goal_square_mask};
+-    use crate::path::masks::DirMasks;
+-    use crate::util::grid::{flood_bit_sq, square_index};
+-    use crate::core::board::Player;
+-
+-    let masks = DirMasks::from_board(&board);
+-    let (w1, sc1) = board.pawn(Player::One);
+-    let (w2, sc2) = board.pawn(Player::Two);
+-    let start1 = square_index(w1, sc1);
+-    let start2 = square_index(w2, sc2);
+-    let (ok1, comp1) = flood_to_goal(start1, masks, goal_square_mask(Player::One));
+-    let in_comp = comp1 & flood_bit_sq(start2) != 0;
+-    let goal2_in = comp1 & goal_square_mask(Player::Two) != 0;
+-    eprintln!(
+-        "ply13 a5h legal={legal_a5h} ok1={ok1} black_in_white_comp={in_comp} goal2_in_comp={goal2_in} both={}",
+-        bfs.both_players_reach_goals(&board)
++    assert!(
++        buf[..n].contains(&a5h),
++        "a5h keeps both goal paths open — must be legal"
+     );
+ 
+     let mut trial = board.clone();
+     let _ = trial.make_move(a5h);
+-    let masks2 = DirMasks::from_board(&trial);
+-    let (ok1b, comp1b) = flood_to_goal(start1, masks2, goal_square_mask(Player::One));
+-    let in_comp_b = comp1b & flood_bit_sq(start2) != 0;
+-    let goal2_in_b = comp1b & goal_square_mask(Player::Two) != 0;
+-    eprintln!(
+-        "after a5h ok1={ok1b} black_in_white_comp={in_comp_b} goal2_in_comp={goal2_in_b} both={}",
+-        bfs.both_players_reach_goals(&trial)
+-    );
+-
+-    assert!(
+-        !legal_a5h,
+-        "a5h must be rejected at ply 14 — blocks a goal path (JS incorrectly allows this)"
+-    );
++    assert!(bfs.both_players_reach_goals(&trial));
+ }
+ 
+ #[test]
+@@ -165,8 +142,10 @@ fn a1h_correctly_rejected_ply22_wall_maze() {
+ }
+ 
+ #[test]
+-fn g1v_correctly_rejected_after_replay_prefix() {
+-    // Move 24 from an external replay — g1v blocks a goal path under correct rules.
++fn g1v_legal_after_replay_prefix() {
++    // Move 24 from an external replay — naive BFS confirms both goal paths
++    // survive g1v. V10's partial-component shortcut produced the false
++    // negative this test previously asserted.
+     let prefix = [
+         "e2", "e8", "e3", "e7", "e4", "e6", "d1h", "d6h", "f4", "f6h", "f5", "e5", "d5", "c5v",
+         "d4", "c3v", "d3", "e4", "c1v", "f4", "f1h", "h1v", "h2h", "g3v",
+@@ -185,13 +164,16 @@ fn g1v_correctly_rejected_after_replay_prefix() {
+     let g1v = parse_algebraic("g1v").unwrap();
+     let n = generate_legal_moves_slice(&mut board, &mut buf, &mut bfs);
+     assert!(
+-        !buf[..n].contains(&g1v),
+-        "g1v must be rejected — it blocks a goal path"
++        buf[..n].contains(&g1v),
++        "g1v keeps both goal paths open — must be legal"
+     );
++
++    let mut trial = board.clone();
++    let _ = trial.make_move(g1v);
++    assert!(bfs.both_players_reach_goals(&trial));
+ }
+ 
+ #[test]
+-#[ignore = "external replay used pre-boundary-fix rules at move 24 (g1v)"]
+ fn test_replay_legality() {
+     let moves = [
+         "e2", "e8", "e3", "e7", "e4", "e6", "d1h", "d6h", "f4", "f6h", "f5", "e5", "d5", "c5v",
+-- 
+2.43.0
+
