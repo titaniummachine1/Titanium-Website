@@ -22,6 +22,6 @@ Layout:
 
 ## License
 
-Titanium-original code: **AGPL-3.0-or-later** (see `LICENSE`).
+Titanium-original code: **GPL-3.0-or-later** (see `LICENSE`).
 Scraped UI, `_vendor/`, and reference engines keep their upstream licenses
-(see `THIRD_PARTY.md`). The `engine/` submodule is AGPL-3.0-or-later.
+(see `THIRD_PARTY.md`). The `engine/` submodule is GPL-3.0-or-later.
