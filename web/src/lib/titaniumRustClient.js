@@ -9,6 +9,7 @@
 
 
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
+import { resolveOnBestMoveResult } from './onBestMoveResult.js';
 
 import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel } from './timeControl.js';
 
@@ -17,6 +18,25 @@ import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel } from './timeCon
 const SESSION_URL = '/api/titanium/session';
 
 const GENMOVE_URL = '/api/titanium/genmove';
+
+const AB_ENGINE_MODES = new Set([
+  'minimax',
+  'ace',
+  'ace-v8-js',
+  'ace-v8',
+  'ace-ti',
+  'ace-v8-ti',
+  'ace-v8-ti-pmc',
+  'ace-cat',
+  'ace-v10-js',
+  'ace-v10',
+  'ace-v10-ti',
+  'ace-v10-ti-pmc',
+]);
+
+function isAlphaBetaEngineMode(mode) {
+  return AB_ENGINE_MODES.has(mode);
+}
 
 
 
@@ -267,13 +287,7 @@ export class TitaniumEngineClient {
 
     const configured = this.config?.engineMode;
     const engineMode =
-      configured === 'minimax' ||
-      configured === 'ace' ||
-      configured === 'ace-v8' ||
-      configured === 'ace-ti' ||
-      configured === 'ace-v8-ti' ||
-      configured === 'ace-v8-ti-pmc' ||
-      configured === 'ace-cat'
+      configured === 'minimax' || isAlphaBetaEngineMode(configured)
         ? configured
         : 'mcts';
 
@@ -329,14 +343,7 @@ export class TitaniumEngineClient {
 
 
   startOneShotGenmove(history, { timeSec, maxBudget, uct, engineMode, started }) {
-    const isAlphaBeta =
-      engineMode === 'minimax' ||
-      engineMode === 'ace' ||
-      engineMode === 'ace-v8' ||
-      engineMode === 'ace-ti' ||
-      engineMode === 'ace-v8-ti' ||
-      engineMode === 'ace-v8-ti-pmc' ||
-      engineMode === 'ace-cat';
+    const isAlphaBeta = isAlphaBetaEngineMode(engineMode);
 
     if (isAlphaBeta) {
 
@@ -529,14 +536,7 @@ export class TitaniumEngineClient {
                 rootMoves: data.rootMoves ?? finalMeta.rootMoves,
               };
 
-              const isMinimax =
-                stoppedBy === 'minimax' ||
-                stoppedBy === 'ace' ||
-                stoppedBy === 'ace-v8' ||
-                stoppedBy === 'ace-ti' ||
-                stoppedBy === 'ace-v8-ti' ||
-                stoppedBy === 'ace-v8-ti-pmc' ||
-                stoppedBy === 'ace-cat';
+              const isMinimax = isAlphaBetaEngineMode(stoppedBy);
 
               this.onInfo?.({
 
@@ -607,14 +607,7 @@ export class TitaniumEngineClient {
               this.setStatus('idle');
 
               const stoppedBy = finalMeta.stoppedBy ?? data.stoppedBy ?? engineMode;
-              const isAbFinal =
-                stoppedBy === 'minimax' ||
-                stoppedBy === 'ace' ||
-                stoppedBy === 'ace-v8' ||
-                stoppedBy === 'ace-ti' ||
-                stoppedBy === 'ace-v8-ti' ||
-                stoppedBy === 'ace-v8-ti-pmc' ||
-                stoppedBy === 'ace-cat';
+              const isAbFinal = isAlphaBetaEngineMode(stoppedBy);
 
               this.onInfo?.({
 
@@ -658,25 +651,7 @@ export class TitaniumEngineClient {
 
               const action = parseAlgebraic(data.algebraic);
 
-              const result = this.onBestMove?.(action);
-
-              if (result === 'stale') {
-
-                this.clearQueuedSearches();
-
-                return;
-
-              }
-
-              if (result === false) {
-
-                this.clearQueuedSearches();
-
-              } else {
-
-                this.drainQueuedRequest();
-
-              }
+              resolveOnBestMoveResult(this, this.onBestMove?.(action));
 
               return;
 

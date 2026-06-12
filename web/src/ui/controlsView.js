@@ -6,13 +6,46 @@ import { renderLmrDispersionPanelHtml } from './lmrDispersionView.js';
 export { updateEngineThinkCards };
 import './scrapedSlider.css';
 
-export function renderControls(container, state, controller) {
-  const {
-    settings,
-    aiThinking,
-    uiMode,
-    replay,
-  } = state;
+/** Sticky top bar: title, mode tabs, debug toggles, play controls. */
+export function renderSiteHeader(container, state, controller) {
+  const { settings, aiThinking, uiMode } = state;
+  const isReplay = uiMode === 'replay';
+  const isPlay = uiMode === 'play';
+  const catStatus = renderCatStatusLine(state);
+  const lmrStatus = renderLmrStatusLine(state);
+
+  container.innerHTML = `
+    <div class="site-header__inner">
+      <div class="site-header__row site-header__row--title">
+        <h1 class="app-title">Quoridor AI</h1>
+        <div class="mode-tabs mode-tabs--header">
+          <button type="button" class="mode-tab ${isPlay ? 'mode-tab--active' : ''}" data-ui-mode="play">Play</button>
+          <button type="button" class="mode-tab ${uiMode === 'analysis' ? 'mode-tab--active' : ''}" data-ui-mode="analysis">Analysis</button>
+          <button type="button" class="mode-tab ${isReplay ? 'mode-tab--active' : ''}" data-ui-mode="replay">Replay</button>
+        </div>
+        ${isPlay ? `
+          <div class="button-row button-row--header">
+            <button class="btn btn--primary" data-action="new-game">New Game</button>
+            <button class="btn" data-action="undo" ${aiThinking ? 'disabled' : ''}>Undo</button>
+            <button class="btn" data-action="redo" ${aiThinking || !state.canRedo ? 'disabled' : ''}>Redo</button>
+          </div>` : ''}
+      </div>
+      ${!isReplay ? renderBoardToggles(settings, catStatus, lmrStatus) : ''}
+    </div>`;
+
+  wireHeaderControls(container, controller);
+  syncSiteHeaderOffset(container);
+}
+
+/** Keep layout below the fixed header — no overlap, no sticky jitter. */
+export function syncSiteHeaderOffset(headerEl) {
+  const h = headerEl?.offsetHeight ?? 76;
+  document.documentElement.style.setProperty('--site-header-h', `${h}px`);
+}
+
+/** Right column: status, engine info cards, mode panels. */
+export function renderSidebar(container, state, controller) {
+  const { aiThinking, uiMode, replay } = state;
   const engineErrorLines = (state.settings?.players ?? [])
     .map((playerType, seat) => {
       const message = state.engineErrors?.[seat];
@@ -27,57 +60,47 @@ export function renderControls(container, state, controller) {
   const isReplay = uiMode === 'replay';
   const isAnalysis = uiMode === 'analysis';
   const isPlay = uiMode === 'play';
-  const catStatus = renderCatStatusLine(state);
-  const lmrStatus = renderLmrStatusLine(state);
 
   container.innerHTML = `
-    <section class="controls-card">
-      <h1 class="app-title">Quoridor AI</h1>
-
-      <div class="mode-tabs">
-        <button type="button" class="mode-tab ${isPlay ? 'mode-tab--active' : ''}" data-ui-mode="play">Play</button>
-        <button type="button" class="mode-tab ${isAnalysis ? 'mode-tab--active' : ''}" data-ui-mode="analysis">Analysis</button>
-        <button type="button" class="mode-tab ${isReplay ? 'mode-tab--active' : ''}" data-ui-mode="replay">Replay</button>
-      </div>
-
+    <section class="sidebar-card">
       ${isReplay ? renderReplayPanel(replay) : ''}
       ${isAnalysis ? renderAnalysisPanel(state) : ''}
-      ${!isReplay ? renderBoardToggles(settings, catStatus, lmrStatus) : ''}
       ${!isReplay ? `<div data-lmr-dispersion-root>${renderLmrDispersionPanelHtml(state)}</div>` : ''}
 
-      <div class="play-panel ${isPlay ? '' : 'play-panel--hidden'}">
-      <div class="button-row">
-        <button class="btn btn--primary" data-action="new-game">New Game</button>
-        <button class="btn" data-action="undo" ${aiThinking ? 'disabled' : ''}>Undo</button>
-        <button class="btn" data-action="redo" ${aiThinking || !state.canRedo ? 'disabled' : ''}>Redo</button>
-      </div>
-
-      <div class="status-panel">
-        <div class="status-line">
-          <span>Turn</span>
-          <strong>${state.isDraw ? 'Over (draw)' : state.winner ? `Over (${playerColorName(state.winner)})` : playerColorName(state.playerToMove)}</strong>
+      <div class="sidebar-panel ${isPlay || isAnalysis ? '' : 'sidebar-panel--hidden'}">
+        <div class="status-panel status-panel--sidebar">
+          <div class="status-line">
+            <span>Turn</span>
+            <strong>${state.isDraw ? 'Over (draw)' : state.winner ? `Over (${playerColorName(state.winner)})` : playerColorName(state.playerToMove)}</strong>
+          </div>
+          <div class="status-line">
+            <span>Dist (W−B)</span>
+            <strong>${formatDistanceEval(state.eval)}</strong>
+          </div>
+          ${engineErrorLines ? `<div class="status-line status-line--error"><span>Error</span><strong>${escapeHtml(engineErrorLines)}</strong></div>` : ''}
         </div>
-        <div class="status-line">
-          <span>Dist (W−B)</span>
-          <strong>${formatDistanceEval(state.eval)}</strong>
-        </div>
-        ${engineErrorLines ? `<div class="status-line status-line--error"><span>Error</span><strong>${escapeHtml(engineErrorLines)}</strong></div>` : ''}
-      </div>
-      <div class="engine-think-cards-host" data-think-cards-host></div>
+        <div class="engine-think-cards-host" data-think-cards-host></div>
       </div>
     </section>
   `;
 
   updateEngineThinkCards(container, state);
 
+  wireReplayPanel(container, controller);
+  wireAnalysisPanel(container, controller);
+}
+
+/** @deprecated use renderSiteHeader + renderSidebar */
+export function renderControls(container, state, controller) {
+  renderSiteHeader(container, state, controller);
+}
+
+function wireHeaderControls(container, controller) {
   container.querySelectorAll('[data-ui-mode]').forEach((btn) => {
     btn.addEventListener('click', () => {
       controller.setUiMode(btn.dataset.uiMode);
     });
   });
-
-  wireReplayPanel(container, controller);
-  wireAnalysisPanel(container, controller);
 
   container.querySelector('[data-action="new-game"]')?.addEventListener('click', () => {
     controller.newGame();
@@ -157,7 +180,7 @@ export function renderLmrStatusLine(state) {
   return total ? `search d${depth} · ${searched}/${total}` : `search d${depth}`;
 }
 
-/** Patch LMR status text during live search without re-rendering controls. */
+/** Patch LMR status text during live search without re-rendering the header. */
 export function updateLmrToggleStatus(container, state) {
   const el = container.querySelector('.toggle-group__lmr-status');
   if (!el) {
@@ -173,7 +196,7 @@ function renderBoardToggles(settings, catStatus, lmrStatus) {
   const catNote = catStatus ? `<span class="toggle-group__cat-status">${escapeHtml(catStatus)}</span>` : '';
   const lmrNote = lmrStatus ? `<span class="toggle-group__lmr-status">${escapeHtml(lmrStatus)}</span>` : '';
   return `
-    <div class="toggle-group toggle-group--board">
+    <div class="toggle-group toggle-group--board toggle-group--header">
       <label class="toggle"><input type="checkbox" data-toggle="rotate" ${settings.rotateBoard ? 'checked' : ''} /> Rotate</label>
       <label class="toggle"><input type="checkbox" data-toggle="coordinates" ${settings.displayCoordinates ? 'checked' : ''} /> Coords</label>
       <label class="toggle"><input type="checkbox" data-toggle="walls" ${settings.displayRemainingWalls ? 'checked' : ''} /> Walls</label>

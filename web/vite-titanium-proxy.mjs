@@ -8,12 +8,34 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/** Monorepo workspace root (parent of `site/`). Canonical `engine/` lives here. */
+const monorepoRoot = path.resolve(siteRoot, '..');
 const binName = process.platform === 'win32' ? 'titanium.exe' : 'titanium';
-const releaseBin = path.join(repoRoot, 'engine', 'target', 'release', binName);
-const altReleaseBin = path.join(repoRoot, 'engine', 'target-alt', 'release', binName);
-const debugBin = path.join(repoRoot, 'engine', 'target', 'debug', binName);
-const altDebugBin = path.join(repoRoot, 'engine', 'target-alt', 'debug', binName);
+
+function engineBinaryPaths(root) {
+  return [
+    path.join(root, 'engine', 'target', 'release', binName),
+    path.join(root, 'engine', 'target-alt', 'release', binName),
+    path.join(root, 'engine', 'target', 'debug', binName),
+    path.join(root, 'engine', 'target-alt', 'debug', binName),
+  ];
+}
+
+/** Prefer monorepo `engine/` — `site/engine/` submodule is often stale. */
+function candidateBinaries() {
+  const seen = new Set();
+  const out = [];
+  for (const root of [monorepoRoot, siteRoot]) {
+    for (const bin of engineBinaryPaths(root)) {
+      if (!seen.has(bin) && existsSync(bin)) {
+        seen.add(bin);
+        out.push(bin);
+      }
+    }
+  }
+  return out;
+}
 
 /** Cached after first successful smoke test — rejects stale binaries missing CAT corridor walls. */
 let resolvedBin = null;
@@ -21,7 +43,7 @@ let resolvedBin = null;
 function titaniumBinaryQuickCheck(bin) {
   const result = spawnSync(bin, ['lmr', 'e2', '--time', '0.1', '--depth', '4'], {
     encoding: 'utf8',
-    cwd: repoRoot,
+    cwd: monorepoRoot,
     timeout: 15_000,
   });
   if (result.status !== 0) {
@@ -46,7 +68,7 @@ function titaniumSmokeStrict(bin) {
     ['lmr', 'e2', 'e8', 'e3', 'e7', 'e4', 'e6', '--time', '10', '--depth', '8'],
     {
       encoding: 'utf8',
-      cwd: repoRoot,
+      cwd: monorepoRoot,
       timeout: 25_000,
     },
   );
@@ -77,7 +99,7 @@ function titaniumSmokeOk(bin) {
 function titaniumAceV8SmokeOk(bin) {
   const result = spawnSync(bin, ['genmove', '--engine', 'ace-v8-ti', '--time', '0.1', '--log'], {
     encoding: 'utf8',
-    cwd: repoRoot,
+    cwd: monorepoRoot,
     timeout: 20_000,
   });
   if (result.status !== 0) {
@@ -102,9 +124,42 @@ function titaniumAceV8SmokeOk(bin) {
   }
 }
 
-function candidateBinaries() {
-  // Prefer target/release (default cargo output) so ace-v8 wiring is not shadowed by stale target-alt.
-  return [releaseBin, altReleaseBin, debugBin, altDebugBin].filter((p) => existsSync(p));
+/** Reject stale binaries where `--engine ace-v10-ti-pmc` still routes to Titanium minimax. */
+function titaniumAceV10SmokeOk(bin) {
+  const result = spawnSync(
+    bin,
+    ['genmove', '--engine', 'ace-v10-ti-pmc', '--time', '0.05', '--log'],
+    {
+      encoding: 'utf8',
+      cwd: monorepoRoot,
+      timeout: 20_000,
+    },
+  );
+  if (result.status !== 0) {
+    return false;
+  }
+  const jsonLine = String(result.stderr ?? '')
+    .split(/\r?\n/)
+    .reverse()
+    .find((line) => line.startsWith('info json '));
+  if (!jsonLine) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(jsonLine.slice('info json '.length));
+    return (
+      payload.engine === 'ace-v10-ti-pmc' &&
+      payload.stoppedBy === 'ace-v10-ti-pmc' &&
+      Array.isArray(payload.depthLog) &&
+      payload.depthLog.length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function titaniumEngineSmokeOk(bin) {
+  return titaniumAceV8SmokeOk(bin) && titaniumAceV10SmokeOk(bin);
 }
 
 function resolveBinary() {
@@ -112,7 +167,7 @@ function resolveBinary() {
     resolvedBin &&
     existsSync(resolvedBin) &&
     titaniumBinaryQuickCheck(resolvedBin) &&
-    titaniumAceV8SmokeOk(resolvedBin)
+    titaniumEngineSmokeOk(resolvedBin)
   ) {
     return resolvedBin;
   }
@@ -123,31 +178,31 @@ function resolveBinary() {
     if (
       existsSync(bin) &&
       titaniumBinaryQuickCheck(bin) &&
-      titaniumAceV8SmokeOk(bin)
+      titaniumEngineSmokeOk(bin)
     ) {
       resolvedBin = bin;
       return bin;
     }
     console.warn(
-      `[titanium] proxy: ignoring TITANIUM_BIN=${bin} (missing, failed smoke, or no ace-v8)`,
+      `[titanium] proxy: ignoring TITANIUM_BIN=${bin} (missing, failed smoke, or stale ace routing)`,
     );
     delete process.env.TITANIUM_BIN;
   }
 
   const candidates = candidateBinaries();
   for (const bin of candidates) {
-    if (titaniumSmokeOk(bin) && titaniumAceV8SmokeOk(bin)) {
+    if (titaniumSmokeOk(bin) && titaniumEngineSmokeOk(bin)) {
       resolvedBin = bin;
       return bin;
     }
   }
   if (candidates.length) {
     throw new Error(
-      `Titanium binary failed smoke test — rebuild: cd engine && cargo build --release --target-dir target-alt`,
+      'Titanium binary failed smoke test (needs ace-v8 + ace-v10 routing) — rebuild: cd engine && cargo build --release',
     );
   }
   throw new Error(
-    `Titanium binary missing — run: cd engine && cargo build --release --target-dir target-alt`,
+    'Titanium binary missing — run: cd engine && cargo build --release',
   );
 }
 
@@ -240,7 +295,7 @@ function runGenmoveStreaming(moves, options, res) {
   delete childEnv.TITANIUM_DISABLE_BOOK;
   delete childEnv.TITANIUM_BRIDGE;
 
-  const child = spawn(bin, args, { cwd: repoRoot, env: childEnv });
+  const child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv });
   let stdout = '';
   let stderrBuf = '';
 
@@ -310,7 +365,7 @@ function runGenmoveSync(moves, options) {
 
   const result = spawnSync(bin, args, {
     encoding: 'utf8',
-    cwd: repoRoot,
+    cwd: monorepoRoot,
     maxBuffer: 4 * 1024 * 1024,
     env: childEnv,
   });
@@ -349,7 +404,7 @@ function runLmrSync(moves, timeSec = 10, idDepth = 8) {
   const args = ['lmr', ...moves, '--time', String(timeSec), '--depth', String(idDepth)];
   const result = spawnSync(bin, args, {
     encoding: 'utf8',
-    cwd: repoRoot,
+    cwd: monorepoRoot,
     maxBuffer: 4 * 1024 * 1024,
   });
 
@@ -388,7 +443,7 @@ class TitaniumSeatSession {
     const args = this.engine && this.engine.startsWith('ace')
       ? ['session', '--engine', this.engine]
       : ['session'];
-    this.child = spawn(bin, args, { cwd: repoRoot, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     this.stdoutBuf = '';
     this.stderrBuf = '';
 
@@ -607,7 +662,7 @@ function runCatSync(moves) {
   const args = ['cat', ...moves];
   const result = spawnSync(bin, args, {
     encoding: 'utf8',
-    cwd: repoRoot,
+    cwd: monorepoRoot,
     maxBuffer: 4 * 1024 * 1024,
   });
 

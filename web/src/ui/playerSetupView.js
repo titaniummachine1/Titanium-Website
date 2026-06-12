@@ -1,4 +1,4 @@
-import { ACE_V10_STRENGTH_PRESETS } from '../lib/aceTier.js';
+import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
 import {
   STRENGTH_LEVEL_PRESETS,
   TIME_TO_MOVE_PRESETS,
@@ -136,13 +136,13 @@ function renderPlayerAiSettings(ui, playerNum) {
         })
         : ''
       }
-        ${ui.isAceV10Family
+        ${ui.isAceFamily
         ? renderDiscreteSlider({
           label: `Version · ${engineName}`,
           settingName: 'strength-level',
           playerNum,
           value: ui.strengthLevel,
-          presets: ACE_V10_STRENGTH_PRESETS,
+          presets: aceStrengthPresetsForPlayerType(ui.playerType),
         })
         : ''
       }

@@ -2,6 +2,7 @@
 
 import AceV10Worker from '../workers/aceV10Worker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
+import { resolveOnBestMoveResult } from './onBestMoveResult.js';
 import { ACE_WALL_CLOCK_DEFAULT } from './timeControl.js';
 
 export class AceV10JsEngineClient {
@@ -30,6 +31,21 @@ export class AceV10JsEngineClient {
         pending.onError?.(new Error(data.message ?? 'ACE v10 worker error'));
         return;
       }
+      if (data.type === 'progress') {
+        pending.onInfo?.({
+          thinking: true,
+          mode: data.mode ?? 'ace-v10-js',
+          stoppedBy: data.stoppedBy ?? 'ace-v10-js',
+          searchDepth: data.searchDepth,
+          nodes: data.nodes,
+          depthLog: data.depthLog,
+          rootScore: data.rootScore,
+          whiteDist: data.whiteDist,
+          blackDist: data.blackDist,
+          simulations: 0,
+        });
+        return;
+      }
       if (data.type === 'bestmove') {
         const elapsed = performance.now() - pending.started;
         this.setStatus('idle');
@@ -55,16 +71,7 @@ export class AceV10JsEngineClient {
         const action = parseAlgebraic(data.algebraicMove);
         this.algebraicMoves.push(data.algebraicMove);
         this.pendingRequest = null;
-        const result = pending.onBestMove?.(action);
-        if (result === 'stale') {
-          this.clearQueuedSearches();
-          return;
-        }
-        if (result === false) {
-          this.clearQueuedSearches();
-        } else {
-          this.drainQueuedRequest();
-        }
+        resolveOnBestMoveResult(this, pending.onBestMove?.(action));
       }
     };
     this.worker.onerror = (event) => {
@@ -154,16 +161,7 @@ export class AceV10JsEngineClient {
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => {
         this.pendingRequest = null;
-        const result = this.onBestMove?.(action);
-        if (result === 'stale') {
-          this.clearQueuedSearches();
-          return;
-        }
-        if (result === false) {
-          this.clearQueuedSearches();
-        } else {
-          this.drainQueuedRequest();
-        }
+        resolveOnBestMoveResult(this, this.onBestMove?.(action));
       },
       onError: (err) => {
         this.pendingRequest = null;

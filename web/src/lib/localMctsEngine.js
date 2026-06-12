@@ -4,6 +4,7 @@
 
 import GorisansonWorker from '../workers/gorisansonWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
+import { resolveOnBestMoveResult } from './onBestMoveResult.js';
 import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel } from './timeControl.js';
 
 export class LocalMctsEngineClient {
@@ -67,7 +68,7 @@ export class LocalMctsEngineClient {
         }
         const action = parseAlgebraic(data.algebraicMove);
         this.algebraicMoves.push(data.algebraicMove);
-        pending.onBestMove?.(action);
+        resolveOnBestMoveResult(this, pending.onBestMove?.(action));
       }
     };
 
@@ -195,16 +196,7 @@ export class LocalMctsEngineClient {
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => {
         this.pendingRequest = null;
-        const result = this.onBestMove?.(action);
-        if (result === 'stale') {
-          this.clearQueuedSearches();
-          return;
-        }
-        if (result === false) {
-          this.clearQueuedSearches();
-        } else {
-          this.drainQueuedRequest();
-        }
+        resolveOnBestMoveResult(this, this.onBestMove?.(action));
       },
       onError: (err) => {
         this.pendingRequest = null;

@@ -26,18 +26,82 @@ body {
   color: var(--text);
 }
 
+.app-shell {
+  min-height: 100vh;
+}
+
+/* Fixed chrome — page scrolls underneath; no sticky follow-along. */
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+}
+
+.site-header__inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.site-header__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.site-header__row--title {
+  justify-content: flex-start;
+}
+
+.site-header__row--title .app-title {
+  margin: 0;
+  font-size: 1.1rem;
+  margin-right: 8px;
+}
+
+.mode-tabs--header {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.mode-tabs--header .mode-tab {
+  padding: 5px 10px;
+  font-size: 0.82rem;
+}
+
+.button-row--header {
+  margin-left: auto;
+  flex: 0 1 auto;
+  max-width: 280px;
+  gap: 6px;
+}
+
+.button-row--header .btn {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 0.82rem;
+}
+
 .layout {
   display: grid;
-  min-height: 100vh;
   gap: 10px;
   padding: 10px;
+  padding-top: calc(var(--site-header-h, 76px) + 8px);
   grid-template-areas: 'players board sidebar';
-  grid-template-columns: minmax(200px, 240px) minmax(300px, 640px) minmax(260px, 300px);
-  grid-template-rows: 1fr;
-  justify-content: center;
-  align-content: center;
-  max-width: 1240px;
+  grid-template-columns: minmax(200px, 240px) minmax(280px, 1fr) minmax(220px, 280px);
+  grid-template-rows: auto;
+  align-items: start;
+  max-width: 1400px;
   margin: 0 auto;
+  width: 100%;
 }
 
 .layout__players {
@@ -1059,16 +1123,142 @@ body {
   border-radius: 12px;
 }
 
-/* Controls */
-.controls-card {
+/* Sidebar + legacy controls card */
+.controls-card,
+.sidebar-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
+}
+
+.sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.sidebar-panel--hidden {
+  display: none;
+}
+
+.status-panel--sidebar {
+  border-top: none;
+  padding-top: 0;
+  font-size: 0.78rem;
+}
+
+.status-panel--sidebar .status-line {
+  margin-bottom: 3px;
+}
+
+/* Sidebar think cards — compact but readable; both fit with scroll on ID history. */
+.layout__sidebar .engine-think-cards-host {
+  margin-top: 6px;
+}
+
+.layout__sidebar .engine-think-cards {
+  gap: 8px;
+}
+
+.layout__sidebar .think-card {
+  padding: 8px 10px;
+  gap: 6px;
+  border-radius: 8px;
+}
+
+.layout__sidebar .think-card__head {
+  font-size: 0.72rem;
+  gap: 5px;
+}
+
+.layout__sidebar .think-card__played-move {
+  font-size: 1.15rem;
+}
+
+.layout__sidebar .think-card__slot--hidden {
+  display: none;
+  min-height: 0;
+  visibility: visible;
+}
+
+.layout__sidebar .think-card__hero {
+  padding: 6px 5px 5px;
+}
+
+.layout__sidebar .think-card__hero-split {
+  gap: 6px;
+}
+
+.layout__sidebar .think-card__hero-divider {
+  height: 2rem;
+}
+
+.layout__sidebar .think-card__hero-value {
+  font-size: 1.45rem;
+  line-height: 1.05;
+}
+
+.layout__sidebar .think-card__hero-value--depth {
+  font-size: 1.35rem;
+}
+
+.layout__sidebar .think-card__hero-label {
+  margin-top: 2px;
+  font-size: 0.65rem;
+}
+
+.layout__sidebar .think-card__depth-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 6.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.layout__sidebar .think-card__depth-title {
+  font-size: 0.62rem;
+  margin-bottom: 2px;
+}
+
+.layout__sidebar .think-card__depth-row {
+  font-size: 0.68rem;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.layout__sidebar .think-card__depth-pv {
+  font-family: 'Roboto Mono', monospace;
+  font-weight: 700;
+  color: #8fd48f;
+  font-size: 0.72rem;
+}
+
+.layout__sidebar .think-card__depth-nodes {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.layout__sidebar .think-card__pv-block,
+.layout__sidebar .think-card__roots-block,
+.layout__sidebar .think-card__pv-lead,
+.layout__sidebar .think-card__race {
+  display: none !important;
+}
+
+.layout__sidebar .think-card__budget {
+  font-size: 0.68rem;
+  line-height: 1.25;
 }
 
 /* LMR effort dispersion (sidebar) */
@@ -1308,6 +1498,17 @@ body {
   flex-direction: column;
   gap: 8px;
   font-size: 0.9rem;
+}
+
+.toggle-group--header {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 0.82rem;
+}
+
+.toggle-group--header .toggle {
+  white-space: nowrap;
 }
 
 .toggle {

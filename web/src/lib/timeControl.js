@@ -6,7 +6,7 @@
  */
 
 import { PlayerType, StrengthLevel, TimeToMove } from './engineConfig.js';
-import { aceV10DisplayName } from './aceTier.js';
+import { aceDisplayName } from './aceTier.js';
 
 /** Scraped StrengthLevel slider — legacy label, kept for remote UI parity. */
 export const STRENGTH_LEVEL_PRESETS = [
@@ -85,20 +85,29 @@ export function sliderPositionFromVisits(visits) {
 
 /** Map retired UI keys to their current engine slot. */
 export function normalizePlayerType(playerType) {
+  if (playerType === PlayerType.AceV7 || playerType === PlayerType.AceV7Ti) {
+    return PlayerType.AceV10;
+  }
   if (
-    playerType === PlayerType.AceV7 ||
-    playerType === PlayerType.AceV7Ti ||
     playerType === PlayerType.AceV8 ||
     playerType === PlayerType.AceV8Ti ||
     playerType === PlayerType.AceV8TiPmc ||
     playerType === PlayerType.AceV8Js
   ) {
-    return PlayerType.AceV10;
+    return PlayerType.AceV8;
   }
   if (playerType === PlayerType.Titanium) {
     return PlayerType.TitaniumMinimax;
   }
   return playerType;
+}
+
+export function isAceV8Family(playerType, engineConfigs) {
+  const normalized = normalizePlayerType(playerType);
+  return (
+    normalized === PlayerType.AceV8 ||
+    getEngineConfig(normalized, engineConfigs)?.kind === 'ace-v8-family'
+  );
 }
 
 export function isAceV10Family(playerType, engineConfigs) {
@@ -107,6 +116,10 @@ export function isAceV10Family(playerType, engineConfigs) {
     normalized === PlayerType.AceV10 ||
     getEngineConfig(normalized, engineConfigs)?.kind === 'ace-v10-family'
   );
+}
+
+export function isAceFamily(playerType, engineConfigs) {
+  return isAceV8Family(playerType, engineConfigs) || isAceV10Family(playerType, engineConfigs);
 }
 
 export function getEngineConfig(playerType, engineConfigs) {
@@ -150,7 +163,7 @@ export function isAceV8JsEngine(playerType, engineConfigs) {
 }
 
 export function isAceEngine(playerType, engineConfigs) {
-  return isAceV10Family(playerType, engineConfigs);
+  return isAceFamily(playerType, engineConfigs);
 }
 
 /** @deprecated use isAceEngine */
@@ -162,6 +175,7 @@ export function isLocalMctsEngine(playerType, engineConfigs) {
     kind === 'local' ||
     kind === 'titanium' ||
     kind === 'quoridor-v3' ||
+    kind === 'ace-v8-family' ||
     kind === 'ace-v10-family'
   );
 }
@@ -199,7 +213,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
       visitsBudget: visitsFromSliderPosition(Math.round(LOCAL_VISITS_RANGE.sliderSteps * 0.45)),
     };
   }
-  if (isAceV10Family(playerType, engineConfigs)) {
+  if (isAceFamily(playerType, engineConfigs)) {
     return {
       strengthLevel: 0,
       wallClockSeconds: ACE_WALL_CLOCK_DEFAULT,
@@ -279,8 +293,8 @@ export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) 
       const depthCap = formatMaxDepth(maxDepthFromVisitsBudget(aiSettings.visitsBudget));
       return `${config.name}: ${time} · ${depthCap}`;
     }
-    if (isAceV10Family(playerType, engineConfigs)) {
-      return `${aceV10DisplayName(aiSettings.strengthLevel)}: ${time}`;
+    if (isAceFamily(playerType, engineConfigs)) {
+      return `${aceDisplayName(aiSettings.strengthLevel, playerType)}: ${time}`;
     }
     return `${config.name}: ${time} · ${cap}`;
   }

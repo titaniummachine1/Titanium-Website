@@ -42,12 +42,20 @@ const TITANIUM_ENGINE = {
     'Iterative-deepening negamax with adaptive LMR and CAT — WASM on the public site, native Rust via `npm run dev` locally',
 };
 
+const ACE_V8_ENGINE = {
+  kind: 'ace-v8-family',
+  name: 'ACE v8',
+  key: PlayerType.AceV8,
+  tooltip:
+    'ACE v8 — use Version slider: JS (HTML) → Rust → MoveGen+ → MoveGen+ EME',
+};
+
 const ACE_V10_ENGINE = {
   kind: 'ace-v10-family',
   name: 'ACE v10',
   key: PlayerType.AceV10,
   tooltip:
-    'quoridor (8).html — use Version slider: JS (HTML) → Rust → MoveGen+ → MoveGen+ PMC',
+    'ACE v10 — use Version slider: JS (HTML) → Rust → MoveGen+ → MoveGen+ EME',
 };
 
 const PLACEHOLDER_ENGINES = [
@@ -69,6 +77,7 @@ export function getAllEngineConfigs() {
     GORISANSON_ENGINE,
     QUORIDOR_V3_ENGINE,
     TITANIUM_ENGINE,
+    ACE_V8_ENGINE,
     ACE_V10_ENGINE,
     ...remote,
     ...PLACEHOLDER_ENGINES,
@@ -101,6 +110,12 @@ export function getPlayerOptionGroups() {
           label: TITANIUM_ENGINE.name,
           disabled: false,
           tooltip: TITANIUM_ENGINE.tooltip,
+        },
+        {
+          value: PlayerType.AceV8,
+          label: ACE_V8_ENGINE.name,
+          disabled: false,
+          tooltip: ACE_V8_ENGINE.tooltip,
         },
         {
           value: PlayerType.AceV10,
@@ -136,26 +151,34 @@ export function describeTimeBudget(players, playerAiSettings, engineConfigs) {
 
 export function describeActiveSearchInfo(
   players,
-  searchInfoByType,
+  searchInfoBySeat,
   engineConfigs,
-  { thinkingPlayerType = null, aiThinking = false } = {},
+  { thinkingSeatIndex = null, aiThinking = false } = {},
 ) {
-  const aiTypes = players.filter((p) => p !== PlayerType.Human);
-  const formatOne = (playerType) => {
-    const line = describeSearchInfo(playerType, searchInfoByType[playerType], engineConfigs);
+  const formatOne = (playerType, seatIndex) => {
+    const info = searchInfoBySeat?.[seatIndex];
+    const line = describeSearchInfo(playerType, info, engineConfigs);
     if (!line) {
       return '';
     }
-    if (aiThinking && thinkingPlayerType && playerType !== thinkingPlayerType) {
+    if (aiThinking && thinkingSeatIndex != null && seatIndex !== thinkingSeatIndex) {
       return '';
     }
-    if (aiTypes.length > 1 && !aiThinking) {
-      const label = String(playerType).toLowerCase().includes('white') ? 'W' : 'B';
+    const aiSeats = players
+      .map((p, i) => (p !== PlayerType.Human ? i : -1))
+      .filter((i) => i >= 0);
+    if (aiSeats.length > 1 && !aiThinking) {
+      const label = seatIndex === 0 ? 'W' : 'B';
       return `${label} ${line}`;
     }
     return line;
   };
-  return aiTypes.map(formatOne).filter(Boolean).join(' · ');
+  return players
+    .map((playerType, seatIndex) =>
+      playerType === PlayerType.Human ? '' : formatOne(playerType, seatIndex),
+    )
+    .filter(Boolean)
+    .join(' · ');
 }
 
 import { formatEngineScore, isMateScore, mateInfo } from './engineScore.js';
@@ -173,7 +196,7 @@ const SEARCH_STOP_LABELS = {
   'ace-v10-js': 'ACE v10 JS',
   'ace-v10': 'ACE v10 Rust',
   'ace-v10-ti': 'ACE v10 MoveGen+',
-  'ace-v10-ti-pmc': 'ACE v10 MoveGen+ PMC',
+  'ace-v10-ti-pmc': 'ACE v10 MoveGen+ EME',
   mcts: 'MCTS',
   hybrid: 'hybrid',
   race: 'win path',

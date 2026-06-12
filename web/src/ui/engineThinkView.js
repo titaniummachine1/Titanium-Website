@@ -11,6 +11,10 @@ const ACE_MODES = new Set([
   'ace-v8-ti',
   'ace-v8-ti-pmc',
   'ace-cat',
+  'ace-v10-js',
+  'ace-v10',
+  'ace-v10-ti',
+  'ace-v10-ti-pmc',
 ]);
 
 function isTitaniumAb(payload) {
@@ -23,7 +27,8 @@ function isAcePayload(payload) {
     ACE_MODES.has(payload.stoppedBy) ||
     ACE_MODES.has(payload.mode) ||
     String(payload.engine ?? '').includes('ACE v8') ||
-    String(payload.engine ?? '').includes('ACE v8 (JS')
+    String(payload.engine ?? '').includes('ACE v8 (JS') ||
+    String(payload.engine ?? '').includes('ACE v10')
   );
 }
 
@@ -91,6 +96,31 @@ function deepestEntry(depthLog) {
     return null;
   }
   return depthLog.reduce((best, entry) => (entry.depth > (best?.depth ?? 0) ? entry : best));
+}
+
+function resolveTotalNodes(payload) {
+  const deep = deepestEntry(payload.depthLog);
+  return Math.max(
+    Number(payload.nodes) || 0,
+    Number(payload.simulations) || 0,
+    Number(deep?.nodes) || 0,
+  );
+}
+
+function heroRight(payload) {
+  if (usesRollouts(payload)) {
+    const n = rolloutCount(payload);
+    return { value: n > 0 ? n.toLocaleString() : '…', label: 'rollouts' };
+  }
+  const total = resolveTotalNodes(payload);
+  if (total > 0) {
+    return { value: total.toLocaleString(), label: 'nodes' };
+  }
+  const depth = payload.depth ?? payload.searchDepth;
+  return {
+    value: depth ? String(depth) : '…',
+    label: 'depth',
+  };
 }
 
 function raceBar(whiteDist, blackDist) {
@@ -171,6 +201,7 @@ function payloadFromCompleted(completed) {
 }
 
 function payloadFromSnapshot(snap) {
+  const nodes = resolveTotalNodes(snap);
   return {
     live: !!snap.live,
     engine: snap.engine,
@@ -182,8 +213,8 @@ function payloadFromSnapshot(snap) {
     depth: snap.depth,
     depthLog: snap.depthLog ?? [],
     pv: snap.pv ?? '',
-    nodes: snap.nodes,
-    simulations: snap.simulations ?? snap.nodes ?? 0,
+    nodes,
+    simulations: nodes,
     rootWinRate: snap.rootWinRate,
     stoppedBy: snap.stoppedBy,
     rootMoves: snap.rootMoves,
@@ -195,6 +226,7 @@ function payloadFromSnapshot(snap) {
 
 function payloadFromLiveSearch(ls, ply) {
   const deep = deepestEntry(ls.depthLog);
+  const nodes = resolveTotalNodes(ls);
   return {
     live: true,
     engine: ls.playerLabel ?? '?',
@@ -206,8 +238,8 @@ function payloadFromLiveSearch(ls, ply) {
     depth: deep?.depth ?? ls.searchDepth,
     depthLog: ls.depthLog ?? [],
     pv: deep?.pv ?? '',
-    nodes: ls.nodes ?? ls.simulations,
-    simulations: ls.simulations ?? ls.nodes ?? 0,
+    nodes,
+    simulations: nodes,
     rootWinRate: ls.rootWinRate,
     stoppedBy: ls.mode ?? 'searching',
     rootMoves: ls.rootMoves,
@@ -248,7 +280,7 @@ function thinkPayloadForSeat(state, seatIndex) {
   const completed = resolveCompletedThink(state, seatIndex);
   const isLive =
     state.aiThinking &&
-    state.thinkingPlayerType === playerType &&
+    state.thinkingSeatIndex === seatIndex &&
     state.liveSearch;
 
   if (isLive) {
@@ -295,24 +327,17 @@ function prefersWinRate(payload) {
   return payload.score == null && payload.depth == null;
 }
 
-function heroRight(payload) {
-  if (usesRollouts(payload)) {
-    const n = rolloutCount(payload);
-    return { value: n > 0 ? n.toLocaleString() : '…', label: 'rollouts' };
-  }
-  return {
-    value: payload.depth ? String(payload.depth) : '…',
-    label: 'depth',
-  };
-}
-
 function heroMetric(payload) {
   const right = heroRight(payload);
+  const depthLabel =
+    !usesRollouts(payload) && (payload.depth ?? payload.searchDepth)
+      ? ` · d${payload.depth ?? payload.searchDepth}`
+      : '';
 
   if (prefersWinRate(payload)) {
     const pct = Number(payload.rootWinRate) * 100;
     if (!Number.isFinite(pct)) {
-      return { left: '…', right: right.value, rightLabel: right.label, tone: 'even', mode: 'winrate' };
+      return { left: '…', right: right.value, rightLabel: right.label, tone: 'even', mode: 'winrate', depthSuffix: depthLabel };
     }
     return {
       left: `${pct.toFixed(0)}%`,
@@ -320,6 +345,7 @@ function heroMetric(payload) {
       rightLabel: right.label,
       tone: pct >= 50 ? 'good' : 'bad',
       mode: 'winrate',
+      depthSuffix: depthLabel,
     };
   }
 
@@ -332,6 +358,7 @@ function heroMetric(payload) {
       rightLabel: right.label,
       tone: mate ? (n > 0 ? 'good' : 'bad') : n > 50 ? 'good' : n < -50 ? 'bad' : 'even',
       mode: mate ? 'mate' : 'eval',
+      depthSuffix: depthLabel,
     };
   }
 
@@ -343,6 +370,7 @@ function heroMetric(payload) {
       rightLabel: right.label,
       tone: pct >= 50 ? 'good' : 'bad',
       mode: 'winrate',
+      depthSuffix: depthLabel,
     };
   }
 
@@ -352,6 +380,7 @@ function heroMetric(payload) {
     rightLabel: right.label,
     tone: 'even',
     mode: payload.live ? 'searching' : 'idle',
+    depthSuffix: depthLabel,
   };
 }
 
@@ -365,17 +394,14 @@ function formatNodes(nodes, stoppedBy, payload = {}) {
 
 function formatBudgetLine(payload) {
   const parts = [];
-  // nodes can lag behind the depth log mid-stream — fall back to the
-  // deepest iteration's count so the total never blanks out.
-  const count =
-    payload.nodes > 0
-      ? payload.nodes
-      : payload.simulations > 0
-        ? payload.simulations
-        : deepestEntry(payload.depthLog)?.nodes ?? 0;
-  const nodes = formatNodes(count, payload.stoppedBy, payload);
+  const total = resolveTotalNodes(payload);
+  const nodes = formatNodes(total, payload.stoppedBy, payload);
   if (nodes) {
     parts.push(nodes);
+  }
+  const depth = payload.depth ?? payload.searchDepth;
+  if (depth && !usesRollouts(payload)) {
+    parts.push(`d${depth}`);
   }
   if (payload.rolloutVerdict) {
     const visits =
@@ -415,8 +441,8 @@ function depthFeedSignature(depthLog) {
   if (!depthLog?.length) {
     return '';
   }
-  const tail = [...depthLog].sort((a, b) => b.depth - a.depth).slice(0, 6);
-  return tail.map((e) => `${e.depth}:${e.score}:${e.nodes}`).join('|');
+  const tail = [...depthLog].sort((a, b) => b.depth - a.depth).slice(0, 10);
+  return tail.map((e) => `${e.depth}:${e.score}:${e.nodes}:${e.pv ?? ''}`).join('|');
 }
 
 function rootsSignature(rootMoves, payload) {
@@ -449,6 +475,11 @@ function thinkCardShellHtml(seatIndex) {
         <span class="think-card__ply" data-field="played-ply"></span>
       </div>
 
+      <div class="think-card__depth-feed think-card__slot" data-field="depth-feed" hidden>
+        <div class="think-card__depth-title" data-field="depth-title">ID history</div>
+        <ul class="think-card__depth-list" data-field="depth-list"></ul>
+      </div>
+
       <div class="think-card__hero think-card__hero--even" data-field="hero">
         <div class="think-card__hero-split">
           <div class="think-card__hero-side think-card__hero-side--eval">
@@ -461,11 +492,6 @@ function thinkCardShellHtml(seatIndex) {
             <div class="think-card__hero-label" data-field="hero-right-label">depth</div>
           </div>
         </div>
-      </div>
-
-      <div class="think-card__depth-feed think-card__slot" data-field="depth-feed" hidden>
-        <div class="think-card__depth-title" data-field="depth-title">Depth</div>
-        <ul class="think-card__depth-list" data-field="depth-list"></ul>
       </div>
 
       <div class="think-card__pv-lead think-card__slot" data-field="pv-lead" hidden>
@@ -498,14 +524,14 @@ function thinkCardShellHtml(seatIndex) {
 }
 
 function ensureThinkCardsHost(container) {
-  const playPanel = container.querySelector('.play-panel');
-  if (!playPanel) {
-    return null;
-  }
-  let host = playPanel.querySelector('[data-think-cards-host]');
+  let host = container.querySelector('[data-think-cards-host]');
   if (!host) {
-    playPanel.insertAdjacentHTML('beforeend', '<div class="engine-think-cards-host" data-think-cards-host></div>');
-    host = playPanel.querySelector('[data-think-cards-host]');
+    const panel = container.querySelector('.sidebar-panel, .play-panel');
+    if (!panel) {
+      return null;
+    }
+    panel.insertAdjacentHTML('beforeend', '<div class="engine-think-cards-host" data-think-cards-host></div>');
+    host = panel.querySelector('[data-think-cards-host]');
   }
   let root = host.querySelector('.engine-think-cards');
   if (!root) {
@@ -535,7 +561,7 @@ function patchDepthFeed(card, payload) {
     return;
   }
 
-  setText(title, payload.live ? 'Depth (live)' : 'Depth');
+  setText(title, payload.live ? 'ID (live)' : 'ID history');
   const sig = depthFeedSignature(payload.depthLog);
   if (card.dataset.depthSig === sig) {
     return;
@@ -544,16 +570,22 @@ function patchDepthFeed(card, payload) {
 
   const rows = [...payload.depthLog]
     .sort((a, b) => b.depth - a.depth)
-    .slice(0, 6)
+    .slice(0, 10)
     .map((entry) => {
       const score = entry.score != null ? formatEngineScore(entry.score) : '—';
       const mateClass =
         entry.score != null && isMateScore(entry.score) ? ' think-card__depth-score--mate' : '';
-      const nodes = entry.nodes > 0 ? ` · ${Number(entry.nodes).toLocaleString()}n` : '';
+      const nodes =
+        entry.nodes > 0 ? `${Number(entry.nodes).toLocaleString()}n` : '';
+      const pv = pvHeadline(entry.pv);
+      const pvHtml = pv
+        ? `<span class="think-card__depth-pv">${escapeHtml(pv)}</span>`
+        : '';
       return `
         <li class="think-card__depth-row">
           <span class="think-card__depth-num">d${entry.depth}</span>
           <span class="think-card__depth-score${mateClass}">${escapeHtml(score)}</span>
+          ${pvHtml}
           <span class="think-card__depth-nodes">${escapeHtml(nodes)}</span>
         </li>`;
     })
@@ -630,6 +662,8 @@ function patchThinkCard(card, seatIndex, payload) {
     setText(card.querySelector('[data-field="played-ply"]'), payload.ply ? `ply ${payload.ply}` : '');
   }
 
+  patchDepthFeed(card, payload);
+
   const heroEl = card.querySelector('[data-field="hero"]');
   if (heroEl) {
     heroEl.classList.remove('think-card__hero--good', 'think-card__hero--bad', 'think-card__hero--even');
@@ -646,16 +680,14 @@ function patchThinkCard(card, seatIndex, payload) {
     hero.mode === 'winrate'
       ? 'win rate'
       : hero.mode === 'mate'
-        ? 'mate'
+        ? `mate${hero.depthSuffix ?? ''}`
         : hero.mode === 'eval'
-          ? 'eval (sq)'
+          ? `eval (sq)${hero.depthSuffix ?? ''}`
           : hero.mode === 'searching'
             ? 'searching'
             : '—',
   );
   setText(card.querySelector('[data-field="hero-right-label"]'), hero.rightLabel);
-
-  patchDepthFeed(card, payload);
 
   const pvLeadBlock = card.querySelector('[data-field="pv-lead"]');
   const showPvLead = Boolean(payload.live && pvLead?.trim());

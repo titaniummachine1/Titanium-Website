@@ -285,7 +285,14 @@ class QuoridorBoard {
   }
 
   isValidWallPlacement(wall) {
-    return !this.collidesWithExistingWall(wall) && !this.isWallBlocking(wall);
+    if (this.collidesWithExistingWall(wall)) {
+      return false;
+    }
+    // Matches Rust `can_wall_block_topology` — off-topology walls cannot cage anyone.
+    if (!this.canWallBlock(wall)) {
+      return true;
+    }
+    return !this.isWallBlocking(wall);
   }
 
   playerHasWalls() {
@@ -323,7 +330,7 @@ class QuoridorBoard {
     return placements;
   }
 
-  /** Would this wall block every player from their goal? */
+  /** Would this wall block every player from their goal? (Rust `both_players_reach_goals` parity) */
   isWallBlocking({ coordinate, wallType }) {
     const wallSet =
       wallType === WallType.Horizontal
@@ -332,82 +339,69 @@ class QuoridorBoard {
     const key = formatCoordinate(coordinate);
 
     wallSet.add(key);
-
-    let blocksSomeone = false;
-
-    for (const [index, start] of this._playerPositions.entries()) {
-      const playerNum = index + 1;
-      const visited = new Set();
-      const queue = [];
-
-      const enqueueNeighbors = (position) => {
-        for (const direction of pathCheckOrder(playerNum)) {
-          queue.push([position, direction]);
-        }
-      };
-
-      let canReachGoal = false;
-
-      enqueueNeighbors(start);
-      visited.add(formatCoordinate(start));
-
-      while (queue.length > 0) {
-        const [position, direction] = queue.pop();
-
-        if (this.isCoordinateGoal(playerNum, position)) {
-          canReachGoal = true;
-          break;
-        }
-
-        const next = stepCoordinate(position, direction);
-        const nextKey = formatCoordinate(next);
-
-        if (visited.has(nextKey)) {
-          continue;
-        }
-
-        if (!this.pawnCanMove(position, direction)) {
-          continue;
-        }
-
-        visited.add(nextKey);
-        enqueueNeighbors(next);
-      }
-
-      if (!canReachGoal) {
-        blocksSomeone = true;
-        break;
-      }
-    }
-
+    const blocked = !bothPlayersReachGoals(this);
     wallSet.delete(key);
-    return blocksSomeone;
+    return blocked;
   }
 
   pawnCanMove(from, direction) {
-    const to = stepCoordinate(from, direction);
-    if (!this.isInBounds(to)) {
+    const col = columnToIndex(from.column) - 1;
+    const row = from.row - 1;
+    const delta = {
+      [Direction.Up]: [1, 0],
+      [Direction.Down]: [-1, 0],
+      [Direction.Right]: [0, 1],
+      [Direction.Left]: [0, -1],
+    }[direction];
+    if (!delta) {
       return false;
     }
+    const [dr, dc] = delta;
+    const nr = row + dr;
+    const nc = col + dc;
+    if (nr < 0 || nr > 8 || nc < 0 || nc > 8) {
+      return false;
+    }
+    const jsFrom = row + 1;
+    const jsTo = nr + 1;
 
-    const blockingWallType =
-      direction === Direction.Up || direction === Direction.Down
-        ? WallType.Horizontal
-        : WallType.Vertical;
+    if (dr === 1 && dc === 0) {
+      return (
+        !this.hasHorizontalWallJs(jsFrom, col) &&
+        (col === 0 || !this.hasHorizontalWallJs(jsFrom, col - 1))
+      );
+    }
+    if (dr === -1 && dc === 0) {
+      return (
+        !this.hasHorizontalWallJs(jsTo, col) &&
+        (col === 0 || !this.hasHorizontalWallJs(jsTo, col - 1))
+      );
+    }
+    if (dr === 0 && dc === 1) {
+      return !this.hasVerticalWallJs(jsFrom, col) && !this.hasVerticalWallJs(row, col);
+    }
+    if (dr === 0 && dc === -1) {
+      return !this.hasVerticalWallJs(jsTo, nc) && !this.hasVerticalWallJs(nr, nc);
+    }
+    return false;
+  }
 
-    const side =
-      direction === Direction.Up || direction === Direction.Down
-        ? Direction.Left
-        : Direction.Down;
+  /** Rust `has_horizontal` — js row 1..8, col 0..7. */
+  hasHorizontalWallJs(jsRow, col0) {
+    if (jsRow < 1 || jsRow > 8 || col0 >= 8) {
+      return false;
+    }
+    const key = formatCoordinate({ column: indexToColumn(col0 + 1), row: jsRow });
+    return this._horizontalWalls.has(key);
+  }
 
-    const wallAnchor =
-      direction === Direction.Up || direction === Direction.Right ? from : to;
-    const sideAnchor = stepCoordinate(wallAnchor, side);
-
-    return !(
-      this.hasWall(wallAnchor, blockingWallType) ||
-      this.hasWall(sideAnchor, blockingWallType)
-    );
+  /** Rust `has_vertical` — js row 1..8, col 0..7. */
+  hasVerticalWallJs(jsRow, col0) {
+    if (jsRow < 1 || jsRow > 8 || col0 >= 8) {
+      return false;
+    }
+    const key = formatCoordinate({ column: indexToColumn(col0 + 1), row: jsRow });
+    return this._verticalWalls.has(key);
   }
 
   isInBounds({ column, row }) {
@@ -616,6 +610,57 @@ function boardFromGameState(gameSlice) {
   return board;
 }
 
+/** Flood-fill reachable squares from a start coordinate (BFS, all directions). */
+function floodReachable(board, start) {
+  const visited = new Set();
+  const queue = [start];
+  visited.add(formatCoordinate(start));
+
+  while (queue.length > 0) {
+    const pos = queue.shift();
+    for (const direction of allDirections()) {
+      if (!board.pawnCanMove(pos, direction)) {
+        continue;
+      }
+      const next = stepCoordinate(pos, direction);
+      const key = formatCoordinate(next);
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      queue.push(next);
+    }
+  }
+  return visited;
+}
+
+function goalRowReachable(board, playerNum, reachable) {
+  const goalRow = playerNum === 1 ? board.numRows() : 1;
+  for (let col = 1; col <= board.numColumns(); col++) {
+    const key = formatCoordinate({ column: indexToColumn(col), row: goalRow });
+    if (reachable.has(key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Rust `both_players_reach_goals_with_masks` — shared component must reach both goal rows. */
+function bothPlayersReachGoals(board) {
+  const whiteStart = board.playerPosition({ playerNum: 1 });
+  const blackStart = board.playerPosition({ playerNum: 2 });
+  const whiteReach = floodReachable(board, whiteStart);
+  if (!goalRowReachable(board, 1, whiteReach)) {
+    return false;
+  }
+  const blackKey = formatCoordinate(blackStart);
+  if (whiteReach.has(blackKey)) {
+    return goalRowReachable(board, 2, whiteReach);
+  }
+  const blackReach = floodReachable(board, blackStart);
+  return goalRowReachable(board, 2, blackReach);
+}
+
 /** BFS pawn steps to goal row for playerNum (1 = White → row 9, 2 = Black → row 1). */
 function shortestDistanceToGoal(board, playerNum) {
   const start = board.playerPosition({ playerNum });
@@ -679,4 +724,7 @@ export {
   isPawnAction,
   shortestDistanceToGoal,
   naiveDistanceEval,
+  bothPlayersReachGoals,
+  floodReachable,
+  goalRowReachable,
 };
