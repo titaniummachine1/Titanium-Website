@@ -8,7 +8,8 @@ import { EngineClient } from '../lib/engineClient.js';
 import { GorisansonEngineClient, TitaniumEngineClient } from '../lib/localMctsEngine.js';
 import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
 import { useStaticEngineBackend } from '../lib/engineBackend.js';
-import { AceV8JsEngineClient } from '../lib/aceV8JsEngine.js';
+import { AceV10JsEngineClient } from '../lib/aceV10JsEngine.js';
+import { resolveAceV10Tier, aceV10DisplayName } from '../lib/aceTier.js';
 import { QuoridorV3EngineClient } from '../lib/quoridorV3Engine.js';
 import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
 import {
@@ -111,6 +112,7 @@ import {
   isTitaniumEngine,
   isQuoridorV3Engine,
   isAceEngine,
+  isAceV10Family,
   normalizePlayerType,
   getEngineConfig,
 } from '../lib/timeControl.js';
@@ -125,8 +127,8 @@ function isSavedSettingsValid(playerType, saved, engineConfigs) {
       saved.visitsBudget != null
     );
   }
-  if (isAceEngine(playerType, engineConfigs)) {
-    return saved.wallClockSeconds != null;
+  if (isAceV10Family(playerType, engineConfigs)) {
+    return saved.strengthLevel != null && saved.wallClockSeconds != null;
   }
   if (isLocalEngine(playerType, engineConfigs)) {
     return saved.wallClockSeconds != null && saved.visitsBudget != null;
@@ -147,15 +149,15 @@ export class AppController {
     this.settings = {
       players: staticBackend
         ? [PlayerType.Human, PlayerType.TitaniumMinimax]
-        : [PlayerType.AceV8TiPmc, PlayerType.AceV8Ti],
+        : [PlayerType.AceV10, PlayerType.TitaniumMinimax],
       playerAiSettings: staticBackend
         ? [
             defaultPlayerAiSettings(PlayerType.Human, this.engineConfigs),
             defaultPlayerAiSettings(PlayerType.TitaniumMinimax, this.engineConfigs),
           ]
         : [
-            defaultPlayerAiSettings(PlayerType.AceV8TiPmc, this.engineConfigs),
-            defaultPlayerAiSettings(PlayerType.AceV8Ti, this.engineConfigs),
+            defaultPlayerAiSettings(PlayerType.AceV10, this.engineConfigs),
+            defaultPlayerAiSettings(PlayerType.TitaniumMinimax, this.engineConfigs),
           ],
       playerAiSettingsMemory: [{}, {}],
       rotateBoard: false,
@@ -400,6 +402,7 @@ export class AppController {
       isTitanium: isTitaniumEngine(playerType, this.engineConfigs),
       isQuoridorV3: isQuoridorV3Engine(playerType, this.engineConfigs),
       isAceEngine: isAceEngine(playerType, this.engineConfigs),
+      isAceV10Family: isAceV10Family(playerType, this.engineConfigs),
       isLocalMcts: isLocalMctsEngine(playerType, this.engineConfigs),
       isRemote: isRemoteEngine(playerType, this.engineConfigs),
       strengthLevel: current?.strengthLevel ?? StrengthLevel.Alpha,
@@ -427,7 +430,11 @@ export class AppController {
   setPlayerStrengthLevel(playerNum, strengthLevel, { silent = false } = {}) {
     const index = playerNum - 1;
     const playerType = this.settings.players[index];
-    if (!isRemoteEngine(playerType, this.engineConfigs) && !isTitaniumEngine(playerType, this.engineConfigs)) {
+    if (
+      !isRemoteEngine(playerType, this.engineConfigs) &&
+      !isTitaniumEngine(playerType, this.engineConfigs) &&
+      !isAceV10Family(playerType, this.engineConfigs)
+    ) {
       return;
     }
     const current = this.settings.playerAiSettings[index] ?? {};
@@ -437,6 +444,9 @@ export class AppController {
       ...current,
       strengthLevel: next,
     });
+    if (isAceV10Family(playerType, this.engineConfigs)) {
+      this.destroyEngineForSeat(index);
+    }
     if (!silent) {
       this.onChange?.();
     }
@@ -1081,6 +1091,18 @@ export class AppController {
     this.onChange?.();
   }
 
+  createAceV10Client(config, seatIndex) {
+    const aiSettings = this.settings.playerAiSettings[seatIndex] ?? {};
+    const tier = resolveAceV10Tier(aiSettings.strengthLevel);
+    if (useStaticEngineBackend() || tier.kind === 'ace-v10-js') {
+      return new AceV10JsEngineClient(config);
+    }
+    return new TitaniumEngineClient(
+      { ...config, kind: 'ace', engineMode: tier.engineMode },
+      { seatId: this.engineSeatKey(seatIndex) },
+    );
+  }
+
   createEngineClient(config, seatIndex = 0) {
     if (config.kind === 'local') {
       return new GorisansonEngineClient(config);
@@ -1088,18 +1110,12 @@ export class AppController {
     if (config.kind === 'quoridor-v3') {
       return new QuoridorV3EngineClient(config);
     }
-    if (config.kind === 'ace-v8-js') {
-      return new AceV8JsEngineClient(config);
+    if (config.kind === 'ace-v10-family') {
+      return this.createAceV10Client(config, seatIndex);
     }
     if (config.kind === 'titanium') {
       if (useStaticEngineBackend()) {
         return new TitaniumWasmEngineClient(config);
-      }
-      return new TitaniumEngineClient(config, { seatId: this.engineSeatKey(seatIndex) });
-    }
-    if (config.kind === 'ace') {
-      if (useStaticEngineBackend()) {
-        return new AceV8JsEngineClient({ ...config, kind: 'ace-v8-js' });
       }
       return new TitaniumEngineClient(config, { seatId: this.engineSeatKey(seatIndex) });
     }
@@ -1184,8 +1200,11 @@ export class AppController {
               info.stoppedBy ??
               (isTitaniumEngine(playerType, this.engineConfigs)
                 ? 'minimax'
-                : isAceEngine(playerType, this.engineConfigs)
-                  ? getEngineConfig(playerType, this.engineConfigs)?.engineMode ?? 'ace-v8'
+                : isAceV10Family(playerType, this.engineConfigs)
+                  ? resolveAceV10Tier(
+                      this.settings.playerAiSettings[this.seatIndexForPlayerType(playerType)]
+                        ?.strengthLevel,
+                    ).engineMode
                   : 'mcts'),
             searchDepth: info.searchDepth ?? this.liveSearch?.searchDepth,
             depthLog: liveDepthLog,
@@ -1347,7 +1366,14 @@ export class AppController {
   }
 
   engineLabel(playerType) {
-    const config = getEngineConfig(playerType, this.engineConfigs);
+    const normalized = normalizePlayerType(playerType);
+    if (isAceV10Family(normalized, this.engineConfigs)) {
+      const seatIndex = this.seatIndexForPlayerType(normalized);
+      const strength =
+        this.settings.playerAiSettings[seatIndex]?.strengthLevel ?? StrengthLevel.Intermediate;
+      return aceV10DisplayName(strength);
+    }
+    const config = getEngineConfig(normalized, this.engineConfigs);
     return config?.name ?? playerType;
   }
 

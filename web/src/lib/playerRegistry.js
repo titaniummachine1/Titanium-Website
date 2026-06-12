@@ -42,38 +42,12 @@ const TITANIUM_ENGINE = {
     'Iterative-deepening negamax with adaptive LMR and CAT — WASM on the public site, native Rust via `npm run dev` locally',
 };
 
-const ACE_V8_JS_ENGINE = {
-  kind: 'ace-v8-js',
-  name: 'ACE v8 (JS HTML)',
-  key: PlayerType.AceV8Js,
+const ACE_V10_ENGINE = {
+  kind: 'ace-v10-family',
+  name: 'ACE v10',
+  key: PlayerType.AceV10,
   tooltip:
-    'Unmodified engine extract from quoridor (5).html — runs in a Web Worker, parity reference',
-};
-
-const ACE_V8_ENGINE = {
-  kind: 'ace',
-  name: 'ACE v8 (Rust port)',
-  key: PlayerType.AceV8,
-  engineMode: 'ace-v8',
-  tooltip:
-    '1:1 Rust port of quoridor (5).html gen-8 — HalfPW eval (H=32), v8 think clock',
-};
-
-const ACE_V8_TI_ENGINE = {
-  kind: 'ace',
-  name: 'ACE v8 (Rust) + Ti movegen',
-  key: PlayerType.AceV8Ti,
-  engineMode: 'ace-v8-ti',
-  tooltip: 'Rust v8 search with Titanium legal-move generation at the root only',
-};
-
-const ACE_V8_TI_PMC_ENGINE = {
-  kind: 'ace',
-  name: 'ACE v8 + Ti + Pseudo-MCTS',
-  key: PlayerType.AceV8TiPmc,
-  engineMode: 'ace-v8-ti-pmc',
-  tooltip:
-    'Rust v8 + Ti movegen + greedy rollout verification: after each ID depth, plays the best move to terminal to confirm or force deeper search',
+    'quoridor (8).html engine — Strength slider: JS (left) → Rust → MoveGen+ → PMC (right)',
 };
 
 const PLACEHOLDER_ENGINES = [
@@ -95,10 +69,7 @@ export function getAllEngineConfigs() {
     GORISANSON_ENGINE,
     QUORIDOR_V3_ENGINE,
     TITANIUM_ENGINE,
-    ACE_V8_JS_ENGINE,
-    ACE_V8_ENGINE,
-    ACE_V8_TI_ENGINE,
-    ACE_V8_TI_PMC_ENGINE,
+    ACE_V10_ENGINE,
     ...remote,
     ...PLACEHOLDER_ENGINES,
   ];
@@ -132,28 +103,10 @@ export function getPlayerOptionGroups() {
           tooltip: TITANIUM_ENGINE.tooltip,
         },
         {
-          value: PlayerType.AceV8Js,
-          label: ACE_V8_JS_ENGINE.name,
+          value: PlayerType.AceV10,
+          label: ACE_V10_ENGINE.name,
           disabled: false,
-          tooltip: ACE_V8_JS_ENGINE.tooltip,
-        },
-        {
-          value: PlayerType.AceV8,
-          label: ACE_V8_ENGINE.name,
-          disabled: false,
-          tooltip: ACE_V8_ENGINE.tooltip,
-        },
-        {
-          value: PlayerType.AceV8Ti,
-          label: ACE_V8_TI_ENGINE.name,
-          disabled: false,
-          tooltip: ACE_V8_TI_ENGINE.tooltip,
-        },
-        {
-          value: PlayerType.AceV8TiPmc,
-          label: ACE_V8_TI_PMC_ENGINE.name,
-          disabled: false,
-          tooltip: ACE_V8_TI_PMC_ENGINE.tooltip,
+          tooltip: ACE_V10_ENGINE.tooltip,
         },
       ],
     },
@@ -217,11 +170,10 @@ const SEARCH_STOP_LABELS = {
   opening: 'opening',
   minimax: 'minimax',
   ace: 'ACE v8',
-  'ace-v8-js': 'ACE v8 JS',
-  'ace-v8': 'ACE v8 Rust',
-  'ace-ti': 'ACE v8 + Ti',
-  'ace-v8-ti': 'ACE v8 + Ti',
-  'ace-v8-ti-pmc': 'ACE v8 + Ti + PMC',
+  'ace-v10-js': 'ACE v10 JS',
+  'ace-v10': 'ACE v10 Rust',
+  'ace-v10-ti': 'ACE v10 MoveGen+',
+  'ace-v10-ti-pmc': 'ACE v10 MoveGen+ PMC',
   mcts: 'MCTS',
   hybrid: 'hybrid',
   race: 'win path',
@@ -258,17 +210,14 @@ function buildSearchDepthHeader(header, { live }) {
     header.stoppedBy === 'minimax' ||
     header.mode === 'minimax' ||
     header.stoppedBy === 'ace' ||
-    header.stoppedBy === 'ace-v8-js' ||
-    header.stoppedBy === 'ace-v8' ||
-    header.stoppedBy === 'ace-ti' ||
-    header.stoppedBy === 'ace-v8-ti' ||
-    header.stoppedBy === 'ace-v8-ti-pmc' ||
-    header.mode === 'ace' ||
-    header.mode === 'ace-v8-js' ||
-    header.mode === 'ace-v8' ||
-    header.mode === 'ace-ti' ||
-    header.mode === 'ace-v8-ti' ||
-    header.mode === 'ace-v8-ti-pmc' ||
+    header.stoppedBy === 'ace-v10-js' ||
+    header.stoppedBy === 'ace-v10' ||
+    header.stoppedBy === 'ace-v10-ti' ||
+    header.stoppedBy === 'ace-v10-ti-pmc' ||
+    header.mode === 'ace-v10-js' ||
+    header.mode === 'ace-v10' ||
+    header.mode === 'ace-v10-ti' ||
+    header.mode === 'ace-v10-ti-pmc' ||
     header.playerLabel?.includes('Titanium') ||
     header.playerLabel?.includes('Quoridor v3') ||
     header.playerLabel?.includes('ACE v8');

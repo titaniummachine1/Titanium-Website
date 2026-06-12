@@ -43,14 +43,14 @@ const PlayerType = {
   QuoridorV3: 'quoridor-v3',
   Titanium: 'titanium',
   TitaniumMinimax: 'titanium-minimax',
-  /** @deprecated legacy save key — remapped to AceV8 in normalizePlayerType() */
+  /** Unified ACE v10 — strength slider picks JS / Rust / MoveGen+ / PMC tier */
+  AceV10: 'ace-v10',
+  /** @deprecated legacy keys — remapped to AceV10 in normalizePlayerType() */
   AceV7: 'ace-v7',
-  /** @deprecated legacy save key — remapped to AceV8Ti in normalizePlayerType() */
   AceV7Ti: 'ace-v7-ti',
   AceV8: 'ace-v8',
   AceV8Ti: 'ace-v8-ti',
   AceV8TiPmc: 'ace-v8-ti-pmc',
-  /** Browser worker — unmodified extract from quoridor (5).html */
   AceV8Js: 'ace-v8-js',
   Pavlosdais: 'pavlosdais',
   IshtarV3: 'ishtar-v3-ai',

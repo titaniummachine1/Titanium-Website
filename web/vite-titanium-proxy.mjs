@@ -189,9 +189,12 @@ function normalizeGenmoveEngine(engine) {
     engine === 'minimax' ||
     engine === 'ace' ||
     engine === 'ace-v8' ||
+    engine === 'ace-v10' ||
     engine === 'ace-ti' ||
     engine === 'ace-v8-ti' ||
+    engine === 'ace-v10-ti' ||
     engine === 'ace-v8-ti-pmc' ||
+    engine === 'ace-v10-ti-pmc' ||
     engine === 'ace-cat'
   ) {
     return engine;
@@ -212,9 +215,12 @@ function buildGenmoveArgs(moves, options) {
   } else if (
     engine === 'ace' ||
     engine === 'ace-v8' ||
+    engine === 'ace-v10' ||
     engine === 'ace-ti' ||
     engine === 'ace-v8-ti' ||
+    engine === 'ace-v10-ti' ||
     engine === 'ace-v8-ti-pmc' ||
+    engine === 'ace-v10-ti-pmc' ||
     engine === 'ace-cat'
   ) {
     if (options.maxDepth != null) {

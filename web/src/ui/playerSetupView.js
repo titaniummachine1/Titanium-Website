@@ -125,9 +125,9 @@ function renderPlayerAiSettings(ui, playerNum) {
     return `
       <div class="player-ai-settings" data-engine="${escapeHtml(engineName)}">
         <p class="player-ai-settings__engine">${escapeHtml(engineName)}</p>
-        ${ui.isTitanium
+        ${ui.isTitanium || ui.isAceV10Family
         ? renderDiscreteSlider({
-          label: `Strength · ${engineName}`,
+          label: ui.isAceV10Family ? `Implementation · ${engineName}` : `Strength · ${engineName}`,
           settingName: 'strength-level',
           playerNum,
           value: ui.strengthLevel,

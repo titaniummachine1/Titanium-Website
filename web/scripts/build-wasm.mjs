@@ -24,7 +24,7 @@ const result = spawnSync(
     '--out-name',
     'titanium',
   ],
-  { cwd: engineDir, stdio: 'inherit', shell: process.platform === 'win32' },
+  { cwd: engineDir, stdio: 'inherit' },
 );
 
 process.exit(result.status ?? 1);
