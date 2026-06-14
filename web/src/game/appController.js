@@ -11,6 +11,7 @@ import { useStaticEngineBackend } from '../lib/engineBackend.js';
 import { validateMovesWithRust } from '../lib/rustMoveValidate.js';
 import { resolveOnBestMoveResult } from '../lib/onBestMoveResult.js';
 import { AceV10JsEngineClient } from '../lib/aceV10JsEngine.js';
+import { AceV13JsEngineClient } from '../lib/aceV13JsEngine.js';
 import {
   resolveAceTier,
   aceDisplayName,
@@ -1139,10 +1140,11 @@ export class AppController {
     const aiSettings = this.settings.playerAiSettings[seatIndex] ?? {};
     const tier = resolveAceTier(aiSettings.strengthLevel, playerType);
     const generation = aceGenerationFromPlayerType(playerType);
-    if (
-      (useStaticEngineBackend() || tier.kind.endsWith('-js')) &&
-      generation === 10
-    ) {
+    if (tier.kind.endsWith('-js')) {
+      if (generation === 13) return new AceV13JsEngineClient(config);
+      return new AceV10JsEngineClient(config);
+    }
+    if (useStaticEngineBackend() && generation === 10) {
       return new AceV10JsEngineClient(config);
     }
     return new TitaniumEngineClient(
@@ -1158,7 +1160,11 @@ export class AppController {
     if (config.kind === 'quoridor-v3') {
       return new QuoridorV3EngineClient(config);
     }
-    if (config.kind === 'ace-v8-family' || config.kind === 'ace-v10-family') {
+    if (
+      config.kind === 'ace-v8-family' ||
+      config.kind === 'ace-v10-family' ||
+      config.kind === 'ace-v13-family'
+    ) {
       return this.createAceClient(config, seatIndex);
     }
     if (config.kind === 'titanium') {

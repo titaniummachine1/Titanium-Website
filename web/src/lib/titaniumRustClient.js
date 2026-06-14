@@ -32,6 +32,8 @@ const AB_ENGINE_MODES = new Set([
   'ace-v10',
   'ace-v10-ti',
   'ace-v10-ti-pmc',
+  'ace-v13',
+  'ace-v13-ti',
 ]);
 
 function isAlphaBetaEngineMode(mode) {
