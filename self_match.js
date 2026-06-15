@@ -176,13 +176,13 @@ async function playGame(opts, gl, gameIdx, aIsP1) {
   const engA = new Engine(opts.bin, opts.engineA);
   const engB = new Engine(opts.bin, opts.engineB);
 
-  // Pondering state:
-  //   savedXPonder — ephemeral ponder result ready to use as X's next move
-  //   predictedXMove — what the OPPONENT predicts X will play (from opponent PV[1])
-  let savedAPonder   = null;  // A's pre-computed reply to predictedBMove
-  let savedBPonder   = null;  // B's pre-computed reply to predictedAMove
-  let predictedBMove = null;  // what A predicts B will play (A's PV[1])
-  let predictedAMove = null;  // what B predicts A will play (B's PV[1])
+  // Pondering state: what each engine predicted the opponent would play (from PV[1]).
+  // Ephemeral ponder processes run during the opponent's think (free wall-clock time)
+  // and warm the TT on the predicted continuation — but the persistent engine ALWAYS
+  // searches for its full time budget.  No instant replies: a ponder hit gives a head
+  // start (warm TT via dynamic-ID startup) but we keep thinking until time is up.
+  let predictedBMove = null;  // what A predicts B will play (from A's last PV[1])
+  let predictedAMove = null;  // what B predicts A will play (from B's last PV[1])
 
   let winner = 0;
 
@@ -198,8 +198,8 @@ async function playGame(opts, gl, gameIdx, aIsP1) {
 
       if (aTurn) {
         // ── A's turn ──────────────────────────────────────────────────────
-        // Concurrently: B ponders what B would do if A plays predictedAMove
-        // (predictedAMove = what B expected A to play, from B's last PV[1]).
+        // Concurrently: B ponders its reply to predictedAMove while A thinks.
+        // B's ponder runs for free (wall-clock) during A's think time.
         let bPonderProc    = null;
         let bPonderPromise = null;
         if (!opts.noPonder && predictedAMove !== null && opts.ponderTime > 0) {
@@ -207,34 +207,28 @@ async function playGame(opts, gl, gameIdx, aIsP1) {
           bPonderPromise = bPonderProc.bestMove([...moves, predictedAMove], opts.ponderTime);
         }
 
-        let pvReply;
-        const lastMv = moves[moves.length - 1];
-        if (savedAPonder !== null && lastMv === predictedBMove) {
-          // A pondered this exact position while B was thinking → instant deep reply
-          mv      = savedAPonder.move;
-          pvReply = savedAPonder.pvOpponentReply;
-        } else {
-          const res = await engA.bestMove(moves, opts.timeA);
-          mv      = res.move;
-          pvReply = res.pvOpponentReply;
-        }
-        savedAPonder   = null;
-        predictedBMove = pvReply;   // what A now expects B to play
+        // Always search with the persistent engine for the full time budget.
+        // On a ponder hit the engine's dynamic-ID startup skips shallow depths
+        // (TT already has a deep entry) giving more time to search deeper — but
+        // we never cut the search short just because a ponder result is available.
+        const res      = await engA.bestMove(moves, opts.timeA);
+        mv             = res.move;
+        predictedBMove = res.pvOpponentReply;
 
-        // Collect B's ponder (wait until it finishes if A responded instantly)
+        // Collect B's ponder; if A played what B predicted, B already knows its reply.
         if (bPonderPromise) {
           const pRes = await bPonderPromise;
           bPonderProc.destroy();
-          // If A played exactly what B predicted, B's ponder is valid for B's turn
-          if (mv === predictedAMove) savedBPonder = pRes;
+          // Store so B's persistent engine can skip those shallow depths next turn
+          // (the ponder warmed the position — but B will still search full timeB).
+          if (mv === predictedAMove) predictedAMove = pRes.pvOpponentReply ?? predictedAMove;
         }
 
         if (!mv || mv === '(none)') { winner = aIsP1 ? 2 : 1; break; }
 
       } else {
         // ── B's turn ──────────────────────────────────────────────────────
-        // Concurrently: A ponders what A would do if B plays predictedBMove
-        // (predictedBMove = what A expected B to play, from A's last PV[1]).
+        // Concurrently: A ponders its reply to predictedBMove while B thinks.
         let aPonderProc    = null;
         let aPonderPromise = null;
         if (!opts.noPonder && predictedBMove !== null && opts.ponderTime > 0) {
@@ -242,26 +236,15 @@ async function playGame(opts, gl, gameIdx, aIsP1) {
           aPonderPromise = aPonderProc.bestMove([...moves, predictedBMove], opts.ponderTime);
         }
 
-        let pvReply;
-        const lastMv = moves[moves.length - 1];
-        if (savedBPonder !== null && lastMv === predictedAMove) {
-          // B pondered this exact position while A was thinking → instant deep reply
-          mv      = savedBPonder.move;
-          pvReply = savedBPonder.pvOpponentReply;
-        } else {
-          const res = await engB.bestMove(moves, opts.timeB);
-          mv      = res.move;
-          pvReply = res.pvOpponentReply;
-        }
-        savedBPonder   = null;
-        predictedAMove = pvReply;   // what B now expects A to play
+        const res      = await engB.bestMove(moves, opts.timeB);
+        mv             = res.move;
+        predictedAMove = res.pvOpponentReply;
 
-        // Collect A's ponder (wait until finished if B responded instantly)
+        // Collect A's ponder.
         if (aPonderPromise) {
           const pRes = await aPonderPromise;
           aPonderProc.destroy();
-          // If B played exactly what A predicted, A's ponder is valid for A's turn
-          if (mv === predictedBMove) savedAPonder = pRes;
+          if (mv === predictedBMove) predictedBMove = pRes.pvOpponentReply ?? predictedBMove;
         }
 
         if (!mv || mv === '(none)') { winner = aIsP1 ? 1 : 2; break; }
@@ -308,9 +291,9 @@ async function main() {
   // Round up to even so every opening is played from both colours
   if (opts.games % 2 !== 0) opts.games++;
 
-  const log = opts.dumpGames
-    ? (...a) => process.stderr.write(a.join(' ') + '\n')
-    : (...a) => console.log(...a);
+  // Always log progress to stderr — unbuffered even in non-TTY / background mode.
+  // GAME/RESULT data lines go to stdout (for --dump-games piping).
+  const log = (...a) => process.stderr.write(a.join(' ') + '\n');
 
   const ponderNote = opts.noPonder ? 'no-ponder' : `ponder ${opts.ponderTime}s`;
   log(
