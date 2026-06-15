@@ -42,9 +42,10 @@
  */
 
 'use strict';
-const { spawn } = require('child_process');
-const readline  = require('readline');
-const path      = require('path');
+const { spawn }  = require('child_process');
+const readline   = require('readline');
+const path       = require('path');
+const fs         = require('fs');
 
 // ── CLI parsing ───────────────────────────────────────────────────────────────
 
@@ -60,22 +61,27 @@ function parseArgs(argv) {
     bin:        path.resolve(__dirname, '../engine/target/release/titanium.exe'),
     maxPly:     300,
     dumpGames:  false,
+    // Games are appended to this file by default so every match feeds training data.
+    // Pass --no-save-games to disable, or --save-games PATH to use a different file.
+    saveGames:  path.resolve(__dirname, '../training/data/self_match_games.games'),
     noPonder:   false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i], nxt = () => argv[++i];
-    if      (a === '--engine-a')    o.engineA    = nxt();
-    else if (a === '--engine-b')    o.engineB    = nxt();
-    else if (a === '--time')        { o.timeA = o.timeB = Number(nxt()); }
-    else if (a === '--time-a')      o.timeA      = Number(nxt());
-    else if (a === '--time-b')      o.timeB      = Number(nxt());
-    else if (a === '--ponder-time') o.ponderTime = Number(nxt());
-    else if (a === '--games')       o.games      = Number(nxt());
-    else if (a === '--concurrency') o.concurrency = Number(nxt());
-    else if (a === '--max-ply')     o.maxPly     = Number(nxt());
-    else if (a === '--bin')         o.bin        = nxt();
-    else if (a === '--dump-games')  o.dumpGames  = true;
-    else if (a === '--no-ponder')   o.noPonder   = true;
+    if      (a === '--engine-a')     o.engineA    = nxt();
+    else if (a === '--engine-b')     o.engineB    = nxt();
+    else if (a === '--time')         { o.timeA = o.timeB = Number(nxt()); }
+    else if (a === '--time-a')       o.timeA      = Number(nxt());
+    else if (a === '--time-b')       o.timeB      = Number(nxt());
+    else if (a === '--ponder-time')  o.ponderTime = Number(nxt());
+    else if (a === '--games')        o.games      = Number(nxt());
+    else if (a === '--concurrency')  o.concurrency = Number(nxt());
+    else if (a === '--max-ply')      o.maxPly     = Number(nxt());
+    else if (a === '--bin')          o.bin        = nxt();
+    else if (a === '--dump-games')   o.dumpGames  = true;
+    else if (a === '--save-games')   o.saveGames  = nxt();
+    else if (a === '--no-save-games') o.saveGames = null;
+    else if (a === '--no-ponder')    o.noPonder   = true;
   }
   if (o.ponderTime === null) o.ponderTime = Math.max(o.timeA, o.timeB);
   return o;
@@ -312,6 +318,12 @@ async function main() {
     `  [${ponderNote}]  ${opts.games} games  concurrency=${opts.concurrency}`,
   );
 
+  // Open save-games file for append (creates it if missing).
+  const saveStream = opts.saveGames
+    ? fs.createWriteStream(opts.saveGames, { flags: 'a', encoding: 'utf8' })
+    : null;
+  if (saveStream) log(`saving games -> ${opts.saveGames}`);
+
   let aW = 0, bW = 0, draws = 0, done = 0;
   const started = Date.now();
   let next = 0;
@@ -335,8 +347,10 @@ async function main() {
       else              bW++;
       done++;
 
-      if (opts.dumpGames && !r.draw) {
-        process.stdout.write(`GAME ${r.moves.join(' ')}\nRESULT ${r.winner === 1 ? 'W' : 'B'}\n`);
+      if (!r.draw) {
+        const gameLines = `GAME ${r.moves.join(' ')}\nRESULT ${r.winner === 1 ? 'W' : 'B'}\n`;
+        if (opts.dumpGames)  process.stdout.write(gameLines);
+        if (saveStream)      saveStream.write(gameLines);
       }
 
       const score = aW + 0.5 * draws;
@@ -349,6 +363,25 @@ async function main() {
   }
 
   await Promise.all(Array.from({ length: Math.max(1, opts.concurrency) }, worker));
+  if (saveStream) await new Promise(res => saveStream.end(res));
+
+  // Auto-ingest into training DB immediately after match completes.
+  if (opts.saveGames) {
+    const dbPath = path.resolve(__dirname, '../training/data/all_games.jsonl');
+    const datagen = path.resolve(__dirname, '../training/datagen.py');
+    log(`ingesting games into training DB: ${dbPath}`);
+    await new Promise((resolve, reject) => {
+      const py = spawn('python', [datagen, '--from-file', opts.saveGames, '--out', dbPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      py.stdout.on('data', d => log(d.toString().trim()));
+      py.stderr.on('data', d => process.stderr.write(d));
+      py.on('close', code => {
+        if (code === 0) resolve();
+        else reject(new Error(`datagen.py exited with code ${code}`));
+      });
+    });
+  }
 
   const n     = done || 1;
   const score = aW + 0.5 * draws;
