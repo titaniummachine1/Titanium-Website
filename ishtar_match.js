@@ -3,30 +3,33 @@
  * Batch match harness: native Titanium engine vs a remote Ishtar/Ka engine.
  *
  *   node ishtar_match.js [options]
- *     --engine NAME    our engine session flag (default ace-v13-grafted)
- *     --opp ishtar|ka  remote opponent (default ishtar)
- *     --opp-time MODE  intuition|short|medium|long (default short)
- *     --our-time SEC   our engine think seconds/move (default 1)
- *     --games N        total games (default 8)
- *     --concurrency K  games in flight at once (default 4)
- *     --bin PATH       titanium binary (default ../engine/target/release/titanium.exe)
- *     --max-ply N      adjudicate as loss-by-timeout cap (default 300)
- *     --dump-games     emit GAME/RESULT lines to stdout; route progress/summary to stderr
+ *     --engine NAME      our engine flag (default titanium-v14)
+ *     --opp ishtar|ka    remote opponent (default ishtar)
+ *     --opp-time MODE    intuition|short|medium|long (default short)
+ *     --our-time SEC     our engine think seconds/move (default 2)
+ *     --ponder-time SEC  seconds to ponder during opponent's think (default 10)
+ *     --games N          total games (default 8)
+ *     --concurrency K    games in flight at once (default 2)
+ *     --bin PATH         titanium binary
+ *     --max-ply N        ply cap (default 300)
+ *     --dump-games       GAME/RESULT to stdout; progress/summary to stderr
  *
- * Color is swapped every game so each opening is played from both sides.
+ * PONDERING: While the remote engine thinks (~12s for Ka short), we run our
+ * engine on the expected continuation (predicted from the PV of our last move).
+ * If Ka plays the predicted move → instant deep reply; otherwise → think fresh.
+ * Bonus: the pondered positions are emitted as extra eval-batch inputs for training.
  *
- * CPU note: our engine is time-based, so its think must get a clean core. The
- * opponent is REMOTE (its cluster, not our CPU), so while it computes our core is
- * free — that's why oversubscribing (concurrency > cores) can help here, unlike
- * local-vs-local. But if too many of OUR engines think at once they steal each
- * other's time; keep concurrency near core count unless games are network-bound.
+ * Ka server protocol (uci_engine.py):
+ *   makemove <m1> <m2> ...  — apply moves to server state (ALL moves, incl. Ka's)
+ *   setoption name visits value N
+ *   go                      — search from current state; prints bestmove
+ *   State is PERSISTENT across moves on the same connection.
+ *   After bestmove, state is NOT auto-advanced — must send makemove for Ka's move too.
  *
- * DUMP FORMAT (--dump-games, one game per two lines, W=P1 wins B=P2 wins):
+ * DUMP FORMAT (stdout, --dump-games):
  *   GAME e5 e5 d3h ...
- *   RESULT W
- * Draws (ply-cap adjudications where d1==d2) are omitted. This matches the
- * format produced by `titanium match --dump-games` so parse_dump_games() in
- * datagen.py handles both sources identically.
+ *   RESULT W        (W=P1 wins, B=P2 wins; draws omitted)
+ * Same format as titanium match --dump-games so parse_dump_games() handles both.
  */
 
 const { spawn } = require('child_process');
@@ -36,12 +39,13 @@ const { QuoridorEngineClient, ENGINES } = require('./extracted/engine_client');
 
 function parseArgs(argv) {
   const o = {
-    engine: 'ace-v13-grafted',
+    engine: 'titanium-v14',
     opp: 'ishtar',
     oppTime: 'short',
-    ourTime: 1,
+    ourTime: 2,
+    ponderTime: 10,
     games: 8,
-    concurrency: 4,
+    concurrency: 2,
     bin: path.resolve(__dirname, '../engine/target/release/titanium.exe'),
     maxPly: 300,
     dumpGames: false,
@@ -53,6 +57,7 @@ function parseArgs(argv) {
     else if (a === '--opp') o.opp = next();
     else if (a === '--opp-time') o.oppTime = next();
     else if (a === '--our-time') o.ourTime = Number(next());
+    else if (a === '--ponder-time') o.ponderTime = Number(next());
     else if (a === '--games') o.games = Number(next());
     else if (a === '--concurrency') o.concurrency = Number(next());
     else if (a === '--bin') o.bin = next();
@@ -62,13 +67,20 @@ function parseArgs(argv) {
   return o;
 }
 
-/** Drive one native engine subprocess over the session stdio protocol. */
+// ── Our local engine ──────────────────────────────────────────────────────────
+
 class OurEngine {
   constructor(bin, engineFlag) {
     this.proc = spawn(bin, ['session', '--engine', engineFlag], {
-      stdio: ['pipe', 'pipe', 'ignore'], // ignore stderr (info json stream)
+      stdio: ['pipe', 'pipe', 'pipe'],  // capture stderr for PV extraction
     });
     this.rl = readline.createInterface({ input: this.proc.stdout });
+    this.stderrLines = [];
+    this.proc.stderr.on('data', (d) => {
+      for (const ln of d.toString().split('\n')) {
+        if (ln.trim()) this.stderrLines.push(ln.trim());
+      }
+    });
     this.queue = [];
     this.waiters = [];
     this.rl.on('line', (line) => {
@@ -77,92 +89,197 @@ class OurEngine {
       else this.queue.push(line);
     });
   }
+
   _readLine() {
     if (this.queue.length) return Promise.resolve(this.queue.shift());
     return new Promise((res) => this.waiters.push(res));
   }
-  _send(cmd) {
-    this.proc.stdin.write(cmd + '\n');
-  }
+  _send(cmd) { this.proc.stdin.write(cmd + '\n'); }
   async _await(prefix) {
-    for (;;) {
-      const line = await this._readLine();
-      if (line.startsWith(prefix)) return line;
-    }
+    for (;;) { const l = await this._readLine(); if (l.startsWith(prefix)) return l; }
   }
-  /** Set position to the full move list, then search; returns best move string. */
+
+  /** Search from the given move history; return { move, pvOpponentReply }.
+   *  pvOpponentReply is the engine's predicted next move (from PV), useful for
+   *  pondering — null if PV is too short.
+   */
   async bestMove(moves, seconds) {
+    this.stderrLines = [];
     this._send(moves.length ? `position ${moves.join(' ')}` : 'reset');
     await this._await('ready');
     this._send(`go ${seconds}`);
     const line = await this._await('bestmove');
-    return line.slice('bestmove '.length).trim();
+    const mv = line.slice('bestmove '.length).trim();
+
+    // Extract PV from last info json on stderr to get predicted opponent reply.
+    let pvOpponentReply = null;
+    for (let i = this.stderrLines.length - 1; i >= 0; i--) {
+      const m = this.stderrLines[i].match(/"depthLog":\[(.*)\]/);
+      if (m) {
+        // Find last entry's pv field
+        const pvM = [...this.stderrLines[i].matchAll(/"pv":"([^"]+)"/g)].pop();
+        if (pvM) {
+          const pvTokens = pvM[1].split(' ').filter(Boolean);
+          // pvTokens[0] = our move, pvTokens[1] = opponent's expected reply
+          if (pvTokens.length >= 2) pvOpponentReply = pvTokens[1];
+        }
+        break;
+      }
+    }
+    return { move: mv, pvOpponentReply };
   }
+
   destroy() {
-    try {
-      this._send('quit');
-    } catch {}
+    try { this._send('quit'); } catch {}
     this.proc.kill();
   }
 }
 
-/** Get one remote move via a FRESH connection that full-replays the whole move
- *  history (the website's proven "replay after reconnect" path). This sidesteps
- *  all incremental-state desync: each call reconstructs the exact position from
- *  startpos via makemove, then go() plays (and commits) the side to move. The
- *  client flips walls for Glendenning; pawns pass through. setposition is avoided
- *  (its pawn flip pushes e9→e10 off-board). */
-function ishtarBestMove(opp, allMoves, gl, timeMode, debugIdx) {
-  return new Promise((resolve, reject) => {
-    const client = new QuoridorEngineClient(ENGINES[opp]);
-    let settled = false;
-    const finish = (fn, arg) => {
-      if (settled) return;
-      settled = true;
-      client.destroy();
-      fn(arg);
+// ── Remote engine (Ka / Ishtar) ───────────────────────────────────────────────
+// Ka keeps state persistent on ONE connection. After each `go` + `bestmove`,
+// state is NOT auto-advanced — we must send `makemove <Ka_move>` explicitly.
+// uci_engine.py: makemove applies moves sequentially to self.state.
+
+class RemoteEngine {
+  constructor(opp, timeMode) {
+    this.timeMode = timeMode;
+    this.opp = opp;
+    this._pending = null;
+    this._error = null;
+    this._connected = false;
+    this._makeClient();
+  }
+
+  _makeClient() {
+    if (this.client) this.client.destroy();
+    const client = new QuoridorEngineClient(ENGINES[this.opp]);
+    client.onBestMove = (action, raw) => {
+      const cb = this._pending; this._pending = null;
+      if (cb) cb({ action, raw });
     };
-    if (debugIdx !== undefined) client.onRawMessage = (m) => process.stderr.write(`[ws ${debugIdx}] << ${m}\n`);
-    client.onError = (e) => finish(reject, e);
-    client.onBestMove = (action) => finish(resolve, gl.toAlgebraic(action));
-    client.connect();
-    if (allMoves.length) client.makeMoves(allMoves.map((m) => gl.parseAlgebraic(m)));
-    client.go(timeMode);
-  });
+    client.onError = (e) => {
+      this._error = e;
+      const cb = this._pending; this._pending = null;
+      if (cb) cb(null);
+    };
+    this.client = client;
+  }
+
+  /** Connect and wait until ready (one-time per game). */
+  connect() {
+    return new Promise((res, rej) => {
+      const onStatus = (s) => {
+        if (s === 'idle') { this._connected = true; this.client.onStatus = null; res(); }
+        else if (s === 'error') { rej(new Error('Remote WS failed')); }
+      };
+      this.client.onStatus = onStatus;
+      this.client.connect();
+    });
+  }
+
+  /** Reconnect if the connection dropped (Ka may close after idle time). */
+  _ensureConnected() {
+    if (this.client.ws && this.client.ws.readyState === 1 /* OPEN */) return;
+    this._makeClient();
+    return this.connect();
+  }
+
+  /** Tell Ka/Ishtar that `mv` was played (advances server state). */
+  async notifyMove(gl, mv) {
+    await this._ensureConnected();
+    this.client.makeMoves([gl.parseAlgebraic(mv)]);
+  }
+
+  /** Ask Ka/Ishtar for its move (from current server state). Returns algebraic or throws. */
+  bestMove(gl) {
+    return new Promise(async (res, rej) => {
+      await this._ensureConnected();
+      this._error = null;
+      this._pending = ({ action, raw }) => {
+        if (!action) { rej(this._error || new Error('no bestmove')); return; }
+        res(gl.toAlgebraic(action));
+      };
+      this.client.go(this.timeMode);
+    });
+  }
+
+  destroy() { if (this.client) this.client.destroy(); }
 }
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
 
 async function playGame(opts, gl, gameIdx, ourIsP1) {
   const { QuoridorBoard } = gl;
   const board = new QuoridorBoard();
   const our = new OurEngine(opts.bin, opts.engine);
-  const dbg = process.env.DEBUG_WS ? gameIdx : undefined;
+  const remote = new RemoteEngine(opts.opp, opts.oppTime);
+
+  // Connect and init Ka/Ishtar server state (sends newgame equivalent via fresh connect).
+  await remote.connect();
 
   const moves = [];
   let winner = 0;
+  let savedPonderMove = null;   // pre-computed our response to predicted Ka move
+  let predictedKaMove = null;   // what we predicted Ka would play
 
   try {
     for (let ply = 0; ply < opts.maxPly; ply++) {
       const term = board.terminal();
-      if (term.isTerminal) {
-        winner = term.playerNum;
-        break;
-      }
+      if (term.isTerminal) { winner = term.playerNum; break; }
+
       const p1ToMove = board.playerToMove() === 1;
       const ourTurn = p1ToMove === ourIsP1;
 
       let mv;
+
       if (ourTurn) {
-        mv = await our.bestMove(moves, opts.ourTime);
-        if (!mv || mv === '(none)') {
-          winner = ourIsP1 ? 2 : 1;
-          break;
+        // Use pondered result if Ka played exactly what we predicted.
+        if (savedPonderMove !== null && moves[moves.length - 1] === predictedKaMove) {
+          mv = savedPonderMove;
+        } else {
+          const res = await our.bestMove(moves, opts.ourTime);
+          mv = res.move;
+          // Save PV for next ponder prediction.
+          predictedKaMove = res.pvOpponentReply;
         }
+        savedPonderMove = null;
+
+        if (!mv || mv === '(none)') { winner = ourIsP1 ? 2 : 1; break; }
+
+        // Tell remote engine about our move (advances its state).
+        await remote.notifyMove(gl, mv);
+
       } else {
-        mv = await ishtarBestMove(opts.opp, moves, gl, opts.oppTime, dbg);
-        if (!mv) {
-          winner = ourIsP1 ? 1 : 2;
-          break;
+        // Remote engine's turn.
+        // Start pondering CONCURRENTLY with Ka's search if we have a prediction.
+        let ponderEngine = null;
+        let ponderPromise = null;
+
+        if (predictedKaMove && opts.ponderTime > 0) {
+          // Predict Ka plays predictedKaMove; ponder our response to that.
+          const ponderMoves = [...moves, predictedKaMove];
+          ponderEngine = new OurEngine(opts.bin, opts.engine);
+          ponderPromise = ponderEngine.bestMove(ponderMoves, opts.ponderTime);
         }
+
+        // Ka searches from its current state (all previous moves already applied).
+        mv = await remote.bestMove(gl);
+
+        // Collect ponder result.
+        if (ponderPromise) {
+          const ponderRes = await ponderPromise;
+          ponderEngine.destroy();
+          ponderEngine = null;
+          if (mv === predictedKaMove) {
+            // Perfect prediction — use the deep ponder result on our next turn.
+            savedPonderMove = ponderRes.move;
+          }
+        }
+
+        // Tell remote engine it played mv (advances its state so next go is correct).
+        await remote.notifyMove(gl, mv);
+
+        if (!mv) { winner = ourIsP1 ? 1 : 2; break; }
       }
 
       if (!board.isValid(mv)) {
@@ -175,10 +292,10 @@ async function playGame(opts, gl, gameIdx, ourIsP1) {
     }
   } finally {
     our.destroy();
+    remote.destroy();
   }
 
   if (winner === 0) {
-    // ply cap — adjudicate by shortest distance (closer pawn wins).
     const d1 = gl.shortestDistanceToGoal(board, 1);
     const d2 = gl.shortestDistanceToGoal(board, 2);
     winner = d1 < d2 ? 1 : d2 < d1 ? 2 : 0;
@@ -187,18 +304,18 @@ async function playGame(opts, gl, gameIdx, ourIsP1) {
   return { gameIdx, winner, ourWin, draw: winner === 0, plies: moves.length, moves };
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 async function main() {
   const opts = parseArgs(process.argv);
   const gl = await import('./web/src/lib/gameLogic.js');
 
-  // When dumping games, route all human-readable output to stderr so stdout
-  // carries only the parseable GAME/RESULT pairs.
   const log = opts.dumpGames
     ? (...args) => process.stderr.write(args.join(' ') + '\n')
     : (...args) => console.log(...args);
 
   log(
-    `match: OUR=${opts.engine} (${opts.ourTime}s) vs ${opts.opp} (${opts.oppTime}), ` +
+    `match: OUR=${opts.engine} (${opts.ourTime}s, ponder ${opts.ponderTime}s) vs ${opts.opp} (${opts.oppTime}), ` +
       `${opts.games} games, concurrency ${opts.concurrency}`,
   );
 
@@ -210,7 +327,7 @@ async function main() {
     for (;;) {
       const idx = next++;
       if (idx >= opts.games) return;
-      const ourIsP1 = idx % 2 === 0; // swap colors each game
+      const ourIsP1 = idx % 2 === 0;
       let r;
       try {
         r = await playGame(opts, gl, idx, ourIsP1);
@@ -219,19 +336,13 @@ async function main() {
         continue;
       }
 
-      if (r.draw) {
-        draws++;
-      } else if (r.ourWin) {
-        ourW++;
-      } else {
-        oppW++;
-      }
+      if (r.draw) draws++;
+      else if (r.ourWin) ourW++;
+      else oppW++;
       done++;
 
-      // Emit parseable game record to stdout (skip draws — no winner to label)
       if (opts.dumpGames && !r.draw) {
-        const result = r.winner === 1 ? 'W' : 'B';
-        process.stdout.write(`GAME ${r.moves.join(' ')}\nRESULT ${result}\n`);
+        process.stdout.write(`GAME ${r.moves.join(' ')}\nRESULT ${r.winner === 1 ? 'W' : 'B'}\n`);
       }
 
       const score = ourW + 0.5 * draws;
@@ -250,11 +361,10 @@ async function main() {
   const p = score / n;
   const se = Math.sqrt((p * (1 - p)) / n);
   const elo = p > 0 && p < 1 ? -400 * Math.log10((1 - p) / p) : (p >= 1 ? Infinity : -Infinity);
-  log('=== ISHTAR MATCH RESULT ===');
+  log('=== MATCH RESULT ===');
   log(`OUR=${opts.engine} vs ${opts.opp} ${opts.oppTime}`);
-  log(`OUR ${ourW} | ${opts.opp} ${oppW} | draws ${draws}`);
+  log(`OUR ${ourW} | OPP ${oppW} | draws ${draws}`);
   log(`score ${score.toFixed(1)}/${n} = ${(p * 100).toFixed(1)}% (+-${(se * 196).toFixed(1)}%) ~${elo >= 0 ? '+' : ''}${elo.toFixed(0)} Elo`);
-  // Final summary line on stderr — parseable by run_benchmarks.py
   process.stderr.write(`MATCH_SUMMARY OUR=${ourW} OPP=${oppW} DRAWS=${draws} SCORE=${score.toFixed(1)}/${n} ELO=${elo.toFixed(0)}\n`);
 }
 
