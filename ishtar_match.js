@@ -96,34 +96,27 @@ class OurEngine {
   }
 }
 
-/** Full referee state → the gameState shape `buildPositionString` consumes.
- *  Using setposition before every go() removes all incremental-commit ambiguity
- *  (go() does NOT reliably auto-commit the remote engine's own move). */
-function boardToGameState(board, gl) {
-  const toCoord = (key) => ({ column: key[0], row: Number(key.slice(1)) });
-  const wallsByPlayer = [];
-  for (const k of board._horizontalWalls) wallsByPlayer.push([0, toCoord(k), gl.WallType.Horizontal]);
-  for (const k of board._verticalWalls) wallsByPlayer.push([0, toCoord(k), gl.WallType.Vertical]);
-  return {
-    wallsByPlayer,
-    playerPositions: [
-      board.playerPosition({ playerNum: 1 }),
-      board.playerPosition({ playerNum: 2 }),
-    ],
-    wallsRemaining: [
-      board.wallsRemaining({ playerNum: 1 }),
-      board.wallsRemaining({ playerNum: 2 }),
-    ],
-    playerToMove: board.playerToMove(),
-  };
-}
-
-/** Drive one remote Ishtar/Ka move; resolves a best move (app notation string). */
-function ishtarBestMove(client, board, gl, timeMode) {
+/** Get one remote move via a FRESH connection that full-replays the whole move
+ *  history (the website's proven "replay after reconnect" path). This sidesteps
+ *  all incremental-state desync: each call reconstructs the exact position from
+ *  startpos via makemove, then go() plays (and commits) the side to move. The
+ *  client flips walls for Glendenning; pawns pass through. setposition is avoided
+ *  (its pawn flip pushes e9→e10 off-board). */
+function ishtarBestMove(opp, allMoves, gl, timeMode, debugIdx) {
   return new Promise((resolve, reject) => {
-    client.onError = (e) => reject(e);
-    client.onBestMove = (action) => resolve(gl.toAlgebraic(action));
-    client.setPosition(boardToGameState(board, gl));
+    const client = new QuoridorEngineClient(ENGINES[opp]);
+    let settled = false;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      client.destroy();
+      fn(arg);
+    };
+    if (debugIdx !== undefined) client.onRawMessage = (m) => console.error(`[ws ${debugIdx}] << ${m}`);
+    client.onError = (e) => finish(reject, e);
+    client.onBestMove = (action) => finish(resolve, gl.toAlgebraic(action));
+    client.connect();
+    if (allMoves.length) client.makeMoves(allMoves.map((m) => gl.parseAlgebraic(m)));
     client.go(timeMode);
   });
 }
@@ -132,16 +125,7 @@ async function playGame(opts, gl, gameIdx, ourIsP1) {
   const { QuoridorBoard } = gl;
   const board = new QuoridorBoard();
   const our = new OurEngine(opts.bin, opts.engine);
-  const client = new QuoridorEngineClient(ENGINES[opts.opp]);
-  if (process.env.DEBUG_WS) {
-    client.onRawMessage = (m) => console.error(`[ws ${gameIdx}] << ${m}`);
-    const origSend = client.send.bind(client);
-    client.send = (cmd) => {
-      console.error(`[ws ${gameIdx}] >> ${cmd}`);
-      return origSend(cmd);
-    };
-  }
-  client.connect();
+  const dbg = process.env.DEBUG_WS ? gameIdx : undefined;
 
   const moves = [];
   let winner = 0;
@@ -164,7 +148,7 @@ async function playGame(opts, gl, gameIdx, ourIsP1) {
           break;
         }
       } else {
-        mv = await ishtarBestMove(client, board, gl, opts.oppTime);
+        mv = await ishtarBestMove(opts.opp, moves, gl, opts.oppTime, dbg);
         if (!mv) {
           winner = ourIsP1 ? 1 : 2;
           break;
@@ -182,7 +166,6 @@ async function playGame(opts, gl, gameIdx, ourIsP1) {
     }
   } finally {
     our.destroy();
-    client.destroy();
   }
 
   if (winner === 0) {
