@@ -21,12 +21,17 @@
  * If Ka plays the predicted move → instant deep reply; otherwise → think fresh.
  * Bonus: the pondered positions are emitted as extra eval-batch inputs for training.
  *
- * Ka server protocol (uci_engine.py):
+ * Ka / Ishtar remote protocol (see site/extracted/ENGINE_PROTOCOL.md):
+ *
+ *   The remote server is NOT playing a game with you. It is a stateless search
+ *   box: whatever position it last saw via makemove/setposition is where `go`
+ *   searches. It does not advance after bestmove — you must makemove EVERY ply
+ *   (yours AND Ka's) or the next `go` is from the wrong position.
+ *
  *   makemove <m1> <m2> ...  — apply moves to server state (ALL moves, incl. Ka's)
- *   setoption name visits value N
- *   go                      — search from current state; prints bestmove
- *   State is PERSISTENT across moves on the same connection.
- *   After bestmove, state is NOT auto-advanced — must send makemove for Ka's move too.
+ *   go                      — search from current server state; prints bestmove
+ *   State is PERSISTENT on one connection until disconnect.
+ *   After reconnect: replay full _appliedActions before the next go/notifyMove.
  *
  * DUMP FORMAT (stdout, --dump-games):
  *   GAME e5 e5 d3h ...
@@ -40,7 +45,8 @@ const path = require('path');
 const fs = require('fs');
 const { ProgressBoard, MAX_SLOTS } = require('./progress_bars');
 const { QuoridorEngineClient, ENGINES } = require('./extracted/engine_client');
-const { fairBudgetSec, recordThink, minThinkSec, remoteMoveTimeoutSec } = require('./remote_timing');
+const { fairBudgetSec, recordThink, minThinkSec, remoteMoveTimeoutSec, remoteConnectTimeoutSec } = require('./remote_timing');
+const { isCompleteGame } = require('./game_validate');
 const { normalizeTimeMode, presetDescription } = require('./remote_presets');
 
 function parseArgs(argv) {
@@ -86,7 +92,7 @@ function parseArgs(argv) {
 const coord = require('./coordinator_client');
 
 async function persistGame(moves, result, sourceTag, gamesFile, releaseRemote = false, gameId = null) {
-  await coord.upsertGame({ moves, result, tag: sourceTag, gamesFile, releaseRemote, gameId });
+  return coord.upsertGame({ moves, result, tag: sourceTag, gamesFile, releaseRemote, gameId });
 }
 
 function ourTcLabel(_opts) {
@@ -200,14 +206,18 @@ class OurEngine {
 }
 
 // ── Remote engine (Ka / Ishtar) ───────────────────────────────────────────────
-const CONNECT_TIMEOUT_SEC = 30;
-const MAX_MOVE_RETRIES = 2;   // retries after a connection drop
-const RETRY_DELAY_MS = 1500;  // pause before each retry
+// Ka/Ishtar do not "play" a game — they search the position you last sent via
+// makemove. We keep _appliedActions as source of truth and echo every ply to
+// the server (both sides). On WS drop, reconnect + replay full history.
+const MAX_MOVE_RETRIES = 3;
+const RETRY_DELAY_MS = 800;
 
 class RemoteEngine {
-  constructor(opp, timeMode) {
+  constructor(opp, timeMode, progress, slot) {
     this.timeMode = timeMode;
     this.opp = opp;
+    this.progress = progress;
+    this.slot = slot;
     this._pending = null;
     this._error = null;
     this._connected = false;
@@ -230,110 +240,121 @@ class RemoteEngine {
     this.client = client;
   }
 
-  /** Connect and wait until ready; rejects after CONNECT_TIMEOUT_SEC if TCP hangs. */
-  connect() {
+  /** Connect and wait until ready; rejects after connectTimeoutSec if TCP hangs. */
+  connect(connectTimeoutSec = remoteConnectTimeoutSec()) {
     return new Promise((res, rej) => {
       let connTimer = setTimeout(() => {
         this.client.onStatus = null;
-        rej(new Error(`remote connect timeout after ${CONNECT_TIMEOUT_SEC}s`));
-      }, CONNECT_TIMEOUT_SEC * 1000);
+        rej(new Error(`remote connect timeout after ${connectTimeoutSec}s`));
+      }, connectTimeoutSec * 1000);
 
       const onStatus = (s) => {
-        clearTimeout(connTimer);
-        connTimer = null;
-        if (s === 'idle') { this._connected = true; this.client.onStatus = null; res(); }
-        else if (s === 'error') { rej(new Error('Remote WS failed')); }
+        if (s === 'idle') {
+          clearTimeout(connTimer);
+          connTimer = null;
+          this._connected = true;
+          this.client.onStatus = null;
+          res();
+        } else if (s === 'error') {
+          clearTimeout(connTimer);
+          connTimer = null;
+          rej(new Error('Remote WS failed'));
+        }
       };
       this.client.onStatus = onStatus;
       this.client.connect();
     });
   }
 
-  /**
-   * Ensure connection is open.  On reconnect, replays the full move history so
-   * the remote engine is back in sync with the current board position.
-   */
-  async _ensureConnected() {
+  async _ensureConnected(connectTimeoutSec = remoteConnectTimeoutSec()) {
     if (this.client?.ws?.readyState === 1 /* OPEN */) return;
     this._makeClient();
-    await this.connect();
-    // Replay every confirmed move so Ka/Ishtar is at the current position.
+    await this.connect(connectTimeoutSec);
     if (this._appliedActions.length > 0) {
       this.client.makeMoves(this._appliedActions);
     }
   }
 
+  _onRetry(attempt) {
+    if (this.progress && this.slot != null) {
+      this.progress.reconnect(this.slot, attempt);
+    }
+  }
+
   /**
-   * Tell Ka/Ishtar that `mv` was played (advances server state).
-   * Retries on connection drop — safe because _ensureConnected replays history
-   * before each attempt, so we never double-send the move.
+   * Tell the remote server a ply happened. Required after OUR moves and after
+   * Ka's bestmove — the server does not auto-advance on bestmove.
    */
   async notifyMove(gl, mv) {
     const action = gl.parseAlgebraic(mv);
     let lastErr;
     for (let attempt = 0; attempt <= MAX_MOVE_RETRIES; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      if (attempt > 0) {
+        this._onRetry(attempt);
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      }
       try {
-        // _ensureConnected replays _appliedActions (not including `action` yet)
         await this._ensureConnected();
         this.client.makeMoves([action]);
-        this._appliedActions.push(action);   // confirmed sent
+        this._appliedActions.push(action);
         return;
       } catch (e) {
         lastErr = e;
+        try { this.client?.destroy(); } catch {}
+        this._connected = false;
       }
     }
     throw lastErr;
   }
 
-  /**
-   * Ask remote for its move; returns { move, thinkSec }.
-   * Retries up to MAX_MOVE_RETRIES times on connection errors — each retry
-   * reconnects and replays history so Ka/Ishtar searches from the right position.
-   * The outer timer inside _bestMoveOnce covers _ensureConnected() too.
-   */
-  async bestMove(gl, timeoutSec = 120) {
+  async bestMove(gl, searchTimeoutSec = 120) {
     let lastErr;
     for (let attempt = 0; attempt <= MAX_MOVE_RETRIES; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      if (attempt > 0) {
+        this._onRetry(attempt);
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      }
       try {
-        return await this._bestMoveOnce(gl, timeoutSec);
+        return await this._bestMoveOnce(gl, searchTimeoutSec);
       } catch (e) {
         lastErr = e;
-        // Only retry on connection/timeout errors, not on logic errors.
-        const isConnErr = /timeout|closed|failed|error/i.test(e.message);
+        const isConnErr = /timeout|closed|failed|error|websocket/i.test(String(e.message));
         if (!isConnErr || attempt >= MAX_MOVE_RETRIES) break;
+        try { this.client?.destroy(); } catch {}
+        this._connected = false;
       }
     }
     throw lastErr;
   }
 
-  /** Single attempt: outer timer covers _ensureConnected + go. */
-  _bestMoveOnce(gl, timeoutSec) {
+  /** Connect + replay history, then search (search timer excludes connect). */
+  _bestMoveOnce(gl, searchTimeoutSec) {
     return new Promise((res, rej) => {
       let settled = false;
-      const outerTimer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        this._pending = null;
-        try { this.client?.abortSearch(); } catch {}
-        try { this.client?.destroy(); } catch {}
-        this._makeClient();
-        rej(new Error(`remote think timeout (${timeoutSec}s)`));
-      }, Math.max(1000, timeoutSec * 1000));
+      let searchTimer = null;
 
       const finish = (fn) => {
         if (settled) return;
         settled = true;
-        clearTimeout(outerTimer);
+        if (searchTimer) clearTimeout(searchTimer);
         this._pending = null;
         fn();
       };
 
       this._ensureConnected().then(() => {
-        if (settled) return; // timed out during connect
+        if (settled) return;
         this._error = null;
         const t0 = Date.now();
+
+        searchTimer = setTimeout(() => {
+          finish(() => {
+            try { this.client?.abortSearch(); } catch {}
+            try { this.client?.destroy(); } catch {}
+            this._makeClient();
+            rej(new Error(`remote think timeout (${searchTimeoutSec}s)`));
+          });
+        }, Math.max(1000, searchTimeoutSec * 1000));
+
         this._pending = (result) => {
           if (!result || result.error) {
             finish(() => rej(this._error || result?.error || new Error('remote engine returned no bestmove')));
@@ -377,11 +398,11 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
   const { QuoridorBoard } = gl;
   const board = new QuoridorBoard();
   const our = new OurEngine(opts.bin, opts.engine);
-  const remote = new RemoteEngine(opts.opp, opts.oppTime);
+  const remote = new RemoteEngine(opts.opp, opts.oppTime, progress, slot);
 
-  progress.start(slot, gameIdx, opts.maxPly);
+  const matchLabel = opts.matchLabel || process.env.MATCH_LABEL || '';
+  progress.start(slot, gameIdx, opts.maxPly, matchLabel);
 
-  // Connect and init Ka/Ishtar server state (sends newgame equivalent via fresh connect).
   await remote.connect();
 
   const moves = [];
@@ -501,7 +522,17 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
     plies: moves.length,
     label: ourWin ? 'we win' : `${opts.opp} wins`,
   });
-  return { gameIdx, winner, ourWin, draw: winner === 0, plies: moves.length, moves };
+  const result = {
+    gameIdx,
+    winner,
+    ourWin,
+    draw: winner === 0,
+    plies: moves.length,
+    moves,
+    aborted: false,
+  };
+  result.complete = isCompleteGame(result);
+  return result;
 }
 
 async function main() {
@@ -554,6 +585,10 @@ async function main() {
       }
 
       if (r.draw) continue;
+      if (!isCompleteGame(r)) {
+        progress.note(`game ${idx}: skip incomplete (${r.plies} plies)`);
+        continue;
+      }
       if (r.ourWin) { ourW++; sessionOur++; }
       else { oppW++; sessionOpp++; }
       done++;
@@ -616,4 +651,5 @@ module.exports = {
   updateMatchup,
   ourTcLabel,
   runningElo,
+  isCompleteGame,
 };

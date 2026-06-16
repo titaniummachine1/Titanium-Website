@@ -9,15 +9,7 @@ const BAR_W = 26;
 const MIN_RENDER_MS = 400;
 const TICK_MS = 500;
 
-const C = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  green: '\x1b[32m',
-  cyan: '\x1b[36m',
-  yellow: '\x1b[33m',
-  gray: '\x1b[90m',
-};
+const C = {"reset":"\u001b[0m","dim":"\u001b[2m","bold":"\u001b[1m","green":"\u001b[32m","cyan":"\u001b[36m","yellow":"\u001b[33m","gray":"\u001b[90m"};
 
 function clamp01(x) {
   return Math.max(0, Math.min(1, x));
@@ -26,19 +18,23 @@ function clamp01(x) {
 function bar(pct, width = BAR_W) {
   const p = clamp01(pct);
   const n = Math.round(p * width);
-  return `${C.cyan}${'█'.repeat(n)}${C.gray}${'░'.repeat(width - n)}${C.reset}`;
+  return C.cyan + '█'.repeat(n) + C.gray + '░'.repeat(width - n) + C.reset;
 }
 
 class ProgressBoard {
   constructor(opts = {}) {
     this.slots = Math.min(Math.max(1, opts.slots || MAX_SLOTS), MAX_SLOTS);
     this.title = opts.title || 'games';
+    this.continuous = opts.continuous === true;
+    this.scoreboardLines = [];
     this.enabled = process.stderr.isTTY === true && process.env.NO_PROGRESS !== '1';
     this._lines = 0;
     this._timer = null;
     this._lastRender = 0;
     this._dirty = false;
     this._lastSnapshot = '';
+    this._flash = '';
+    this._altScreen = false;
     this.rows = Array.from({ length: this.slots }, (_, slot) => ({
       slot,
       matchLabel: '',
@@ -54,11 +50,28 @@ class ProgressBoard {
       done: false,
       result: '',
     }));
+    this._enterAltScreen();
+  }
+
+  _enterAltScreen() {
+    if (!this.enabled || this._altScreen) return;
+    process.stderr.write('\x1b[?1049h\x1b[H\x1b[2J');
+    this._altScreen = true;
+    this._lines = 0;
   }
 
   setSlotLabel(slot, label) {
     if (slot < 0 || slot >= this.slots) return;
     this.rows[slot].matchLabel = String(label || '');
+  }
+
+  setScoreboard(text) {
+    const raw = String(text || '');
+    this.scoreboardLines = raw.split('\n');
+    while (this.scoreboardLines.length && !this.scoreboardLines[this.scoreboardLines.length - 1]) {
+      this.scoreboardLines.pop();
+    }
+    this.render(true);
   }
 
   start(slot, gameIdx, maxPly, matchLabel = '') {
@@ -100,6 +113,15 @@ class ProgressBoard {
     this.render();
   }
 
+  reconnect(slot, attempt) {
+    if (slot < 0 || slot >= this.slots) return;
+    const r = this.rows[slot];
+    r.phase = 'reconnect';
+    r.side = attempt > 0 ? 'try ' + attempt : '';
+    r.thinkPct = 0;
+    this.render(true);
+  }
+
   finish(slot, { plies, label }) {
     if (slot < 0 || slot >= this.slots) return;
     const r = this.rows[slot];
@@ -129,13 +151,7 @@ class ProgressBoard {
   }
 
   note(msg) {
-    const text = String(msg).endsWith('\n') ? String(msg) : `${msg}\n`;
-    if (!this.enabled) {
-      process.stderr.write(text);
-      return;
-    }
-    this._erase();
-    process.stderr.write(text);
+    this._flash = String(msg).split('\n')[0];
     this.render(true);
   }
 
@@ -143,6 +159,12 @@ class ProgressBoard {
     if (this._timer) {
       clearInterval(this._timer);
       this._timer = null;
+    }
+    if (this._altScreen) {
+      process.stderr.write('\x1b[?1049l');
+      this._altScreen = false;
+      this._lines = 0;
+      return;
     }
     if (this.enabled && this._lines > 0) {
       this._erase();
@@ -193,30 +215,35 @@ class ProgressBoard {
 
   _label(r) {
     const tag = r.matchLabel
-      ? `${C.bold}${r.matchLabel.slice(0, 24)}${C.reset} `
+      ? C.bold + r.matchLabel.slice(0, 24) + C.reset + ' '
       : '';
+    if (r.phase === 'reconnect') {
+      return tag + 'reconnect' + (r.side ? ' ' + r.side : '');
+    }
     if (r.done) {
-      return `${tag}${C.green}ok${C.reset} ${r.result}  ply ${r.ply}`;
+      return tag + C.green + 'ok' + C.reset + ' ' + r.result + '  ply ' + r.ply;
     }
     if (!r.active) {
-      return `${tag}${C.dim}idle${C.reset}`;
+      return tag + C.dim + 'idle' + C.reset;
     }
-    const side = r.side ? ` ${r.side}` : '';
+    const side = r.side ? ' ' + r.side : '';
     if (r.phase === 'think') {
       const elapsed = (Date.now() - r.thinkT0) / 1000;
       const over = elapsed > r.thinkBudget
-        ? ` +${Math.round(elapsed - r.thinkBudget)}s`
+        ? ' +' + Math.round(elapsed - r.thinkBudget) + 's'
         : '';
-      return `${tag}${C.yellow}>>${C.reset} ply ${r.ply}/${r.maxPly}${side}${over}`;
+      return tag + C.yellow + '>>' + C.reset + ' ply ' + r.ply + '/' + r.maxPly + side + over;
     }
-    return `${tag}ply ${r.ply}/${r.maxPly}${side}`;
+    return tag + 'ply ' + r.ply + '/' + r.maxPly + side;
   }
 
   _erase() {
     if (!this.enabled || this._lines <= 0) return;
-    // Move cursor up N lines then erase from cursor to end of screen.
-    // \x1b[0J avoids writing any newlines, preventing Windows console from scrolling/expanding.
-    process.stderr.write(`\x1b[${this._lines}A\x1b[0J`);
+    if (this._altScreen) {
+      process.stderr.write('\x1b[H\x1b[2J');
+      return;
+    }
+    process.stderr.write('\x1b[' + this._lines + 'A\x1b[0J');
   }
 
   render(force = false) {
@@ -231,12 +258,23 @@ class ProgressBoard {
 
     const active = this.rows.filter((r) => r.active).length;
     const done = this.rows.filter((r) => r.done).length;
-    const lines = [
-      `${C.gray}${'─'.repeat(72)}${C.reset}`,
-      `${C.bold}${this.title}${C.reset}  ${C.dim}${active} active / ${done} done${C.reset}`,
-    ];
+    const titleSuffix = this.continuous
+      ? active + ' active'
+      : active + ' active / ' + done + ' done';
+    const lines = [];
+    if (this._flash) {
+      lines.push(C.yellow + this._flash + C.reset);
+      lines.push('');
+      this._flash = '';
+    }
+    if (this.scoreboardLines.length) {
+      lines.push(...this.scoreboardLines);
+      lines.push('');
+    }
+    lines.push(C.gray + '\u2500'.repeat(72) + C.reset);
+    lines.push(C.bold + this.title + C.reset + '  ' + C.dim + titleSuffix + C.reset);
     for (const r of this.rows) {
-      lines.push(` ${bar(this._pct(r))} ${this._label(r)}`);
+      lines.push(' ' + bar(this._pct(r)) + ' ' + this._label(r));
     }
 
     const snapshot = lines.join('\n');
@@ -244,7 +282,7 @@ class ProgressBoard {
     this._lastSnapshot = snapshot;
 
     this._erase();
-    process.stderr.write(`${snapshot}\n`);
+    process.stderr.write(snapshot + '\n');
     this._lines = lines.length;
   }
 }

@@ -2,7 +2,12 @@
  * WebSocket client for quoridor-ai.com engines (scraped/reconstructed from
  * https://quoridor-ai.netlify.app bundle, class mT).
  *
- * The AI itself runs server-side — this is only the protocol bridge.
+ * The AI runs server-side — this is only the protocol bridge.
+ *
+ * IMPORTANT: Ka/Ishtar are not game opponents on the wire. They search whatever
+ * board state you last set with makemove/setposition. bestmove does NOT commit
+ * that move on the server — callers must makemove every ply (both sides).
+ * See site/extracted/ENGINE_PROTOCOL.md § "Not a game server".
  */
 
 const Direction = { Up: 'up', Down: 'down', Left: 'left', Right: 'right' };
@@ -195,6 +200,8 @@ class QuoridorEngineClient {
       if (this.ws === ws) {
         this.setStatus('error');
         this.ws = null;
+        this.outstandingSearches = 0;
+        this.isPondering = false;
         this.onError?.(new Error('WebSocket closed'));
       }
     });

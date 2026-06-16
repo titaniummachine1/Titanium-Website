@@ -47,9 +47,14 @@ function calibrationMaxSec(opp, mode) {
   return FALLBACK[opp]?.[mode] ?? 10;
 }
 
+function remoteConnectTimeoutSec() {
+  return 15;
+}
+
 function remoteMoveTimeoutSec(opp, mode) {
   const maxSec = calibrationMaxSec(opp, mode);
-  return Math.min(300, Math.max(45, maxSec * 2 + 20));
+  // Search-only budget (connect uses remoteConnectTimeoutSec). No 45s floor.
+  return Math.min(300, Math.max(maxSec + 15, maxSec * 2 + 10));
 }
 
 function fairBudgetSec(opp, mode, gameMaxSec = 0) {
@@ -104,6 +109,7 @@ module.exports = {
   bootstrapSec,
   calibrationMaxSec,
   fairBudgetSec,
+  remoteConnectTimeoutSec,
   remoteMoveTimeoutSec,
   recordThink,
   TIMING_PATH,

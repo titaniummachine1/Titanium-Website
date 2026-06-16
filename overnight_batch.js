@@ -13,10 +13,18 @@ const { fork } = require('child_process');
 const { ProgressBoard } = require('./progress_bars');
 const { preload: preloadRemoteTiming } = require('./remote_timing');
 const selfMatch = require('./self_match');
+const { isCompleteGame } = require('./game_validate');
 const { upsertGame, upsertMatchup, ensurePoolCoordinator, claimPairing, releaseRemoteSlot, fetchScoreboard } = require('./coordinator_client');
 
 const BIN = path.resolve(__dirname, '../engine/target/release/titanium.exe');
 const REMOTE_WORKER = path.join(__dirname, 'remote_game_worker.js');
+
+let _activeProgress = null;
+
+process.on('SIGINT', () => {
+  _activeProgress?.dispose();
+  process.exit(130);
+});
 
 function shortLabel(p) {
   if (p.kind === 'remote') {
@@ -60,6 +68,9 @@ function runRemoteIsolated(p, slot, progress) {
         case 'think':
           progress.thinking(msg.slot, msg.side, msg.budgetSec);
           break;
+        case 'reconnect':
+          progress.reconnect(msg.slot, msg.attempt);
+          break;
         case 'finish':
           progress.finish(msg.slot, { plies: msg.plies, label: msg.label || msg.result || 'done' });
           break;
@@ -76,6 +87,7 @@ function runRemoteIsolated(p, slot, progress) {
             plies: msg.plies,
             ourW: msg.ourW,
             oppW: msg.oppW,
+            dbId: msg.dbId ?? null,
           });
           break;
         case 'error':
@@ -117,7 +129,6 @@ async function runLocal(p, slot, gl, progress) {
     maxPly: 300,
     bin: BIN,
     noPonder: false,
-    saveGames: p.games_file,
     sourceTag: p.source_tag,
   };
 
@@ -128,15 +139,19 @@ async function runLocal(p, slot, gl, progress) {
   let bW = prior.bW;
 
   const r = await selfMatch.playGame(opts, gl, 0, true, slot, progress);
+  const gameResult = { winner: r.winner, plies: r.plies, moves: r.moves, draw: false, aborted: false };
+  if (!isCompleteGame(gameResult)) {
+    return { label, plies: r.plies, aW, bW, skipped: true };
+  }
+
   if (r.aWins) aW += 1;
   else bW += 1;
 
   const result = r.winner === 1 ? 'W' : 'B';
-  await upsertGame({
+  const gameResp = await upsertGame({
     moves: r.moves,
     result,
     tag: opts.sourceTag,
-    gamesFile: opts.saveGames,
   });
   await upsertMatchup({
     engineA: opts.engineA,
@@ -145,10 +160,9 @@ async function runLocal(p, slot, gl, progress) {
     bWins: bW,
     tcA: selfMatch.tcLabel(timeS),
     tcB: selfMatch.tcLabel(timeS),
-    gamesFile: opts.saveGames,
     source: opts.sourceTag,
   });
-  return { label, plies: r.plies, aW, bW };
+  return { label, plies: r.plies, aW, bW, dbId: gameResp?.game_id ?? null };
 }
 
 async function runOne(p, slot, gl, progress) {
@@ -182,6 +196,7 @@ async function slotLoop(slot, gl, progress, onGameDone) {
       continue;
     }
     progress.setSlotLabel(slot, shortLabel(pairing));
+    progress.idle(slot);
     progress.start(slot, 0, 300, shortLabel(pairing));
     try {
       const r = await runOne(pairing, slot, gl, progress);
@@ -197,6 +212,14 @@ async function slotLoop(slot, gl, progress, onGameDone) {
   }
 }
 
+async function refreshScoreboard(progress) {
+  try {
+    progress.setScoreboard(await fetchScoreboard());
+  } catch {
+    /* coordinator may be briefly busy */
+  }
+}
+
 async function runPool(slots) {
   if (!fs.existsSync(BIN)) {
     throw new Error(`engine binary missing: ${BIN} — run: cargo build --release -p titanium`);
@@ -209,27 +232,25 @@ async function runPool(slots) {
   const progress = new ProgressBoard({
     slots,
     title: 'overnight pool',
+    continuous: true,
   });
+  _activeProgress = progress;
 
-  progress.note(
-    `${slots} slots | ${poolStatus.pairings} pairings | ${BIN}`,
-  );
-  progress.note('each game = 2× titanium.exe session (ponder on) + optional Ka worker');
+  await refreshScoreboard(progress);
 
-  let sinceScoreboard = 0;
   const onGameDone = async (r) => {
-    sinceScoreboard += 1;
-    if (sinceScoreboard >= slots) {
-      sinceScoreboard = 0;
-      try {
-        const text = await fetchScoreboard();
-        if (text) progress.note(text);
-      } catch {}
+    await refreshScoreboard(progress);
+    if (r.skipped) {
+      process.stdout.write(`POOL_SKIP plies=${r.plies}\n`);
+      return;
     }
-    process.stderr.write(`POOL_DONE ${r.label} plies=${r.plies}\n`);
+    const dbPart = r.dbId != null ? ` db_id=${r.dbId}` : '';
+    process.stdout.write(`POOL_DONE${dbPart} plies=${r.plies}\n`);
   };
 
   await Promise.all(Array.from({ length: slots }, (_, slot) => slotLoop(slot, gl, progress, onGameDone)));
+  progress.dispose();
+  _activeProgress = null;
 }
 
 async function ensureCoordinator() {

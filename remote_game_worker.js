@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
  * Isolated Ka/Ishtar game worker — own process so WebSocket I/O cannot block local games.
+ * Ka is stateless search: parent harness (ishtar_match.js) makemoves every ply + replays on reconnect.
  * Progress events sent to parent via IPC.
  */
 'use strict';
 
 const path = require('path');
 const remoteMatch = require('./ishtar_match');
+const { isCompleteGame } = require('./game_validate');
 const { releaseRemoteSlot } = require('./coordinator_client');
 
 const BIN = path.resolve(__dirname, '../engine/target/release/titanium.exe');
@@ -25,6 +27,9 @@ function ipcProgress(slot) {
     },
     thinking(s, side, budgetSec) {
       send({ type: 'think', slot: s, side, budgetSec });
+    },
+    reconnect(s, attempt) {
+      send({ type: 'reconnect', slot: s, attempt });
     },
     finish(s, data) {
       send({ type: 'finish', slot: s, ...data });
@@ -55,13 +60,12 @@ async function main() {
     ourTime: 10,
     maxPly: 300,
     bin: BIN,
-    saveGames: p.games_file,
+    saveGames: null,
     sourceTag: p.source_tag,
   };
 
   const gl = await import('./web/src/lib/gameLogic.js');
   const progress = ipcProgress(slot);
-  progress.start(slot, 0, opts.maxPly, label);
 
   const prior = await remoteMatch.loadPriorMatchup(
     opts.engine, opts.opp, remoteMatch.ourTcLabel(opts), opts.oppTime,
@@ -70,6 +74,13 @@ async function main() {
   let oppW = prior.oppW;
 
   const r = await remoteMatch.playGame(opts, gl, 0, true, slot, progress);
+
+  if (!isCompleteGame(r)) {
+    progress.finish(slot, { plies: r.plies, label: 'incomplete skip' });
+    await releaseRemoteSlot(workerGameId).catch(() => {});
+    process.send?.({ type: 'done', slot, label, plies: r.plies, ourW, oppW, skipped: true });
+    return;
+  }
 
   if (r.draw) {
     progress.finish(slot, { plies: r.plies, label: 'draw skipped' });
@@ -81,7 +92,9 @@ async function main() {
   else oppW += 1;
 
   const result = r.winner === 1 ? 'W' : 'B';
-  await remoteMatch.persistGame(r.moves, result, opts.sourceTag, opts.saveGames, true, workerGameId);
+  const gameResp = await remoteMatch.persistGame(
+    r.moves, result, opts.sourceTag, null, true, workerGameId,
+  );
   await remoteMatch.updateMatchup(opts, ourW, oppW, () => {});
 
   process.send?.({
@@ -91,6 +104,7 @@ async function main() {
     plies: r.plies,
     ourW,
     oppW,
+    dbId: gameResp?.game_id ?? null,
   });
   process.exit(0);
 }
