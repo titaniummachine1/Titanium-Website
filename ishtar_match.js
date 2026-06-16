@@ -200,11 +200,9 @@ class OurEngine {
 }
 
 // ── Remote engine (Ka / Ishtar) ───────────────────────────────────────────────
-// Ka keeps state persistent on ONE connection. After each `go` + `bestmove`,
-// state is NOT auto-advanced — we must send `makemove <Ka_move>` explicitly.
-// uci_engine.py: makemove applies moves sequentially to self.state.
-
 const CONNECT_TIMEOUT_SEC = 30;
+const MAX_MOVE_RETRIES = 2;   // retries after a connection drop
+const RETRY_DELAY_MS = 1500;  // pause before each retry
 
 class RemoteEngine {
   constructor(opp, timeMode) {
@@ -213,6 +211,7 @@ class RemoteEngine {
     this._pending = null;
     this._error = null;
     this._connected = false;
+    this._appliedActions = [];  // full game history for reconnect replay
     this._makeClient();
   }
 
@@ -250,25 +249,67 @@ class RemoteEngine {
     });
   }
 
-  /** Reconnect if the connection dropped (Ka may close after idle time). */
+  /**
+   * Ensure connection is open.  On reconnect, replays the full move history so
+   * the remote engine is back in sync with the current board position.
+   */
   async _ensureConnected() {
     if (this.client?.ws?.readyState === 1 /* OPEN */) return;
     this._makeClient();
     await this.connect();
+    // Replay every confirmed move so Ka/Ishtar is at the current position.
+    if (this._appliedActions.length > 0) {
+      this.client.makeMoves(this._appliedActions);
+    }
   }
 
-  /** Tell Ka/Ishtar that `mv` was played (advances server state). */
+  /**
+   * Tell Ka/Ishtar that `mv` was played (advances server state).
+   * Retries on connection drop — safe because _ensureConnected replays history
+   * before each attempt, so we never double-send the move.
+   */
   async notifyMove(gl, mv) {
-    await this._ensureConnected();
-    this.client.makeMoves([gl.parseAlgebraic(mv)]);
+    const action = gl.parseAlgebraic(mv);
+    let lastErr;
+    for (let attempt = 0; attempt <= MAX_MOVE_RETRIES; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      try {
+        // _ensureConnected replays _appliedActions (not including `action` yet)
+        await this._ensureConnected();
+        this.client.makeMoves([action]);
+        this._appliedActions.push(action);   // confirmed sent
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr;
   }
 
   /**
    * Ask remote for its move; returns { move, thinkSec }.
-   * The outer timer covers _ensureConnected() too — a hung TCP reconnect
-   * no longer blocks indefinitely.
+   * Retries up to MAX_MOVE_RETRIES times on connection errors — each retry
+   * reconnects and replays history so Ka/Ishtar searches from the right position.
+   * The outer timer inside _bestMoveOnce covers _ensureConnected() too.
    */
   async bestMove(gl, timeoutSec = 120) {
+    let lastErr;
+    for (let attempt = 0; attempt <= MAX_MOVE_RETRIES; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      try {
+        return await this._bestMoveOnce(gl, timeoutSec);
+      } catch (e) {
+        lastErr = e;
+        // Only retry on connection/timeout errors, not on logic errors.
+        const isConnErr = /timeout|closed|failed|error/i.test(e.message);
+        if (!isConnErr || attempt >= MAX_MOVE_RETRIES) break;
+      }
+    }
+    throw lastErr;
+  }
+
+  /** Single attempt: outer timer covers _ensureConnected + go. */
+  _bestMoveOnce(gl, timeoutSec) {
     return new Promise((res, rej) => {
       let settled = false;
       const outerTimer = setTimeout(() => {
