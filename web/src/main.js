@@ -56,9 +56,9 @@ function playersPanelKey(state) {
 }
 
 function sidebarStructureKey(state) {
-  const errors = (state.engineErrors ?? [])
-    .map((message, seat) => (message ? `${seat}:${message}` : ''))
-    .filter(Boolean)
+  const errors = Object.entries(state.engineErrors ?? {})
+    .filter(([, message]) => message)
+    .map(([seat, message]) => `${seat}:${message}`)
     .join('|');
   return JSON.stringify({
     mode: state.uiMode,
