@@ -292,21 +292,6 @@ function thinkPayloadForSeat(state, seatIndex) {
     const ls = state.liveSearch;
     const ply = (state.actions?.length ?? 0) + 1;
     const livePayload = payloadFromLiveSearch(ls, ply);
-    const hasFresh =
-      livePayload.depth ||
-      livePayload.score != null ||
-      livePayload.nodes > 0 ||
-      livePayload.rootWinRate != null ||
-      livePayload.pv;
-    if (!hasFresh && completed) {
-      return {
-        ...payloadFromCompleted(completed),
-        live: true,
-        engine: ls.playerLabel ?? completed.engine,
-        ply,
-        stoppedBy: 'searching',
-      };
-    }
     return {
       ...livePayload,
       engine: ls.playerLabel ?? completed?.engine ?? '?',
@@ -339,11 +324,13 @@ function heroMetric(payload) {
       ? ` · d${payload.depth ?? payload.searchDepth}`
       : '';
 
-  if (payload.live && payload.elapsedMs != null && !payload.depth && payload.nodes <= 0) {
+  if (payload.live && !payload.depth && (payload.nodes ?? 0) <= 0 && !payload.score) {
+    const elapsed =
+      payload.elapsedMs != null ? formatThinkDuration(payload.elapsedMs) : '…';
     return {
-      left: '…',
-      right: formatThinkDuration(payload.elapsedMs),
-      rightLabel: 'elapsed',
+      left: 'searching',
+      right: elapsed,
+      rightLabel: payload.elapsedMs != null ? 'elapsed' : 'time',
       tone: 'even',
       mode: 'searching',
       depthSuffix: '',
@@ -383,6 +370,17 @@ function heroMetric(payload) {
       left: payload.move,
       right: formatThinkDuration(payload.thinkMs),
       rightLabel: 'think time',
+      tone: 'even',
+      mode: 'eval',
+      depthSuffix: depthLabel,
+    };
+  }
+
+  if (!payload.live && payload.move) {
+    return {
+      left: payload.move,
+      right: formatThinkDuration(payload.thinkMs) || '—',
+      rightLabel: payload.thinkMs != null ? 'think time' : 'played',
       tone: 'even',
       mode: 'eval',
       depthSuffix: depthLabel,
@@ -596,10 +594,30 @@ function patchDepthFeed(card, payload) {
     return;
   }
 
-  const show = !usesRollouts(payload) && payload.depthLog?.length > 0;
+  const showDepthLog = !usesRollouts(payload) && payload.depthLog?.length > 0;
+  const showWasmLive =
+    payload.live && isTitaniumAb(payload) && !payload.depthLog?.length;
+  const show = showDepthLog || showWasmLive;
   block.hidden = !show;
   if (!show) {
     delete card.dataset.depthSig;
+    return;
+  }
+
+  if (showWasmLive) {
+    setText(title, 'Search');
+    const elapsed = formatThinkDuration(payload.elapsedMs);
+    const sig = `wasm-live:${elapsed}`;
+    if (card.dataset.depthSig === sig) {
+      return;
+    }
+    card.dataset.depthSig = sig;
+    list.innerHTML = `
+      <li class="think-card__depth-row think-card__depth-row--wasm">
+        <span class="think-card__depth-num">WASM</span>
+        <span class="think-card__depth-score">${escapeHtml(elapsed || '…')}</span>
+        <span class="think-card__depth-pv">no live depth on Pages</span>
+      </li>`;
     return;
   }
 
@@ -694,7 +712,7 @@ function patchThinkCard(card, seatIndex, payload) {
   setText(card.querySelector('[data-field="engine"]'), payload.engine ?? '—');
 
   const playedSlot = card.querySelector('[data-field="played-slot"]');
-  const hasPlayed = Boolean(payload.move);
+  const hasPlayed = Boolean(payload.move) && !payload.live;
   if (playedSlot) {
     playedSlot.classList.toggle('think-card__slot--visible', hasPlayed);
     playedSlot.classList.toggle('think-card__slot--hidden', !hasPlayed);
@@ -753,12 +771,19 @@ function patchThinkCard(card, seatIndex, payload) {
   setText(card.querySelector('[data-field="race-dist"]'), distText);
 
   const pvBlock = card.querySelector('[data-field="pv-block"]');
-  const showPv = Boolean(payload.pv?.trim() && !(payload.live && pvLead));
+  const pvLine =
+    payload.pv?.trim() ||
+    (payload.live && isTitaniumAb(payload) && !payload.pv?.trim()
+      ? payload.elapsedMs != null
+        ? `Searching… ${formatThinkDuration(payload.elapsedMs)}`
+        : 'Searching… (depth stream in dev only)'
+      : '');
+  const showPv = Boolean(pvLine) && !(payload.live && pvHeadline(payload.pv));
   if (pvBlock) {
     pvBlock.hidden = !showPv;
   }
   if (showPv) {
-    setText(card.querySelector('[data-field="pv-text"]'), payload.pv);
+    setText(card.querySelector('[data-field="pv-text"]'), pvLine);
   }
 
   patchRoots(card, payload);
