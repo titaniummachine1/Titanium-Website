@@ -594,30 +594,10 @@ function patchDepthFeed(card, payload) {
     return;
   }
 
-  const showDepthLog = !usesRollouts(payload) && payload.depthLog?.length > 0;
-  const showWasmLive =
-    payload.live && isTitaniumAb(payload) && !payload.depthLog?.length;
-  const show = showDepthLog || showWasmLive;
+  const show = !usesRollouts(payload) && payload.depthLog?.length > 0;
   block.hidden = !show;
   if (!show) {
     delete card.dataset.depthSig;
-    return;
-  }
-
-  if (showWasmLive) {
-    setText(title, 'Search');
-    const elapsed = formatThinkDuration(payload.elapsedMs);
-    const sig = `wasm-live:${elapsed}`;
-    if (card.dataset.depthSig === sig) {
-      return;
-    }
-    card.dataset.depthSig = sig;
-    list.innerHTML = `
-      <li class="think-card__depth-row think-card__depth-row--wasm">
-        <span class="think-card__depth-num">WASM</span>
-        <span class="think-card__depth-score">${escapeHtml(elapsed || '…')}</span>
-        <span class="think-card__depth-pv">no live depth on Pages</span>
-      </li>`;
     return;
   }
 
@@ -771,19 +751,12 @@ function patchThinkCard(card, seatIndex, payload) {
   setText(card.querySelector('[data-field="race-dist"]'), distText);
 
   const pvBlock = card.querySelector('[data-field="pv-block"]');
-  const pvLine =
-    payload.pv?.trim() ||
-    (payload.live && isTitaniumAb(payload) && !payload.pv?.trim()
-      ? payload.elapsedMs != null
-        ? `Searching… ${formatThinkDuration(payload.elapsedMs)}`
-        : 'Searching… (depth stream in dev only)'
-      : '');
-  const showPv = Boolean(pvLine) && !(payload.live && pvHeadline(payload.pv));
+  const showPv = Boolean(payload.pv?.trim() && !(payload.live && pvLead));
   if (pvBlock) {
     pvBlock.hidden = !showPv;
   }
   if (showPv) {
-    setText(card.querySelector('[data-field="pv-text"]'), pvLine);
+    setText(card.querySelector('[data-field="pv-text"]'), payload.pv);
   }
 
   patchRoots(card, payload);

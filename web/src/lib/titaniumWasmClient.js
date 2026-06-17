@@ -31,15 +31,68 @@ export class TitaniumWasmEngineClient {
         pending.onError?.(new Error(data.message ?? 'WASM worker error'));
         return;
       }
+      if (data.type === 'info') {
+        const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15';
+        let depthLog = data.depthLog;
+        if (
+          (!depthLog || depthLog.length === 0) &&
+          data.searchDepth != null &&
+          data.rootScore != null
+        ) {
+          depthLog = [
+            {
+              depth: data.searchDepth,
+              score: data.rootScore,
+              nodes: data.nodes ?? 0,
+              pv: data.pv ?? '',
+            },
+          ];
+        }
+        pending.finalMeta = {
+          ...(pending.finalMeta ?? {}),
+          ...data,
+          stoppedBy,
+          depthLog: depthLog ?? pending.finalMeta?.depthLog,
+          nodes: data.nodes ?? pending.finalMeta?.nodes,
+          searchDepth: data.searchDepth ?? pending.finalMeta?.searchDepth,
+          rootScore: data.rootScore ?? pending.finalMeta?.rootScore,
+          whiteDist: data.whiteDist ?? pending.finalMeta?.whiteDist,
+          blackDist: data.blackDist ?? pending.finalMeta?.blackDist,
+        };
+        const meta = pending.finalMeta;
+        pending.onInfo?.({
+          thinking: true,
+          mode: stoppedBy,
+          stoppedBy,
+          nodes: meta.nodes,
+          searchDepth: meta.searchDepth,
+          depthLog: meta.depthLog,
+          whiteDist: meta.whiteDist,
+          blackDist: meta.blackDist,
+          rootScore: meta.rootScore,
+          elapsedMs: data.elapsedMs ?? meta.elapsedMs,
+          progress:
+            meta.searchDepth && pending.timeMs
+              ? Math.min(0.99, (data.elapsedMs ?? 0) / pending.timeMs)
+              : undefined,
+        });
+        return;
+      }
       if (data.type === 'bestmove') {
         const elapsed = performance.now() - pending.started;
+        const meta = pending.finalMeta ?? {};
         this.setStatus('idle');
         pending.onInfo?.({
           time: elapsed,
-          elapsedMs: Math.round(elapsed),
-          nodes: data.nodes ?? 0,
-          stoppedBy: data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
-          mode: data.mode ?? this.config?.engineMode ?? 'titanium-v15',
+          elapsedMs: meta.elapsedMs ?? Math.round(elapsed),
+          nodes: meta.nodes ?? data.nodes ?? 0,
+          stoppedBy: meta.stoppedBy ?? data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
+          mode: meta.mode ?? data.mode ?? this.config?.engineMode ?? 'titanium-v15',
+          searchDepth: meta.searchDepth,
+          depthLog: meta.depthLog,
+          whiteDist: meta.whiteDist,
+          blackDist: meta.blackDist,
+          rootScore: meta.rootScore,
           simulations: 0,
           progress: 1,
         });
@@ -136,6 +189,8 @@ export class TitaniumWasmEngineClient {
 
     this.pendingRequest = {
       started,
+      timeMs,
+      finalMeta: {},
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => {
         this.pendingRequest = null;

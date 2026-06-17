@@ -25,6 +25,14 @@ async function ensureEngine(engineMode = 'titanium-v15') {
   return engines.get(engineMode);
 }
 
+function parseProgressJson(jsonStr) {
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
 self.onmessage = async (event) => {
   const { algebraicMoves, timeMs, maxNodes, isFreshGame, engineMode = 'titanium-v15' } =
     event.data ?? {};
@@ -39,7 +47,21 @@ self.onmessage = async (event) => {
     } else if (isFreshGame) {
       wasm.reset();
     }
-    const best = wasm.go(Math.max(1, timeMs ?? 10_000), maxNodes ?? 0);
+
+    const onProgress = (jsonStr) => {
+      const data = parseProgressJson(jsonStr);
+      if (!data) {
+        return;
+      }
+      self.postMessage({
+        type: 'info',
+        thinking: true,
+        ...data,
+        mode: data.engine ?? data.stoppedBy ?? engineMode,
+      });
+    };
+
+    const best = wasm.go(Math.max(1, timeMs ?? 10_000), maxNodes ?? 0, onProgress);
     if (!best || best === '(none)') {
       self.postMessage({ type: 'error', message: 'WASM engine returned no legal move' });
       return;
@@ -49,7 +71,6 @@ self.onmessage = async (event) => {
       algebraicMove: best,
       stoppedBy: engineMode,
       mode: engineMode,
-      nodes: 0,
     });
   } catch (err) {
     self.postMessage({

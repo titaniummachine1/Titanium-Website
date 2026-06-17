@@ -262,7 +262,6 @@ export class AppController {
     /** Skip onSessionChange → onChange while applyEngineMove is mid-apply (snapshot not ready). */
     this._suppressSessionNotify = false;
     this._activeSearchSeq = 0;
-    this._liveSearchTimer = null;
 
     this.session.subscribe(() => this.onSessionChange());
     this.migrateLegacyPlayerTypes();
@@ -423,28 +422,6 @@ export class AppController {
     return this.settings.players[1 - humanSeat] !== PlayerType.Human;
   }
 
-  _stopLiveSearchTimer() {
-    if (this._liveSearchTimer != null) {
-      clearInterval(this._liveSearchTimer);
-      this._liveSearchTimer = null;
-    }
-  }
-
-  _startLiveSearchTimer() {
-    this._stopLiveSearchTimer();
-    this._liveSearchTimer = setInterval(() => {
-      if (!this.aiThinking || this._thinkStartedAt == null || !this.liveSearch) {
-        return;
-      }
-      const elapsedMs = Math.round(performance.now() - this._thinkStartedAt);
-      if (this.liveSearch.elapsedMs === elapsedMs) {
-        return;
-      }
-      this.liveSearch = { ...this.liveSearch, elapsedMs };
-      (this.onLiveUpdate ?? this.onChange)?.();
-    }, 200);
-  }
-
   _cancelActiveAiSearch() {
     const seat = this.thinkingSeatIndex;
     if (seat != null) {
@@ -466,7 +443,6 @@ export class AppController {
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
-    this._stopLiveSearchTimer();
     this._moveRequestSeq += 1;
     this._activeSearchSeq = 0;
   }
@@ -1014,7 +990,6 @@ export class AppController {
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
-    this._stopLiveSearchTimer();
     this.destroyAllEngines();
     this.maybeRandomizeTitaniumAdversarySeats();
     this.engineErrors = {};
@@ -1818,7 +1793,6 @@ export class AppController {
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
-    this._stopLiveSearchTimer();
     this._thinkStartedAt = null;
 
     const si = this.searchInfoBySeat[failSeat] ?? {};
@@ -1984,7 +1958,6 @@ export class AppController {
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
-    this._stopLiveSearchTimer();
     this.lmrVizLive = null;
 
     this._suppressSessionNotify = true;
@@ -2114,7 +2087,6 @@ export class AppController {
     if (this.settings.showLmrVision && isTitaniumEngine(playerType, this.engineConfigs)) {
       this.scheduleLmrRefresh();
     }
-    this._startLiveSearchTimer();
     this.onChange?.();
 
     const gameGeneration = this._gameGeneration;
