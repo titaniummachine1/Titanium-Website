@@ -35,11 +35,20 @@ const QUORIDOR_V3_ENGINE = {
 
 const TITANIUM_ENGINE = {
   kind: 'titanium',
-  name: 'Titanium αβ + CAT',
+  name: 'Titanium v15 (live NNUE)',
   key: PlayerType.TitaniumMinimax,
-  engineMode: 'minimax',
+  engineMode: 'titanium-v15',
   tooltip:
-    'Iterative-deepening negamax with adaptive LMR and CAT — WASM on the public site, native Rust via `npm run dev` locally',
+    'Production titanium-v15 — grafted O1 movegen + latest trained NNUE. Native via `npm run dev`; WASM on GitHub Pages',
+};
+
+const TITANIUM_FROZEN_ENGINE = {
+  kind: 'titanium',
+  name: 'Titanium v15 (frozen NNUE)',
+  key: PlayerType.TitaniumV15Frozen,
+  engineMode: 'titanium-v15-frozen',
+  tooltip:
+    'Same v15 search — pinned pre-train NNUE blob (no micro-train updates). Compare vs live weights side-by-side',
 };
 
 const ACE_V8_ENGINE = {
@@ -85,6 +94,7 @@ export function getAllEngineConfigs() {
     GORISANSON_ENGINE,
     QUORIDOR_V3_ENGINE,
     TITANIUM_ENGINE,
+    TITANIUM_FROZEN_ENGINE,
     ACE_V8_ENGINE,
     ACE_V10_ENGINE,
     ACE_V13_ENGINE,
@@ -119,6 +129,12 @@ export function getPlayerOptionGroups() {
           label: TITANIUM_ENGINE.name,
           disabled: false,
           tooltip: TITANIUM_ENGINE.tooltip,
+        },
+        {
+          value: PlayerType.TitaniumV15Frozen,
+          label: TITANIUM_FROZEN_ENGINE.name,
+          disabled: false,
+          tooltip: TITANIUM_FROZEN_ENGINE.tooltip,
         },
         {
           value: PlayerType.AceV8,
@@ -215,6 +231,8 @@ const SEARCH_STOP_LABELS = {
   'ace-v13-js': 'ACE v13 JS',
   'ace-v13': 'ACE v13 Rust',
   'ace-v13-ti': 'ACE v13 MoveGen+',
+  'titanium-v15': 'Titanium v15 live',
+  'titanium-v15-frozen': 'Titanium v15 frozen',
   mcts: 'MCTS',
   hybrid: 'hybrid',
   race: 'win path',
@@ -265,6 +283,10 @@ function buildSearchDepthHeader(header, { live }) {
     header.mode === 'ace-v13-js' ||
     header.mode === 'ace-v13' ||
     header.mode === 'ace-v13-ti' ||
+    header.stoppedBy === 'titanium-v15' ||
+    header.mode === 'titanium-v15' ||
+    header.stoppedBy === 'titanium-v15-frozen' ||
+    header.mode === 'titanium-v15-frozen' ||
     header.playerLabel?.includes('Titanium') ||
     header.playerLabel?.includes('Quoridor v3') ||
     header.playerLabel?.includes('ACE v8') ||

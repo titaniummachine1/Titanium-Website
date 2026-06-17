@@ -1,26 +1,35 @@
 /**
- * Titanium negamax in a Web Worker — Rust engine compiled to WebAssembly.
+ * Titanium v15 in a Web Worker — Rust engine compiled to WebAssembly.
+ * Supports live NNUE (`titanium-v15`) and frozen baseline (`titanium-v15-frozen`).
  */
 
 import init, { WasmEngine } from '../wasm/titanium/titanium.js';
 
-let engine = null;
 let initPromise = null;
+/** @type {Map<string, import('../wasm/titanium/titanium.js').WasmEngine>} */
+const engines = new Map();
 
-async function ensureEngine() {
+async function ensureInit() {
   if (!initPromise) {
-    initPromise = init().then(() => {
-      engine = new WasmEngine();
-    });
+    initPromise = init();
   }
   await initPromise;
-  return engine;
+}
+
+async function ensureEngine(engineMode = 'titanium-v15') {
+  await ensureInit();
+  if (!engines.has(engineMode)) {
+    const frozen = engineMode === 'titanium-v15-frozen';
+    engines.set(engineMode, new WasmEngine(frozen));
+  }
+  return engines.get(engineMode);
 }
 
 self.onmessage = async (event) => {
-  const { algebraicMoves, timeMs, maxNodes, isFreshGame } = event.data ?? {};
+  const { algebraicMoves, timeMs, maxNodes, isFreshGame, engineMode = 'titanium-v15' } =
+    event.data ?? {};
   try {
-    const wasm = await ensureEngine();
+    const wasm = await ensureEngine(engineMode);
     if (isFreshGame) {
       wasm.reset();
     }
@@ -38,8 +47,8 @@ self.onmessage = async (event) => {
     self.postMessage({
       type: 'bestmove',
       algebraicMove: best,
-      stoppedBy: 'minimax',
-      mode: 'minimax',
+      stoppedBy: engineMode,
+      mode: engineMode,
       nodes: 0,
     });
   } catch (err) {

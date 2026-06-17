@@ -173,15 +173,42 @@ class QuoridorEngineClient {
     this.sendBuffer = [];
     this.outstandingSearches = 0;
     this.isPondering = false;
+    this._lastActivityMs = 0;
     this.onInfo = null;
     this.onBestMove = null;
     this.onStatus = null;
     this.onError = null;
   }
 
+  _touchActivity() {
+    this._lastActivityMs = Date.now();
+  }
+
+  lastActivityMs() {
+    return this._lastActivityMs;
+  }
+
+  isConnectionStale(maxIdleMs = 45_000) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return true;
+    }
+    if (!this._lastActivityMs) {
+      return false;
+    }
+    return Date.now() - this._lastActivityMs > maxIdleMs;
+  }
+
   connect() {
-    if (this.ws) {
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return;
+    }
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        /* ignore */
+      }
+      this.ws = null;
     }
 
     this.setStatus('connecting');
@@ -219,6 +246,7 @@ class QuoridorEngineClient {
   send(command) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(command);
+      this._touchActivity();
       return;
     }
 
@@ -283,6 +311,7 @@ class QuoridorEngineClient {
   }
 
   onOpen() {
+    this._touchActivity();
     this.ws.send(JSON.stringify({ token: 'rbt_token_*', version: '0.0.0' }));
     this.sendStaticSettings();
     this.sendBuffer.forEach((command) => this.send(command));
@@ -291,6 +320,7 @@ class QuoridorEngineClient {
   }
 
   onMessage(rawMessage) {
+    this._touchActivity();
     this.onRawMessage?.(rawMessage);
 
     if (/log Error/i.test(rawMessage) && !/log Error: WARNING:tensorflow/i.test(rawMessage)) {

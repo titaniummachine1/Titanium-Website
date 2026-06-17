@@ -47,18 +47,21 @@
  */
 
 'use strict';
-const { spawn } = require('child_process');
+const fs = require('fs');
+const { spawn, spawnSync } = require('child_process');
 const readline   = require('readline');
 const path       = require('path');
 const { ProgressBoard, MAX_SLOTS } = require('./progress_bars');
 
 // ── CLI parsing ───────────────────────────────────────────────────────────────
 
-const MAX_CONCURRENCY = 4;  // 2 engine processes per game (A + B ponder freely)
+const MAX_CONCURRENCY = 8;  // 2 engine processes per game (A + B ponder freely)
 
 /** Overnight ladder engines only — bare "titanium" is legacy MCTS, not v15. */
 const ALLOWED_ENGINES = new Set([
   'titanium-v15',
+  'titanium-v15-frozen',
+  'ace-v13-grafted', // historical partial-iter golden build (abe9ba5 worktree)
   'ace-v13-ti-pure',
   'ace-v13',
   'ace-v13-pure',
@@ -66,9 +69,9 @@ const ALLOWED_ENGINES = new Set([
 
 function assertEngineFlag(flag, label = 'engine') {
   if (ALLOWED_ENGINES.has(flag)) return;
-  if (flag === 'titanium' || flag.startsWith('titanium-') && flag !== 'titanium-v15') {
+  if (flag === 'titanium' || (flag.startsWith('titanium-') && flag !== 'titanium-v15' && flag !== 'titanium-v15-frozen')) {
     throw new Error(
-      `${label} "${flag}" is legacy or unknown — use titanium-v15 or ace-v13-*`,
+      `${label} "${flag}" is legacy or unknown — use titanium-v15, titanium-v15-frozen, or ace-v13-*`,
     );
   }
   throw new Error(`${label} "${flag}" not allowed in overnight pool`);
@@ -84,6 +87,8 @@ function parseArgs(argv) {
     games:      16,
     concurrency: 1,
     bin:        path.resolve(__dirname, '../engine/target/release/titanium.exe'),
+    binA:       null,
+    binB:       null,
     maxPly:     300,
     dumpGames:  false,
     // Games are appended to this file by default so every match feeds training data.
@@ -91,11 +96,13 @@ function parseArgs(argv) {
     saveGames:  path.resolve(__dirname, '../training/data/self_match_games.games'),
     noPonder:   false,
     sourceTag:  'self-match',
+    standalone: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i], nxt = () => argv[++i];
     if      (a === '--engine-a')     o.engineA    = nxt();
     else if (a === '--engine-b')     o.engineB    = nxt();
+    else if (a === '--standalone' || a === '--no-coordinator') o.standalone = true;
     else if (a === '--time')         { o.timeA = o.timeB = Number(nxt()); }
     else if (a === '--time-a')       o.timeA      = Number(nxt());
     else if (a === '--time-b')       o.timeB      = Number(nxt());
@@ -104,6 +111,8 @@ function parseArgs(argv) {
     else if (a === '--concurrency')  o.concurrency = Number(nxt());
     else if (a === '--max-ply')      o.maxPly     = Number(nxt());
     else if (a === '--bin')          o.bin        = nxt();
+    else if (a === '--bin-a')        o.binA       = nxt();
+    else if (a === '--bin-b')        o.binB       = nxt();
     else if (a === '--dump-games')   o.dumpGames  = true;
     else if (a === '--save-games')   o.saveGames  = nxt();
     else if (a === '--no-save-games') o.saveGames = null;
@@ -119,6 +128,8 @@ function parseArgs(argv) {
     o.concurrency = MAX_CONCURRENCY;
   }
   if (o.concurrency < 1) o.concurrency = 1;
+  o.binA = o.binA || o.bin;
+  o.binB = o.binB || o.bin;
   return o;
 }
 
@@ -143,6 +154,9 @@ class Engine {
     assertEngineFlag(flag, 'session engine');
     this.flag = flag;
     this.bin = bin;
+    if (!bin || typeof bin !== 'string') {
+      throw new Error(`engine binary path missing for ${flag} — set bin/binA in opts`);
+    }
     this.proc = spawn(bin, ['session', '--engine', flag], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -286,8 +300,8 @@ async function playGame(opts, gl, gameIdx, aIsP1, slot, progress) {
   progress.start(slot, gameIdx, opts.maxPly);
   progress.ply(slot, moves.length, opts.maxPly);
 
-  const engA = new Engine(opts.bin, opts.engineA);
-  const engB = new Engine(opts.bin, opts.engineB);
+  const engA = new Engine(opts.binA || opts.bin, opts.engineA);
+  const engB = new Engine(opts.binB || opts.bin, opts.engineB);
 
   // PONDERING — one continuous search per engine, no ephemeral processes:
   //
@@ -385,8 +399,31 @@ async function playGame(opts, gl, gameIdx, aIsP1, slot, progress) {
 
 const coord = require('./coordinator_client');
 
-async function persistGame(moves, result, sourceTag, gamesFile) {
-  await coord.upsertGame({ moves, result, tag: sourceTag, gamesFile });
+async function persistGame(moves, result, sourceTag, gamesFile, { standalone = false } = {}) {
+  if (standalone) {
+    if (gamesFile) {
+      fs.appendFileSync(gamesFile, `GAME ${moves.join(' ')}\nRESULT ${result}\n`);
+    }
+    try {
+      const py = path.resolve(__dirname, '../training/ingest_self_match_game.py');
+      spawnSync('python', [py, '--moves', moves.join(' '), '--result', result, '--tag', sourceTag || 'self-match'], {
+        cwd: path.resolve(__dirname, '..'),
+        stdio: 'ignore',
+      });
+    } catch {
+      /* DB ingest best-effort */
+    }
+    return;
+  }
+  try {
+    await coord.upsertGame({ moves, result, tag: sourceTag, gamesFile });
+  } catch (e) {
+    if (gamesFile) {
+      fs.appendFileSync(gamesFile, `GAME ${moves.join(' ')}\nRESULT ${result}\n`);
+    } else {
+      throw e;
+    }
+  }
 }
 
 function tcLabel(seconds) {
@@ -394,8 +431,12 @@ function tcLabel(seconds) {
 }
 
 async function loadPriorMatchup(engineA, engineB, tcA, tcB) {
-  const j = await coord.lookupMatchup(engineA, engineB, tcA, tcB);
-  return { aW: j.aW, bW: j.bW };
+  try {
+    const j = await coord.lookupMatchup(engineA, engineB, tcA, tcB);
+    return { aW: j.aW, bW: j.bW };
+  } catch {
+    return { aW: 0, bW: 0 };
+  }
 }
 
 function runningElo(aW, bW) {
@@ -409,6 +450,9 @@ function runningElo(aW, bW) {
 }
 
 async function updateMatchup(opts, aW, bW, logFn) {
+  if (opts.standalone) {
+    return;
+  }
   try {
     const entry = await coord.upsertMatchup({
       engineA: opts.engineA,
@@ -424,8 +468,7 @@ async function updateMatchup(opts, aW, bW, logFn) {
       logFn(`Elo diff (A vs B): ${entry.elo_a_vs_b}`);
     }
   } catch (e) {
-    if (logFn) logFn(`matchup upsert failed: ${e.message}`);
-    throw e;
+    if (logFn) logFn(`matchup upsert skipped (no coordinator): ${e.message}`);
   }
 }
 
@@ -455,7 +498,9 @@ async function main() {
   // Open save-games file for append (creates it if missing).
   if (opts.saveGames) log(`saving games -> ${opts.saveGames}`);
 
-  const prior = await loadPriorMatchup(opts.engineA, opts.engineB, tcLabel(opts.timeA), tcLabel(opts.timeB));
+  const prior = opts.standalone
+    ? { aW: 0, bW: 0 }
+    : await loadPriorMatchup(opts.engineA, opts.engineB, tcLabel(opts.timeA), tcLabel(opts.timeB));
   let aW = prior.aW, bW = prior.bW;
   let sessionAW = 0, sessionBW = 0;
   let done = 0;
@@ -502,6 +547,7 @@ async function main() {
           r.winner === 1 ? 'W' : 'B',
           opts.sourceTag,
           opts.saveGames,
+          { standalone: opts.standalone },
         );
       }
       await updateMatchup(opts, aW, bW, (msg) => log(msg));

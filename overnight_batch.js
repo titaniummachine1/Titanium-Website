@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Run matchups in parallel — single ProgressBoard (4 bars).
+ * Run matchups in parallel — single ProgressBoard (up to 8 bars).
  *
- *   node overnight_batch.js --pool [--slots 4]   continuous pool (default for overnight)
+ *   node overnight_batch.js --pool [--slots 7]   continuous pool (default for overnight)
  *   node overnight_batch.js batch.json           one-shot batch (legacy)
  */
 'use strict';
@@ -26,15 +26,39 @@ process.on('SIGINT', () => {
   process.exit(130);
 });
 
+process.on('SIGTERM', () => {
+  _activeProgress?.dispose();
+  process.exit(143);
+});
+
+function poolLabel(p) {
+  return p.display_label || shortLabel(p);
+}
+
 function shortLabel(p) {
-  if (p.kind === 'remote') {
-    return `${p.engine_a} vs ${p.engine_b}@${p.tc_b}`;
+  const tcA = p.tc_a || '5s';
+  const tcB = p.tc_b || tcA;
+  if (p.kind === 'remote' && p.engine_b === 'ka') {
+    const ka = p.tc_b === 'intuition' ? 'Ka-imm' : `Ka-${p.tc_b}`;
+    return `v15@5s vs ${ka}`;
   }
-  return `${p.engine_a} vs ${p.engine_b}`;
+  if (p.engine_a === p.engine_b && p.engine_a === 'titanium-v15') {
+    return `v15 self@${tcA}`;
+  }
+  if (p.engine_b === 'ace-v13-ti-pure' && tcA === '10s') {
+    return `v15@10s vs ti-pure`;
+  }
+  if (p.engine_b === 'titanium-v15-frozen') {
+    return `v15@${tcA} vs frozen`;
+  }
+  if (p.engine_b === 'ace-v13') {
+    return `v15@5s vs JS-v13`;
+  }
+  return `${p.engine_a} vs ${p.engine_b}@${tcB}`;
 }
 
 function runRemoteIsolated(p, slot, progress) {
-  const label = shortLabel(p);
+  const label = poolLabel(p);
   progress.setSlotLabel(slot, label);
 
   return new Promise((resolve, reject) => {
@@ -88,6 +112,7 @@ function runRemoteIsolated(p, slot, progress) {
             ourW: msg.ourW,
             oppW: msg.oppW,
             dbId: msg.dbId ?? null,
+            skipped: !!msg.skipped,
           });
           break;
         case 'error':
@@ -117,7 +142,7 @@ function runRemoteIsolated(p, slot, progress) {
 
 async function runLocal(p, slot, gl, progress) {
   const timeS = parseFloat(String(p.tc_a).replace(/s$/, '')) || 5;
-  const label = shortLabel(p);
+  const label = poolLabel(p);
   progress.setSlotLabel(slot, label);
 
   const opts = {
@@ -128,6 +153,8 @@ async function runLocal(p, slot, gl, progress) {
     ponderTime: timeS,
     maxPly: 300,
     bin: BIN,
+    binA: BIN,
+    binB: BIN,
     noPonder: false,
     sourceTag: p.source_tag,
   };
@@ -152,6 +179,8 @@ async function runLocal(p, slot, gl, progress) {
     moves: r.moves,
     result,
     tag: opts.sourceTag,
+    releaseRemote: !!p.release_remote,
+    gameId: p.game_id,
   });
   await upsertMatchup({
     engineA: opts.engineA,
@@ -195,16 +224,16 @@ async function slotLoop(slot, gl, progress, onGameDone) {
       await sleep(3000);
       continue;
     }
-    progress.setSlotLabel(slot, shortLabel(pairing));
+    progress.setSlotLabel(slot, poolLabel(pairing));
     progress.idle(slot);
-    progress.start(slot, 0, 300, shortLabel(pairing));
+    progress.start(slot, 0, 300, poolLabel(pairing));
     try {
       const r = await runOne(pairing, slot, gl, progress);
       if (onGameDone) await onGameDone(r);
     } catch (e) {
       const brief = (e.message || String(e)).split('\n')[0];
-      progress.note(`${shortLabel(pairing)}: ${brief}`);
-      if (pairing.release_remote) {
+      progress.note(`${poolLabel(pairing)}: ${brief}`);
+      if (pairing.release_remote || pairing.game_id) {
         await releaseRemoteSlot(pairing.game_id).catch(() => {});
       }
       progress.idle(slot);
@@ -212,17 +241,40 @@ async function slotLoop(slot, gl, progress, onGameDone) {
   }
 }
 
-async function refreshScoreboard(progress) {
+async function refreshScoreboard(progress, { quiet = false } = {}) {
   try {
     progress.setScoreboard(await fetchScoreboard());
-  } catch {
-    /* coordinator may be briefly busy */
+  } catch (e) {
+    if (!quiet) {
+      progress.note(`scoreboard refresh: ${(e.message || e).split('\n')[0]}`);
+    }
   }
 }
+
+const ALERT_FILE = path.resolve(__dirname, '../training/data/supervisor_alert.json');
+
+function pollSupervisorAlerts(progress) {
+  try {
+    if (!fs.existsSync(ALERT_FILE)) return;
+    const raw = fs.readFileSync(ALERT_FILE, 'utf8');
+    const j = JSON.parse(raw);
+    const ts = j.ts || '';
+    if (ts && ts === pollSupervisorAlerts._lastTs) return;
+    pollSupervisorAlerts._lastTs = ts;
+    const lvl = j.level === 'FAIL' ? 'FAIL' : 'WARN';
+    progress.note(`[${lvl}] ${j.msg || ''}`.slice(0, 120));
+  } catch {
+    /* alert file may be mid-write */
+  }
+}
+pollSupervisorAlerts._lastTs = '';
 
 async function runPool(slots) {
   if (!fs.existsSync(BIN)) {
     throw new Error(`engine binary missing: ${BIN} — run: cargo build --release -p titanium`);
+  }
+  if (!fs.existsSync(REMOTE_WORKER)) {
+    throw new Error(`remote worker missing: ${REMOTE_WORKER}`);
   }
 
   const poolStatus = await ensurePoolCoordinator();
@@ -231,12 +283,35 @@ async function runPool(slots) {
   const gl = await import('./web/src/lib/gameLogic.js');
   const progress = new ProgressBoard({
     slots,
-    title: 'overnight pool',
+    title: 'ACTIVE GAMES',
     continuous: true,
   });
   _activeProgress = progress;
+  progress.beginPool();
 
   await refreshScoreboard(progress);
+  pollSupervisorAlerts(progress);
+
+  const scoreboardTimer = setInterval(() => {
+    refreshScoreboard(progress, { quiet: true }).catch(() => {});
+    pollSupervisorAlerts(progress);
+  }, 10_000);
+  let coordinatorMisses = 0;
+  const coordinatorTimer = setInterval(() => {
+    ensurePoolCoordinator()
+      .then(() => {
+        coordinatorMisses = 0;
+      })
+      .catch((e) => {
+        coordinatorMisses += 1;
+        progress.note(`coordinator heartbeat failed ${coordinatorMisses}/3: ${(e.message || e).split('\n')[0]}`);
+        if (coordinatorMisses >= 3) {
+          progress.dispose();
+          process.stderr.write('POOL_FATAL coordinator heartbeat lost; exiting pool so supervisor can clean up\n');
+          process.exit(2);
+        }
+      });
+  }, 15_000);
 
   const onGameDone = async (r) => {
     await refreshScoreboard(progress);
@@ -248,7 +323,12 @@ async function runPool(slots) {
     process.stdout.write(`POOL_DONE${dbPart} plies=${r.plies}\n`);
   };
 
-  await Promise.all(Array.from({ length: slots }, (_, slot) => slotLoop(slot, gl, progress, onGameDone)));
+  try {
+    await Promise.all(Array.from({ length: slots }, (_, slot) => slotLoop(slot, gl, progress, onGameDone)));
+  } finally {
+    clearInterval(scoreboardTimer);
+    clearInterval(coordinatorTimer);
+  }
   progress.dispose();
   _activeProgress = null;
 }
@@ -261,13 +341,13 @@ async function main() {
   const args = process.argv.slice(2);
   if (args[0] === '--pool') {
     const slotsIdx = args.indexOf('--slots');
-    const slots = slotsIdx >= 0 ? parseInt(args[slotsIdx + 1], 10) : 4;
-    return runPool(Number.isFinite(slots) && slots > 0 ? slots : 4);
+    const slots = slotsIdx >= 0 ? parseInt(args[slotsIdx + 1], 10) : 7;
+    return runPool(Number.isFinite(slots) && slots > 0 ? slots : 7);
   }
 
   const configPath = args[0];
   if (!configPath) {
-    process.stderr.write('usage: node site/overnight_batch.js --pool [--slots 4]\n');
+    process.stderr.write('usage: node site/overnight_batch.js --pool [--slots 7]\n');
     process.stderr.write('       node site/overnight_batch.js <batch.json>\n');
     process.exit(1);
   }

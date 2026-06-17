@@ -38,8 +38,8 @@ export class TitaniumWasmEngineClient {
           time: elapsed,
           elapsedMs: Math.round(elapsed),
           nodes: data.nodes ?? 0,
-          stoppedBy: data.stoppedBy ?? 'minimax',
-          mode: data.mode ?? 'minimax',
+          stoppedBy: data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
+          mode: data.mode ?? this.config?.engineMode ?? 'titanium-v15',
           simulations: 0,
           progress: 1,
         });
@@ -128,6 +128,7 @@ export class TitaniumWasmEngineClient {
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = clampVisits(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
+    const engineMode = this.config?.engineMode ?? 'titanium-v15';
 
     this.setStatus('searching');
     const started = performance.now();
@@ -161,6 +162,7 @@ export class TitaniumWasmEngineClient {
       timeMs,
       maxNodes,
       isFreshGame: Boolean(isFreshGame),
+      engineMode,
     });
   }
 

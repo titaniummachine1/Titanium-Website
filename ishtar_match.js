@@ -45,7 +45,7 @@ const path = require('path');
 const fs = require('fs');
 const { ProgressBoard, MAX_SLOTS } = require('./progress_bars');
 const { QuoridorEngineClient, ENGINES } = require('./extracted/engine_client');
-const { fairBudgetSec, recordThink, minThinkSec, remoteMoveTimeoutSec, remoteConnectTimeoutSec } = require('./remote_timing');
+const { fairBudgetSec, fairOurThinkSec, FAIR_OUR_THINK_CAP_SEC, recordThink, minThinkSec, remoteMoveTimeoutSec, remoteConnectTimeoutSec, kaQueueAcquireTimeoutSec } = require('./remote_timing');
 const { isCompleteGame } = require('./game_validate');
 const { normalizeTimeMode, presetDescription } = require('./remote_presets');
 
@@ -209,8 +209,47 @@ class OurEngine {
 // Ka/Ishtar do not "play" a game — they search the position you last sent via
 // makemove. We keep _appliedActions as source of truth and echo every ply to
 // the server (both sides). On WS drop, reconnect + replay full history.
-const MAX_MOVE_RETRIES = 3;
-const RETRY_DELAY_MS = 800;
+const MAX_MOVE_RETRIES = 5;
+const MAX_GAME_REMOTE_RETRIES = 12;
+const RETRY_DELAY_MS = 3000;
+const RETRY_MIN_AFTER_FAIL_MS = 8000;
+/** Reconnect if Ka WS idle longer than this (NAT / server session expiry). */
+const REMOTE_WS_MAX_IDLE_MS = 45_000;
+
+function isRemoteTransient(err) {
+  return /timeout|stall|closed|failed|error|websocket|connect/i.test(String(err?.message || err));
+}
+
+async function withRemoteRetry(remote, progress, slot, opts, moves, label, fn) {
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_GAME_REMOTE_RETRIES; attempt++) {
+    if (attempt > 0) {
+      remote._onRetry(attempt);
+      statusLog(opts, `${label}: reconnect #${attempt} at ply ${moves.length}`);
+      const waitMs = Math.max(RETRY_MIN_AFTER_FAIL_MS, RETRY_DELAY_MS * Math.min(attempt, 6));
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (!isRemoteTransient(e)) throw e;
+      try { remote.client?.destroy(); } catch {}
+      remote._connected = false;
+    }
+  }
+  throw lastErr;
+}
+
+function emptyBoardState() {
+  return {
+    playerToMove: 1,
+    moveNumber: 1,
+    wallsRemaining: [10, 10],
+    playerPositions: [{ column: 'e', row: 2 }, { column: 'e', row: 8 }],
+    wallsByPlayer: [],
+  };
+}
 
 class RemoteEngine {
   constructor(opp, timeMode, progress, slot) {
@@ -222,13 +261,29 @@ class RemoteEngine {
     this._error = null;
     this._connected = false;
     this._appliedActions = [];  // full game history for reconnect replay
+    this._wireActivityMs = Date.now();
     this._makeClient();
+  }
+
+  _touchWireActivity() {
+    this._wireActivityMs = Date.now();
+  }
+
+  _connectionStale(maxIdleMs = REMOTE_WS_MAX_IDLE_MS) {
+    if (this.client?.isConnectionStale?.(maxIdleMs)) {
+      return true;
+    }
+    if (this.client?.ws?.readyState !== 1 /* OPEN */) {
+      return true;
+    }
+    return Date.now() - this._wireActivityMs > maxIdleMs;
   }
 
   _makeClient() {
     if (this.client) this.client.destroy();
     const client = new QuoridorEngineClient(ENGINES[this.opp]);
     client.onBestMove = (action, raw) => {
+      this._touchWireActivity();
       const cb = this._pending; this._pending = null;
       if (cb) cb({ action, raw });
     };
@@ -237,11 +292,31 @@ class RemoteEngine {
       const cb = this._pending; this._pending = null;
       if (cb) cb({ error: e });
     };
+    client.onRawMessage = () => this._touchWireActivity();
     this.client = client;
   }
 
+  async _replayAppliedMoves() {
+    if (this._appliedActions.length > 0) {
+      this.client.makeMoves(this._appliedActions);
+    }
+  }
+
+  /** Fresh WS + full makemove replay — use after queue wait or stale socket. */
+  async refreshConnection(reason = 'refresh') {
+    try { this.client?.destroy(); } catch {}
+    this._connected = false;
+    this._makeClient();
+    await this.connect();
+    await this._replayAppliedMoves();
+    if (process.env.NO_PROGRESS === '1') {
+      const tag = process.env.MATCH_LABEL || `${this.opp}@${this.timeMode}`;
+      process.stderr.write(`[${tag}] Ka WS refresh (${reason}) ply ${this._appliedActions.length}\n`);
+    }
+  }
+
   /** Connect and wait until ready; rejects after connectTimeoutSec if TCP hangs. */
-  connect(connectTimeoutSec = remoteConnectTimeoutSec()) {
+  connect(connectTimeoutSec = remoteConnectTimeoutSec(this.opp, this.timeMode)) {
     return new Promise((res, rej) => {
       let connTimer = setTimeout(() => {
         this.client.onStatus = null;
@@ -250,10 +325,14 @@ class RemoteEngine {
 
       const onStatus = (s) => {
         if (s === 'idle') {
+          this._touchWireActivity();
           clearTimeout(connTimer);
           connTimer = null;
           this._connected = true;
           this.client.onStatus = null;
+          if (this._appliedActions.length === 0) {
+            this.client.setPosition(emptyBoardState());
+          }
           res();
         } else if (s === 'error') {
           clearTimeout(connTimer);
@@ -266,13 +345,28 @@ class RemoteEngine {
     });
   }
 
-  async _ensureConnected(connectTimeoutSec = remoteConnectTimeoutSec()) {
-    if (this.client?.ws?.readyState === 1 /* OPEN */) return;
+  async _ensureConnected(connectTimeoutSec = remoteConnectTimeoutSec(this.opp, this.timeMode), { forceFresh = false } = {}) {
+    const stale = this._connectionStale();
+    if (!forceFresh && !stale && this.client?.ws?.readyState === 1 /* OPEN */) {
+      return;
+    }
+    if (stale || forceFresh) {
+      try { this.client?.destroy(); } catch {}
+      this._connected = false;
+    }
     this._makeClient();
     await this.connect(connectTimeoutSec);
-    if (this._appliedActions.length > 0) {
-      this.client.makeMoves(this._appliedActions);
+    await this._replayAppliedMoves();
+  }
+
+  /** Before Ka `go` — always new socket after queue wait; otherwise refresh if idle. */
+  async prepareForSearch({ afterQueue = false } = {}) {
+    if (afterQueue || this._connectionStale(30_000)) {
+      this._onRetry(afterQueue ? 1 : 0);
+      await this.refreshConnection(afterQueue ? 'post-queue' : 'stale-idle');
+      return;
     }
+    await this._ensureConnected();
   }
 
   _onRetry(attempt) {
@@ -307,7 +401,7 @@ class RemoteEngine {
     throw lastErr;
   }
 
-  async bestMove(gl, searchTimeoutSec = 120) {
+  async bestMove(gl, searchTimeoutSec = 120, onSearchStart = null) {
     let lastErr;
     for (let attempt = 0; attempt <= MAX_MOVE_RETRIES; attempt++) {
       if (attempt > 0) {
@@ -315,10 +409,10 @@ class RemoteEngine {
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       }
       try {
-        return await this._bestMoveOnce(gl, searchTimeoutSec);
+        return await this._bestMoveOnce(gl, searchTimeoutSec, onSearchStart);
       } catch (e) {
         lastErr = e;
-        const isConnErr = /timeout|closed|failed|error|websocket/i.test(String(e.message));
+        const isConnErr = /timeout|stall|closed|failed|error|websocket/i.test(String(e.message));
         if (!isConnErr || attempt >= MAX_MOVE_RETRIES) break;
         try { this.client?.destroy(); } catch {}
         this._connected = false;
@@ -327,22 +421,40 @@ class RemoteEngine {
     throw lastErr;
   }
 
-  /** Connect + replay history, then search (search timer excludes connect). */
-  _bestMoveOnce(gl, searchTimeoutSec) {
+  /** Connect + replay history, then search. Outer timer = connect + search + small slack. */
+  _bestMoveOnce(gl, searchTimeoutSec, onSearchStart = null) {
+    const connectSec = remoteConnectTimeoutSec(this.opp, this.timeMode);
+    const outerSec = connectSec + searchTimeoutSec + 3;
+
     return new Promise((res, rej) => {
       let settled = false;
       let searchTimer = null;
+      let outerTimer = null;
 
       const finish = (fn) => {
         if (settled) return;
         settled = true;
         if (searchTimer) clearTimeout(searchTimer);
+        if (outerTimer) clearTimeout(outerTimer);
+        if (this.client) {
+          this.client.onRawMessage = null;
+        }
         this._pending = null;
         fn();
       };
 
-      this._ensureConnected().then(() => {
+      outerTimer = setTimeout(() => {
+        finish(() => {
+          try { this.client?.abortSearch(); } catch {}
+          try { this.client?.destroy(); } catch {}
+          this._makeClient();
+          rej(new Error(`remote move timeout (${outerSec}s connect+search)`));
+        });
+      }, Math.max(3000, outerSec * 1000));
+
+      this._ensureConnected(connectSec).then(() => {
         if (settled) return;
+        if (onSearchStart) onSearchStart();
         this._error = null;
         const t0 = Date.now();
 
@@ -403,19 +515,21 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
   const matchLabel = opts.matchLabel || process.env.MATCH_LABEL || '';
   progress.start(slot, gameIdx, opts.maxPly, matchLabel);
 
-  await remote.connect();
+  // Lazy connect — first remote op opens WS (avoids idle drop before ply 1).
 
   const moves = [];
   let winner = 0;
   let savedPonderMove = null;
   let predictedKaMove = null;
-  // Fair time: our budget = biggest remote think seen (calibration max + in-game peak).
+  // Fair time: our budget tracks Ka peak but capped (default 15s) — remote display uses full fairBudgetSec.
   let gameMaxRemoteSec = 0;
   let ourThinkSec = opts.fairTime
-    ? fairBudgetSec(opts.opp, opts.oppTime, 0)
+    ? fairOurThinkSec(opts.opp, opts.oppTime, 0)
     : opts.ourTime;
   if (opts.fairTime) {
-    vlog(opts, gameIdx, `fair budget ${ourThinkSec.toFixed(1)}s (calibrated max for ${opts.opp}@${opts.oppTime})`);
+    vlog(opts, gameIdx,
+      `fair budget ${ourThinkSec.toFixed(1)}s (cap ${FAIR_OUR_THINK_CAP_SEC}s for ${opts.opp}@${opts.oppTime})`,
+    );
   }
 
   try {
@@ -444,7 +558,10 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
         if (!mv || mv === '(none)') { winner = ourIsP1 ? 2 : 1; break; }
 
         // Tell remote engine about our move (advances its state).
-        await remote.notifyMove(gl, mv);
+        await withRemoteRetry(
+          remote, progress, slot, opts, moves, 'notify our move',
+          () => remote.notifyMove(gl, mv),
+        );
 
       } else {
         // Remote engine's turn.
@@ -462,15 +579,38 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
           ? fairBudgetSec(opts.opp, opts.oppTime, gameMaxRemoteSec)
           : opts.ourTime;
         const remoteTimeout = remoteMoveTimeoutSec(opts.opp, opts.oppTime);
-        progress.thinking(slot, opts.opp, remoteBudget);
-        const remoteRes = await remote.bestMove(gl, remoteTimeout);
+        statusLog(opts, `${opts.opp}@${opts.oppTime} search (budget ~${remoteBudget.toFixed(0)}s, timeout ${remoteTimeout}s)`);
+
+        const gameId = opts.gameId || process.env.GAME_ID || 'unknown';
+        const runRemoteSearch = async () => {
+          if (opts.opp === 'ka') {
+            progress.thinking(slot, 'ka-queue', 30);
+            const queueTimeout = kaQueueAcquireTimeoutSec(opts.oppTime);
+            await coord.acquireKaSearch(opts.oppTime, gameId, queueTimeout);
+          }
+          await remote.prepareForSearch({ afterQueue: opts.opp === 'ka' });
+          try {
+            return await remote.bestMove(gl, remoteTimeout, () => {
+              progress.thinking(slot, opts.opp, remoteBudget);
+            });
+          } finally {
+            if (opts.opp === 'ka') {
+              await coord.releaseKaSearch(opts.oppTime, gameId).catch(() => {});
+            }
+          }
+        };
+
+        const remoteRes = await withRemoteRetry(
+          remote, progress, slot, opts, moves, `${opts.opp}@${opts.oppTime} search`,
+          runRemoteSearch,
+        );
         mv = remoteRes.move;
         if (remoteRes.thinkSec >= minThinkSec(opts.opp, opts.oppTime)) {
           gameMaxRemoteSec = Math.max(gameMaxRemoteSec, remoteRes.thinkSec);
         }
         recordThink(opts.opp, opts.oppTime, remoteRes.thinkSec);
         ourThinkSec = opts.fairTime
-          ? fairBudgetSec(opts.opp, opts.oppTime, gameMaxRemoteSec)
+          ? fairOurThinkSec(opts.opp, opts.oppTime, gameMaxRemoteSec)
           : opts.ourTime;
         vlog(opts, gameIdx,
           `${opts.opp}@${opts.oppTime} thought ${remoteRes.thinkSec.toFixed(1)}s` +
@@ -489,7 +629,10 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
         }
 
         // Tell remote engine it played mv (advances its state so next go is correct).
-        await remote.notifyMove(gl, mv);
+        await withRemoteRetry(
+          remote, progress, slot, opts, moves, 'notify Ka move',
+          () => remote.notifyMove(gl, mv),
+        );
 
         if (!mv) { winner = ourIsP1 ? 1 : 2; break; }
       }

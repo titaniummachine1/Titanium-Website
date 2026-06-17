@@ -21,6 +21,8 @@ const GENMOVE_URL = '/api/titanium/genmove';
 
 const AB_ENGINE_MODES = new Set([
   'minimax',
+  'titanium-v15',
+  'titanium-v15-frozen',
   'ace',
   'ace-v8-js',
   'ace-v8',
@@ -289,7 +291,10 @@ export class TitaniumEngineClient {
 
     const configured = this.config?.engineMode;
     const engineMode =
-      configured === 'minimax' || isAlphaBetaEngineMode(configured)
+      configured === 'minimax' ||
+      configured === 'titanium-v15' ||
+      configured === 'titanium-v15-frozen' ||
+      isAlphaBetaEngineMode(configured)
         ? configured
         : 'mcts';
 

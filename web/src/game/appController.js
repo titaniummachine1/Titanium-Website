@@ -185,10 +185,11 @@ export class AppController {
     this.engines = new Map();
     this.engineConfigs = getAllEngineConfigs();
 
-    const [aceWhiteAi, aceBlackAi] = defaultAceCompareAiSettings();
+    const v15Live = defaultPlayerAiSettings(PlayerType.TitaniumMinimax, this.engineConfigs);
+    const v15Frozen = defaultPlayerAiSettings(PlayerType.TitaniumV15Frozen, this.engineConfigs);
     this.settings = {
-      players: [PlayerType.AceV13, PlayerType.AceV13],
-      playerAiSettings: [aceWhiteAi, aceBlackAi],
+      players: [PlayerType.TitaniumMinimax, PlayerType.TitaniumV15Frozen],
+      playerAiSettings: [v15Live, v15Frozen],
       playerAiSettingsMemory: [{}, {}],
       rotateBoard: false,
       displayCoordinates: true,
@@ -1213,7 +1214,9 @@ export class AppController {
     }
     if (isTitaniumEngine(playerType, this.engineConfigs)) {
       const backend = useStaticEngineBackend() ? 'wasm' : 'native';
-      return `${playerType}|${backend}|${ai.strengthLevel ?? ''}`;
+      const mode =
+        getEngineConfig(playerType, this.engineConfigs)?.engineMode ?? 'titanium-v15';
+      return `${playerType}|${backend}|${mode}|${ai.strengthLevel ?? ''}`;
     }
     const kind = getEngineConfig(playerType, this.engineConfigs)?.kind ?? playerType;
     return `${playerType}|${kind}`;

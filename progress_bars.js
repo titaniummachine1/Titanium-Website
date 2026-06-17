@@ -1,40 +1,99 @@
 'use strict';
 /**
- * Linux-style progress dock — one bar per concurrent game (up to MAX_SLOTS).
- * Only uses ANSI cursor control on a real TTY (never when piped).
+ * Live pool progress dock — scoreboard colors applied after fixed-width pad
+ * so Windows terminals don't mis-wrap slot bars.
  */
 
 const MAX_SLOTS = 8;
-const BAR_W = 26;
 const MIN_RENDER_MS = 400;
 const TICK_MS = 500;
+const LABEL_W = 24;
+const SCOREBOARD_W = 72;
 
-const C = {"reset":"\u001b[0m","dim":"\u001b[2m","bold":"\u001b[1m","green":"\u001b[32m","cyan":"\u001b[36m","yellow":"\u001b[33m","gray":"\u001b[90m"};
-
-function clamp01(x) {
-  return Math.max(0, Math.min(1, x));
+function termCols(stream) {
+  const s = stream || process.stderr;
+  return Math.max(80, Math.min(160, s.columns || Number(process.env.PROGRESS_COLS) || 120));
 }
 
-function bar(pct, width = BAR_W) {
+function barWidth(cols) {
+  return Math.max(8, Math.min(20, cols - LABEL_W - 36));
+}
+
+const C = {
+  reset: '\u001b[0m',
+  dim: '\u001b[2m',
+  bold: '\u001b[1m',
+  green: '\u001b[32m',
+  red: '\u001b[31m',
+  cyan: '\u001b[36m',
+  yellow: '\u001b[33m',
+  gray: '\u001b[90m',
+};
+
+function clamp01(x) {
+  return Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0));
+}
+
+function bar(pct, width) {
+  const w = Math.max(1, Math.floor(width) || 12);
   const p = clamp01(pct);
-  const n = Math.round(p * width);
-  return C.cyan + '█'.repeat(n) + C.gray + '░'.repeat(width - n) + C.reset;
+  const n = Math.min(w, Math.max(0, Math.round(p * w)));
+  return C.cyan + '\u2588'.repeat(n) + C.gray + '\u2591'.repeat(w - n) + C.reset;
+}
+
+/** Strip ANSI so padding/wrap math matches visible columns. */
+function visible(s) {
+  return String(s).replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+/** Pad/truncate to exact visible width (no ANSI in input). */
+function fitPlain(s, width) {
+  const t = visible(s);
+  if (t.length >= width) return t.slice(0, width);
+  return t + ' '.repeat(width - t.length);
+}
+
+function colorScoreboardLine(plain) {
+  if (!plain.trim()) return plain;
+  let s = plain;
+  if (s.includes('| losing')) {
+    s = s.replace('| losing', '| ' + C.red + 'losing' + C.reset);
+  } else if (s.includes('| winning')) {
+    s = s.replace('| winning', '| ' + C.green + 'winning' + C.reset);
+  }
+  if (s.startsWith('+') || s.startsWith('| QUORIDOR') || s.startsWith('| opponent')) {
+    return C.cyan + s + C.reset;
+  }
+  if (s.startsWith('| TRAIN PLATEAU') || (s.startsWith('| TRAIN') && s.includes('PLATEAU'))) {
+    return C.yellow + s + C.reset;
+  }
+  if (s.startsWith('| v15@10s')) {
+    return C.dim + s + C.reset;
+  }
+  if (s.startsWith('|') && (s.includes('anchor') || s.includes('past-self') || s.includes('js orig'))) {
+    return C.dim + s + C.reset;
+  }
+  if (s.startsWith('|') && s.includes('even')) {
+    return C.dim + s + C.reset;
+  }
+  return s;
 }
 
 class ProgressBoard {
   constructor(opts = {}) {
     this.slots = Math.min(Math.max(1, opts.slots || MAX_SLOTS), MAX_SLOTS);
-    this.title = opts.title || 'games';
+    this.title = opts.title || 'ACTIVE GAMES';
     this.continuous = opts.continuous === true;
     this.scoreboardLines = [];
     this.enabled = process.stderr.isTTY === true && process.env.NO_PROGRESS !== '1';
-    this._lines = 0;
+    this.cols = termCols(process.stderr);
+    this.barW = barWidth(this.cols);
     this._timer = null;
     this._lastRender = 0;
     this._dirty = false;
     this._lastSnapshot = '';
     this._flash = '';
-    this._altScreen = false;
+    this._flashUntil = 0;
     this.rows = Array.from({ length: this.slots }, (_, slot) => ({
       slot,
       matchLabel: '',
@@ -50,14 +109,11 @@ class ProgressBoard {
       done: false,
       result: '',
     }));
-    this._enterAltScreen();
   }
 
-  _enterAltScreen() {
-    if (!this.enabled || this._altScreen) return;
-    process.stderr.write('\x1b[?1049h\x1b[H\x1b[2J');
-    this._altScreen = true;
-    this._lines = 0;
+  beginPool() {
+    if (!this.enabled) return;
+    process.stderr.write('\x1b[?1049h\x1b[2J\x1b[H');
   }
 
   setSlotLabel(slot, label) {
@@ -67,10 +123,10 @@ class ProgressBoard {
 
   setScoreboard(text) {
     const raw = String(text || '');
-    this.scoreboardLines = raw.split('\n');
-    while (this.scoreboardLines.length && !this.scoreboardLines[this.scoreboardLines.length - 1]) {
-      this.scoreboardLines.pop();
-    }
+    this.scoreboardLines = raw.split('\n').filter((ln, i, arr) => {
+      if (!ln.trim() && i === arr.length - 1) return false;
+      return true;
+    });
     this.render(true);
   }
 
@@ -116,8 +172,9 @@ class ProgressBoard {
   reconnect(slot, attempt) {
     if (slot < 0 || slot >= this.slots) return;
     const r = this.rows[slot];
+    r.active = true;
     r.phase = 'reconnect';
-    r.side = attempt > 0 ? 'try ' + attempt : '';
+    r.side = attempt > 0 ? String(attempt) : '';
     r.thinkPct = 0;
     this.render(true);
   }
@@ -151,7 +208,8 @@ class ProgressBoard {
   }
 
   note(msg) {
-    this._flash = String(msg).split('\n')[0];
+    this._flash = visible(String(msg)).slice(0, this.cols - 4);
+    this._flashUntil = Date.now() + 25000;
     this.render(true);
   }
 
@@ -160,15 +218,8 @@ class ProgressBoard {
       clearInterval(this._timer);
       this._timer = null;
     }
-    if (this._altScreen) {
+    if (this.enabled) {
       process.stderr.write('\x1b[?1049l');
-      this._altScreen = false;
-      this._lines = 0;
-      return;
-    }
-    if (this.enabled && this._lines > 0) {
-      this._erase();
-      this._lines = 0;
     }
   }
 
@@ -213,37 +264,46 @@ class ProgressBoard {
     return clamp01(r.ply / r.maxPly);
   }
 
-  _label(r) {
-    const tag = r.matchLabel
-      ? C.bold + r.matchLabel.slice(0, 24) + C.reset + ' '
-      : '';
+  _status(r) {
     if (r.phase === 'reconnect') {
-      return tag + 'reconnect' + (r.side ? ' ' + r.side : '');
+      return C.yellow + 'reconnect #' + r.side + C.reset;
     }
     if (r.done) {
-      return tag + C.green + 'ok' + C.reset + ' ' + r.result + '  ply ' + r.ply;
+      return C.green + 'done' + C.reset + ' ply ' + r.ply;
     }
     if (!r.active) {
-      return tag + C.dim + 'idle' + C.reset;
+      return C.dim + 'waiting' + C.reset;
     }
-    const side = r.side ? ' ' + r.side : '';
+    const who = r.side ? ' ' + r.side : '';
     if (r.phase === 'think') {
-      const elapsed = (Date.now() - r.thinkT0) / 1000;
-      const over = elapsed > r.thinkBudget
-        ? ' +' + Math.round(elapsed - r.thinkBudget) + 's'
-        : '';
-      return tag + C.yellow + '>>' + C.reset + ' ply ' + r.ply + '/' + r.maxPly + side + over;
+      return C.yellow + 'think' + C.reset + who + ' ' + r.ply + '/' + r.maxPly;
     }
-    return tag + 'ply ' + r.ply + '/' + r.maxPly + side;
+    return String(r.ply + '/' + r.maxPly + who);
+  }
+
+  _slotLine(r, idx) {
+    const num = String(idx + 1).padStart(2, ' ');
+    const lbl = (r.matchLabel || '...').slice(0, LABEL_W).padEnd(LABEL_W);
+    const status = this._status(r);
+    const prefix = num + ' ' + lbl + ' ';
+    let barW = this.barW;
+    while (barW >= 4) {
+      const line = prefix + bar(this._pct(r), barW) + ' ' + status;
+      if (visible(line).length <= this.cols) return line;
+      barW -= 1;
+    }
+    return prefix + bar(this._pct(r), 4) + ' ' + status;
   }
 
   _erase() {
-    if (!this.enabled || this._lines <= 0) return;
-    if (this._altScreen) {
-      process.stderr.write('\x1b[H\x1b[2J');
-      return;
-    }
-    process.stderr.write('\x1b[' + this._lines + 'A\x1b[0J');
+    if (!this.enabled) return;
+    process.stderr.write('\x1b[2J\x1b[H');
+  }
+
+  _runningCount() {
+    return this.rows.filter((r) =>
+      r.active || r.phase === 'reconnect' || r.phase === 'think',
+    ).length;
   }
 
   render(force = false) {
@@ -255,27 +315,32 @@ class ProgressBoard {
     }
     this._lastRender = now;
     this._dirty = false;
+    this.cols = termCols(process.stderr);
+    this.barW = barWidth(this.cols);
 
-    const active = this.rows.filter((r) => r.active).length;
-    const done = this.rows.filter((r) => r.done).length;
-    const titleSuffix = this.continuous
-      ? active + ' active'
-      : active + ' active / ' + done + ' done';
+    const running = this._runningCount();
     const lines = [];
-    if (this._flash) {
+    if (this._flash && Date.now() < this._flashUntil) {
       lines.push(C.yellow + this._flash + C.reset);
-      lines.push('');
+    } else if (this._flash) {
       this._flash = '';
     }
     if (this.scoreboardLines.length) {
-      lines.push(...this.scoreboardLines);
-      lines.push('');
+      for (const ln of this.scoreboardLines) {
+        const plain = fitPlain(ln, SCOREBOARD_W);
+        lines.push(colorScoreboardLine(plain));
+      }
     }
-    lines.push(C.gray + '\u2500'.repeat(72) + C.reset);
-    lines.push(C.bold + this.title + C.reset + '  ' + C.dim + titleSuffix + C.reset);
-    for (const r of this.rows) {
-      lines.push(' ' + bar(this._pct(r)) + ' ' + this._label(r));
+    lines.push('');
+    lines.push(
+      C.bold + this.title + C.reset
+      + C.dim + ' (' + running + ' active / ' + this.slots + ' slots)' + C.reset,
+    );
+    lines.push(C.gray + '\u2500'.repeat(Math.min(this.cols, SCOREBOARD_W)) + C.reset);
+    for (let i = 0; i < this.rows.length; i++) {
+      lines.push(this._slotLine(this.rows[i], i));
     }
+    lines.push(C.dim + ' log: training/data/supervisor.log  supervisor_alert.json' + C.reset);
 
     const snapshot = lines.join('\n');
     if (!force && snapshot === this._lastSnapshot) return;
@@ -283,7 +348,6 @@ class ProgressBoard {
 
     this._erase();
     process.stderr.write(snapshot + '\n');
-    this._lines = lines.length;
   }
 }
 

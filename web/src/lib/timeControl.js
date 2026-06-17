@@ -159,6 +159,7 @@ export function isTitaniumEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.Titanium ||
     playerType === PlayerType.TitaniumMinimax ||
+    playerType === PlayerType.TitaniumV15Frozen ||
     getEngineConfig(playerType, engineConfigs)?.kind === 'titanium'
   );
 }

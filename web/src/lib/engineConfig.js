@@ -43,6 +43,8 @@ const PlayerType = {
   QuoridorV3: 'quoridor-v3',
   Titanium: 'titanium',
   TitaniumMinimax: 'titanium-minimax',
+  /** Same search as v15; pinned pre-train NNUE (A/B vs live weights). */
+  TitaniumV15Frozen: 'titanium-v15-frozen',
   /** Unified ACE v10 — strength slider picks JS / Rust / MoveGen+ / PMC tier */
   AceV10: 'ace-v10',
   /** Unified ACE v13 — strength slider picks JS / Rust / MoveGen+ (no EME) */

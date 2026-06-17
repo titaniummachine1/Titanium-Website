@@ -7,7 +7,7 @@ function baseUrl() {
   return (process.env.COORDINATOR_URL || DEFAULT_URL).replace(/\/$/, '');
 }
 
-async function request(method, path, body = null, retries = 3) {
+async function request(method, path, body = null, retries = 3, timeoutMs = 30_000) {
   const url = `${baseUrl()}${path}`;
   let lastErr;
   for (let i = 0; i < retries; i++) {
@@ -16,6 +16,27 @@ async function request(method, path, body = null, retries = 3) {
       if (body != null) {
         opts.headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(body);
+      }
+      if (timeoutMs > 0) {
+        const controller = new AbortController();
+        opts.signal = controller.signal;
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, opts);
+          clearTimeout(timer);
+          const text = await res.text();
+          let data = {};
+          if (text) {
+            try { data = JSON.parse(text); } catch { data = { raw: text }; }
+          }
+          if (!res.ok) {
+            throw new Error(data.error || text || `HTTP ${res.status}`);
+          }
+          return data;
+        } catch (e) {
+          clearTimeout(timer);
+          throw e;
+        }
       }
       const res = await fetch(url, opts);
       const text = await res.text();
@@ -80,8 +101,27 @@ async function releaseRemoteSlot(gameId) {
   return request('POST', '/api/release-remote', { game_id: gameId || undefined });
 }
 
-async function fetchScoreboard() {
-  const j = await request('GET', '/api/scoreboard');
+async function acquireKaSearch(tcB, gameId, timeoutSec = 900) {
+  const data = await request(
+    'POST',
+    '/api/ka-search-acquire',
+    { tc_b: tcB, game_id: gameId, timeout_sec: timeoutSec },
+    1,
+    (timeoutSec + 30) * 1000,
+  );
+  if (!data?.ok) {
+    throw new Error(data?.error || 'ka search acquire failed');
+  }
+  return data;
+}
+
+async function releaseKaSearch(tcB, gameId) {
+  return request('POST', '/api/ka-search-release', { tc_b: tcB, game_id: gameId }, 3, 15_000);
+}
+
+async function fetchScoreboard(compact = true) {
+  const q = compact ? '?compact=1' : '';
+  const j = await request('GET', `/api/scoreboard${q}`);
   return j.text || '';
 }
 
@@ -111,6 +151,8 @@ module.exports = {
   upsertGame,
   claimPairing,
   releaseRemoteSlot,
+  acquireKaSearch,
+  releaseKaSearch,
   fetchScoreboard,
   fetchPoolStatus,
   ensurePoolCoordinator,

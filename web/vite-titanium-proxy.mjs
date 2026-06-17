@@ -243,6 +243,8 @@ function parseProgressLine(line) {
 function normalizeGenmoveEngine(engine) {
   if (
     engine === 'minimax' ||
+    engine === 'titanium-v15' ||
+    engine === 'titanium-v15-frozen' ||
     engine === 'ace' ||
     engine === 'ace-v8' ||
     engine === 'ace-v10' ||
@@ -271,6 +273,8 @@ function buildGenmoveArgs(moves, options) {
   if (engine === 'minimax') {
     args.push('--nodes', String(maxNodes));
   } else if (
+    engine === 'titanium-v15' ||
+    engine === 'titanium-v15-frozen' ||
     engine === 'ace' ||
     engine === 'ace-v8' ||
     engine === 'ace-v10' ||
@@ -445,9 +449,13 @@ class TitaniumSeatSession {
     delete childEnv.TITANIUM_DISABLE_BOOK;
     delete childEnv.TITANIUM_BRIDGE;
 
-    const args = this.engine && this.engine.startsWith('ace')
-      ? ['session', '--engine', this.engine]
-      : ['session'];
+    const args =
+      this.engine &&
+      (this.engine.startsWith('ace') ||
+        this.engine === 'titanium-v15' ||
+        this.engine === 'titanium-v15-frozen')
+        ? ['session', '--engine', this.engine]
+        : ['session'];
     this.child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     this.stdoutBuf = '';
     this.stderrBuf = '';

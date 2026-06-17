@@ -7,6 +7,7 @@
 'use strict';
 
 const path = require('path');
+const { preload: preloadRemoteTiming } = require('./remote_timing');
 const remoteMatch = require('./ishtar_match');
 const { isCompleteGame } = require('./game_validate');
 const { releaseRemoteSlot } = require('./coordinator_client');
@@ -46,10 +47,11 @@ function ipcProgress(slot) {
 let workerGameId = null;
 
 async function main() {
+  preloadRemoteTiming();
   const payload = JSON.parse(process.argv[2]);
   const { pairing: p, slot } = payload;
   workerGameId = p.game_id;
-  const label = `${p.engine_a} vs ${p.engine_b}@${p.tc_b}`;
+  const label = p.display_label || process.env.MATCH_LABEL || `v15@5s vs Ka-${p.tc_b}`;
 
   const opts = {
     engine: p.engine_a,
@@ -62,6 +64,7 @@ async function main() {
     bin: BIN,
     saveGames: null,
     sourceTag: p.source_tag,
+    gameId: p.game_id,
   };
 
   const gl = await import('./web/src/lib/gameLogic.js');
