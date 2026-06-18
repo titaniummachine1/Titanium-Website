@@ -1,5 +1,5 @@
 /**
- * Titanium αβ + CAT — WebAssembly build (GitHub Pages / static hosting).
+ * Titanium v15 — WebAssembly build (αβ + grafted search; GitHub Pages / static hosting).
  */
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';

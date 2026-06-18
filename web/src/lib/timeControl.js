@@ -322,7 +322,11 @@ export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) 
     const cap = formatVisitsCap(aiSettings.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     if (isTitaniumEngine(playerType, engineConfigs)) {
       const modeLabel =
-        config.engineMode === 'minimax' ? 'Titanium αβ + CAT' : 'Titanium αβ + CAT';
+        config.engineMode === 'titanium-v15-frozen'
+          ? 'Titanium v15 αβ (frozen NNUE)'
+          : config.engineMode === 'titanium-v15' || config.engineMode === 'minimax'
+            ? 'Titanium v15 αβ'
+            : 'Titanium αβ + CAT';
       const budgetLabel = 'nodes';
       return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${modeLabel}`;
     }
