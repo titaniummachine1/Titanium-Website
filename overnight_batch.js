@@ -208,13 +208,15 @@ async function runOne(p, slot, gl, progress) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function slotLoop(slot, gl, progress, onGameDone) {
+async function slotLoop(slot, gl, progress, onGameDone, claimBudget = null) {
   let lastClaimErr = 0;
   for (;;) {
+    if (claimBudget && !claimBudget.take()) return;
     let pairing;
     try {
       pairing = await claimPairing();
     } catch (e) {
+      claimBudget?.release();
       const now = Date.now();
       if (now - lastClaimErr > 8000) {
         progress.note(`slot ${slot}: claim failed — ${e.message}`);
@@ -233,6 +235,7 @@ async function slotLoop(slot, gl, progress, onGameDone) {
     } catch (e) {
       const brief = (e.message || String(e)).split('\n')[0];
       progress.note(`${poolLabel(pairing)}: ${brief}`);
+      process.stderr.write(`POOL_ERROR game_id=${pairing.game_id || '?'} ${poolLabel(pairing)}: ${brief}\n`);
       if (pairing.release_remote || pairing.game_id) {
         await releaseRemoteSlot(pairing.game_id).catch(() => {});
       }
@@ -269,7 +272,7 @@ function pollSupervisorAlerts(progress) {
 }
 pollSupervisorAlerts._lastTs = '';
 
-async function runPool(slots) {
+async function runPool(slots, maxGames = 0) {
   if (!fs.existsSync(BIN)) {
     throw new Error(`engine binary missing: ${BIN} — run: cargo build --release -p titanium`);
   }
@@ -323,8 +326,23 @@ async function runPool(slots) {
     process.stdout.write(`POOL_DONE${dbPart} plies=${r.plies}\n`);
   };
 
+  const claimBudget = maxGames > 0 ? {
+    remaining: maxGames,
+    take() {
+      if (this.remaining <= 0) return false;
+      this.remaining -= 1;
+      return true;
+    },
+    release() {
+      this.remaining += 1;
+    },
+  } : null;
+
   try {
-    await Promise.all(Array.from({ length: slots }, (_, slot) => slotLoop(slot, gl, progress, onGameDone)));
+    await Promise.all(Array.from(
+      { length: slots },
+      (_, slot) => slotLoop(slot, gl, progress, onGameDone, claimBudget),
+    ));
   } finally {
     clearInterval(scoreboardTimer);
     clearInterval(coordinatorTimer);
@@ -342,7 +360,12 @@ async function main() {
   if (args[0] === '--pool') {
     const slotsIdx = args.indexOf('--slots');
     const slots = slotsIdx >= 0 ? parseInt(args[slotsIdx + 1], 10) : 7;
-    return runPool(Number.isFinite(slots) && slots > 0 ? slots : 7);
+    const gamesIdx = args.indexOf('--max-games');
+    const maxGames = gamesIdx >= 0 ? parseInt(args[gamesIdx + 1], 10) : 0;
+    return runPool(
+      Number.isFinite(slots) && slots > 0 ? slots : 7,
+      Number.isFinite(maxGames) && maxGames > 0 ? maxGames : 0,
+    );
   }
 
   const configPath = args[0];
