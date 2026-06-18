@@ -3,7 +3,7 @@ import { formatCoordinate, toAlgebraic } from '../lib/gameLogic.js';
 import { encodeReplayFromActions } from '../lib/replayCode.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { formatEngineScore } from '../lib/engineScore.js';
-import { formatVisits, formatWallClock, TIME_TO_MOVE_PRESETS, STRENGTH_LEVEL_PRESETS } from '../lib/timeControl.js';
+import { formatVisits, formatVisitsCap, formatWallClock, TIME_TO_MOVE_PRESETS, STRENGTH_LEVEL_PRESETS } from '../lib/timeControl.js';
 
 const SETTINGS_FIELD_LABELS = {
   wallClockSeconds: 'wall clock',
@@ -97,8 +97,43 @@ function formatDepthLog(depthLog) {
     .join(' | ');
 }
 
+function isAceThinkEntry(entry) {
+  const engine = entry.engine ?? '';
+  const stop = entry.stoppedBy ?? '';
+  return (
+    engine.includes('ACE v8') ||
+    engine.includes('ACE v10') ||
+    engine.includes('ACE v13') ||
+    stop === 'ace' ||
+    stop === 'ace-wasm' ||
+    stop === 'ace-v8-js' ||
+    stop === 'ace-v8' ||
+    stop === 'ace-ti' ||
+    stop === 'ace-v8-ti' ||
+    stop === 'ace-v8-ti-pmc' ||
+    stop === 'ace-v10-js' ||
+    stop === 'ace-v10' ||
+    stop === 'ace-v10-ti' ||
+    stop === 'ace-v10-ti-pmc' ||
+    stop === 'ace-v13-js' ||
+    stop === 'ace-v13' ||
+    stop === 'ace-v13-ti' ||
+    stop === 'ace-v13-ti-pmc' ||
+    stop.startsWith('ace-v13')
+  );
+}
+
 function isTitaniumThinkEntry(entry) {
   return entry.engine?.includes('Titanium');
+}
+
+function isAlphaBetaThinkEntry(entry) {
+  return (
+    isTitaniumThinkEntry(entry) ||
+    isAceThinkEntry(entry) ||
+    entry.stoppedBy === 'minimax' ||
+    entry.mode === 'minimax'
+  );
 }
 
 /** Top root candidates for copied reports: `roots: d5=-991 W6/B5 g0; h3h=-803 W5/B6 g2` */
@@ -134,7 +169,7 @@ function formatSettingsValue(field, value) {
     return formatWallClock(Number(value));
   }
   if (field === 'visitsBudget') {
-    return formatVisits(Number(value));
+    return formatVisitsCap(Number(value));
   }
   if (field === 'timeToMove') {
     return TIME_TO_MOVE_PRESETS.find((p) => p.id === value)?.label ?? String(value);
@@ -179,18 +214,10 @@ function formatThinkEntry(entry) {
     return `ply${entry.ply} ${who}${engine} ERROR: ${entry.error}${rejected}${legal}${budget}${dist}${think}`;
   }
 
-  const isAce =
-    entry.engine?.includes('ACE v8') ||
-    entry.stoppedBy === 'ace' ||
-    entry.stoppedBy === 'ace-v8-js' ||
-    entry.stoppedBy === 'ace-v8' ||
-    entry.stoppedBy === 'ace-ti' ||
-    entry.stoppedBy === 'ace-v8-ti';
+  const isAce = isAceThinkEntry(entry);
 
   const isMcts =
-    !isTitaniumThinkEntry(entry) &&
-    !isAce &&
-    entry.stoppedBy !== 'minimax' &&
+    !isAlphaBetaThinkEntry(entry) &&
     (entry.stoppedBy === 'mcts' ||
       entry.stoppedBy === 'time' ||
       entry.stoppedBy === 'visits' ||

@@ -26,6 +26,14 @@ function parseProgressJson(jsonStr) {
   }
 }
 
+function mergeDepthLogs(existing, incoming) {
+  const byDepth = new Map((existing ?? []).map((entry) => [entry.depth, entry]));
+  for (const entry of incoming ?? []) {
+    byDepth.set(entry.depth, entry);
+  }
+  return [...byDepth.values()].sort((a, b) => a.depth - b.depth);
+}
+
 self.onmessage = async (event) => {
   const { algebraicMoves, timeMs, maxDepth, engineMode } = event.data ?? {};
   try {
@@ -44,6 +52,7 @@ self.onmessage = async (event) => {
         ...data,
         stoppedBy: data.engine ?? data.stoppedBy ?? mode,
         mode: data.engine ?? data.stoppedBy ?? mode,
+        depthLog: mergeDepthLogs(finalMeta.depthLog, data.depthLog),
       };
       self.postMessage({
         type: 'info',
