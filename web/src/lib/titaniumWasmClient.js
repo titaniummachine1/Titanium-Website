@@ -4,7 +4,7 @@
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
-import { LOCAL_VISITS_RANGE, clampVisits } from './timeControl.js';
+import { LOCAL_VISITS_RANGE, resolveMaxNodes } from './timeControl.js';
 
 export class TitaniumWasmEngineClient {
   constructor(engineConfig) {
@@ -191,7 +191,7 @@ export class TitaniumWasmEngineClient {
     }
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
-    const maxNodes = clampVisits(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
+    const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     const engineMode = this.config?.engineMode ?? 'titanium-v15';
 
     this.setStatus('searching');

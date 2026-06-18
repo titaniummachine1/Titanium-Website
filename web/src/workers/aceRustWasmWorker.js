@@ -1,6 +1,6 @@
 /**
  * ACE Rust (MoveGen+ / native port) in a Web Worker — compiled to WebAssembly.
- * GitHub Pages has no Vite proxy; this replaces the dev-only titanium.exe session.
+ * Streams iterative-deepening progress like Titanium WASM.
  */
 
 import init, { WasmAceEngine } from '../wasm/titanium/titanium.js';
@@ -18,16 +18,46 @@ async function ensureEngine() {
   return engine;
 }
 
+function parseProgressJson(jsonStr) {
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
 self.onmessage = async (event) => {
   const { algebraicMoves, timeMs, maxDepth, engineMode } = event.data ?? {};
   try {
     const wasm = await ensureEngine();
     const history = algebraicMoves ?? [];
+    const mode = engineMode ?? 'ace-v13-ti';
+    let finalMeta = {};
+
+    const onProgress = (jsonStr) => {
+      const data = parseProgressJson(jsonStr);
+      if (!data) {
+        return;
+      }
+      finalMeta = {
+        ...finalMeta,
+        ...data,
+        stoppedBy: data.engine ?? data.stoppedBy ?? mode,
+        mode: data.engine ?? data.stoppedBy ?? mode,
+      };
+      self.postMessage({
+        type: 'info',
+        thinking: true,
+        ...finalMeta,
+      });
+    };
+
     const best = wasm.genmove(
       history.join(' '),
       Math.max(1, timeMs ?? 2000),
       maxDepth ?? 30,
-      engineMode ?? 'ace-v13-ti',
+      mode,
+      onProgress,
     );
     if (!best || best === '(none)') {
       self.postMessage({ type: 'error', message: 'ACE WASM returned no legal move' });
@@ -36,9 +66,15 @@ self.onmessage = async (event) => {
     self.postMessage({
       type: 'bestmove',
       algebraicMove: best,
-      stoppedBy: engineMode ?? 'ace-wasm',
-      mode: engineMode ?? 'ace-wasm',
-      nodes: 0,
+      stoppedBy: finalMeta.stoppedBy ?? mode,
+      mode: finalMeta.mode ?? mode,
+      nodes: finalMeta.nodes ?? 0,
+      searchDepth: finalMeta.searchDepth,
+      depthLog: finalMeta.depthLog,
+      rootScore: finalMeta.rootScore,
+      whiteDist: finalMeta.whiteDist,
+      blackDist: finalMeta.blackDist,
+      elapsedMs: finalMeta.elapsedMs,
     });
   } catch (err) {
     self.postMessage({

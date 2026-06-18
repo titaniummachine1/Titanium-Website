@@ -30,15 +30,67 @@ export class AceRustWasmEngineClient {
         pending.onError?.(new Error(data.message ?? 'ACE WASM worker error'));
         return;
       }
+      if (data.type === 'info') {
+        const mode = data.mode ?? data.stoppedBy ?? this.config.engineMode ?? 'ace-v13-ti';
+        let depthLog = data.depthLog;
+        if (
+          (!depthLog || depthLog.length === 0) &&
+          data.searchDepth != null &&
+          data.rootScore != null
+        ) {
+          depthLog = [
+            {
+              depth: data.searchDepth,
+              score: data.rootScore,
+              nodes: data.nodes ?? 0,
+              pv: data.pv ?? '',
+            },
+          ];
+        }
+        pending.finalMeta = {
+          ...(pending.finalMeta ?? {}),
+          ...data,
+          stoppedBy: mode,
+          mode,
+          depthLog: depthLog ?? pending.finalMeta?.depthLog,
+          nodes: data.nodes ?? pending.finalMeta?.nodes,
+          searchDepth: data.searchDepth ?? pending.finalMeta?.searchDepth,
+          rootScore: data.rootScore ?? pending.finalMeta?.rootScore,
+          whiteDist: data.whiteDist ?? pending.finalMeta?.whiteDist,
+          blackDist: data.blackDist ?? pending.finalMeta?.blackDist,
+          elapsedMs: data.elapsedMs ?? pending.finalMeta?.elapsedMs,
+        };
+        const meta = pending.finalMeta;
+        pending.onInfo?.({
+          thinking: true,
+          mode,
+          stoppedBy: mode,
+          nodes: meta.nodes,
+          searchDepth: meta.searchDepth,
+          depthLog: meta.depthLog,
+          whiteDist: meta.whiteDist,
+          blackDist: meta.blackDist,
+          rootScore: meta.rootScore,
+          elapsedMs: meta.elapsedMs,
+          simulations: 0,
+        });
+        return;
+      }
       if (data.type === 'bestmove') {
         const elapsed = performance.now() - pending.started;
+        const meta = pending.finalMeta ?? {};
         this.setStatus('idle');
         pending.onInfo?.({
           time: elapsed,
-          elapsedMs: Math.round(elapsed),
-          nodes: data.nodes ?? 0,
-          stoppedBy: data.stoppedBy ?? this.config.engineMode ?? 'ace-wasm',
-          mode: data.mode ?? this.config.engineMode ?? 'ace-wasm',
+          elapsedMs: meta.elapsedMs ?? data.elapsedMs ?? Math.round(elapsed),
+          nodes: meta.nodes ?? data.nodes ?? 0,
+          stoppedBy: meta.stoppedBy ?? data.stoppedBy ?? this.config.engineMode ?? 'ace-v13-ti',
+          mode: meta.mode ?? data.mode ?? this.config.engineMode ?? 'ace-v13-ti',
+          searchDepth: meta.searchDepth ?? data.searchDepth,
+          depthLog: meta.depthLog ?? data.depthLog,
+          rootScore: meta.rootScore ?? data.rootScore,
+          whiteDist: meta.whiteDist ?? data.whiteDist,
+          blackDist: meta.blackDist ?? data.blackDist,
           simulations: 0,
           progress: 1,
         });
@@ -136,6 +188,7 @@ export class AceRustWasmEngineClient {
 
     this.pendingRequest = {
       started,
+      finalMeta: {},
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => {
         this.pendingRequest = null;

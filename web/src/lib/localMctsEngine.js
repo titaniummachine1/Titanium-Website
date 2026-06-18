@@ -5,7 +5,7 @@
 import GorisansonWorker from '../workers/gorisansonWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
 import { resolveOnBestMoveResult } from './onBestMoveResult.js';
-import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel } from './timeControl.js';
+import { LOCAL_VISITS_RANGE, resolveMaxNodes, uctFromStrengthLevel } from './timeControl.js';
 
 export class LocalMctsEngineClient {
   constructor(engineConfig, { resolveUct, WorkerClass = GorisansonWorker } = {}) {
@@ -164,7 +164,7 @@ export class LocalMctsEngineClient {
     }
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 3) * 1000);
-    const maxSimulations = clampVisits(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
+    const maxSimulations = resolveMaxNodes(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     const uctConst = this.resolveUct(aiSettings);
 
     this.setStatus('searching');

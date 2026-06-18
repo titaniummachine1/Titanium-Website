@@ -46,14 +46,31 @@ export const LOCAL_VISITS_RANGE = {
   sliderSteps: 1_000,
 };
 
-export const TITANIUM_NODE_CAP = 2_000_000_000;
+/** 0 = no node cap (wall-clock only). Slider max maps here, not 2B. */
+export const UNLIMITED_VISITS = 0;
+
+/** @deprecated use UNLIMITED_VISITS — kept so saved settings at 2B map to unlimited */
+export const TITANIUM_NODE_CAP = UNLIMITED_VISITS;
+
+export function isUnlimitedVisits(visits) {
+  const n = Number(visits);
+  return !Number.isFinite(n) || n <= 0 || n >= LOCAL_VISITS_RANGE.max;
+}
 
 export function clampVisits(visits) {
   const n = Number(visits);
   if (!Number.isFinite(n)) {
     return LOCAL_VISITS_RANGE.default;
   }
-  return Math.min(LOCAL_VISITS_RANGE.max, Math.max(LOCAL_VISITS_RANGE.min, Math.round(n)));
+  if (isUnlimitedVisits(n)) {
+    return UNLIMITED_VISITS;
+  }
+  return Math.max(LOCAL_VISITS_RANGE.min, Math.round(n));
+}
+
+/** Node budget for workers — 0 means unlimited (time-only). */
+export function resolveMaxNodes(visitsBudget) {
+  return isUnlimitedVisits(visitsBudget) ? UNLIMITED_VISITS : clampVisits(visitsBudget);
 }
 
 /** Map slider position (0 … sliderSteps) → visit count. */
@@ -64,7 +81,7 @@ export function visitsFromSliderPosition(position) {
     return min;
   }
   if (t >= 1) {
-    return max;
+    return UNLIMITED_VISITS;
   }
   return clampVisits(min * (max / min) ** t);
 }
@@ -76,7 +93,7 @@ export function sliderPositionFromVisits(visits) {
   if (clamped <= min) {
     return 0;
   }
-  if (clamped >= max) {
+  if (isUnlimitedVisits(clamped)) {
     return sliderSteps;
   }
   const t = Math.log(clamped / min) / Math.log(max / min);
@@ -221,7 +238,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
     return {
       strengthLevel: StrengthLevel.Alpha,
       wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
-      visitsBudget: TITANIUM_NODE_CAP,
+      visitsBudget: UNLIMITED_VISITS,
     };
   }
   if (isQuoridorV3Engine(playerType, engineConfigs)) {
@@ -277,6 +294,9 @@ export function formatVisits(n) {
 }
 
 export function formatVisitsCap(n) {
+  if (isUnlimitedVisits(n)) {
+    return 'unlimited';
+  }
   return `≤${formatVisits(clampVisits(n))}`;
 }
 

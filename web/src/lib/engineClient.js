@@ -278,7 +278,15 @@ export class EngineClient {
         info.winChance = info.score;
         info.p1 = info.score;
       }
-      this.onInfo?.(info);
+      const visits = info.visits ?? info.nodes;
+      this.onInfo?.({
+        ...info,
+        thinking: true,
+        simulations: visits,
+        nodes: visits,
+        searchDepth: info.depth ?? info.searchDepth,
+        rootWinRate: info.winChance ?? info.p1 ?? info.score,
+      });
       return;
     }
 

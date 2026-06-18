@@ -48,7 +48,7 @@ jobs:
         env:
           VITE_BUILD_SHA: ${{ github.sha }}
           # wasm32 cross-compile — do not use target-cpu=native (native titanium.exe only).
-          RUSTFLAGS: ''
+          RUSTFLAGS: ""
         run: |
           npm ci
           npm run build:pages

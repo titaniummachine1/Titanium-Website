@@ -35,6 +35,20 @@ export class QuoridorV3EngineClient {
         pending.onError?.(new Error(data.message ?? 'Worker error'));
         return;
       }
+      if (data.type === 'progress') {
+        pending.onInfo?.({
+          thinking: true,
+          mode: data.mode ?? 'minimax',
+          stoppedBy: data.stoppedBy ?? 'minimax',
+          searchDepth: data.searchDepth,
+          nodes: data.nodes,
+          depthLog: data.depthLog,
+          rootScore: data.rootScore,
+          whiteDist: data.whiteDist,
+          blackDist: data.blackDist,
+        });
+        return;
+      }
       if (data.type === 'bestmove') {
         const elapsed = performance.now() - pending.started;
         this.setStatus('idle');

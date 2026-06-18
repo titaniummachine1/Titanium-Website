@@ -5,6 +5,7 @@ import { playerColorName } from '../lib/playerColors.js';
 const MCTS_MODES = new Set(['mcts', 'opening', 'visits', 'bridge', 'bridge-visits', 'forced']);
 const ACE_MODES = new Set([
   'ace',
+  'ace-wasm',
   'ace-v8-js',
   'ace-v8',
   'ace-ti',
@@ -15,6 +16,10 @@ const ACE_MODES = new Set([
   'ace-v10',
   'ace-v10-ti',
   'ace-v10-ti-pmc',
+  'ace-v13-js',
+  'ace-v13',
+  'ace-v13-ti',
+  'ace-v13-ti-pmc',
 ]);
 
 function isTitaniumAb(payload) {
@@ -28,7 +33,8 @@ function isAcePayload(payload) {
     ACE_MODES.has(payload.mode) ||
     String(payload.engine ?? '').includes('ACE v8') ||
     String(payload.engine ?? '').includes('ACE v8 (JS') ||
-    String(payload.engine ?? '').includes('ACE v10')
+    String(payload.engine ?? '').includes('ACE v10') ||
+    String(payload.engine ?? '').includes('ACE v13')
   );
 }
 
@@ -365,7 +371,7 @@ function heroMetric(payload) {
     };
   }
 
-  if (!payload.live && payload.thinkMs != null && payload.move) {
+  if (!payload.live && payload.thinkMs != null && payload.move && payload.score == null && resolveTotalNodes(payload) <= 0 && !(payload.depthLog?.length)) {
     return {
       left: payload.move,
       right: formatThinkDuration(payload.thinkMs),
