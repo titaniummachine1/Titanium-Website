@@ -8,6 +8,13 @@ import {
 } from '../game/coordinates.js';
 import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import {
+  blockedEdgesFromCanonicalWalls,
+  canonicalStateFromBoard,
+  findCanonicalPathToGoal,
+  toAlgebraicSquare,
+  canonicalEdgeKey,
+} from '../lib/canonicalState.js';
+import {
   screenRowIndices,
   screenColIndices,
   screenRowLabel,
@@ -75,6 +82,9 @@ export function renderBoard(container, state, controller) {
   const showCoords = settings.displayCoordinates;
   const showWallCounts = settings.displayRemainingWalls;
   const isRotated = settings.rotateBoard;
+  const debugParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const debugEdges = debugParams?.get('debugEdges') === '1';
+  const debugPath = debugParams?.get('debugPath') === '1';
 
   container.innerHTML = '';
   container.className = 'board-panel';
@@ -137,6 +147,17 @@ export function renderBoard(container, state, controller) {
     const bestMoveKey = resolveLiveBestMoveKey(state, { validActions });
     if (bestMoveKey && bestMoveKey !== lastKey) {
       renderBestMoveGhost(grid, bestMoveKey, state.playerToMove);
+    }
+  }
+
+  if (debugEdges || debugPath) {
+    const canon = canonicalStateFromBoard(board);
+    if (debugEdges) {
+      renderDebugBlockedEdges(grid, blockedEdgesFromCanonicalWalls(canon));
+    }
+    if (debugPath) {
+      renderDebugGoalPath(grid, findCanonicalPathToGoal(canon, 'white'), 'white');
+      renderDebugGoalPath(grid, findCanonicalPathToGoal(canon, 'black'), 'black');
     }
   }
 
@@ -472,6 +493,9 @@ function renderBoardCell({
     wall.className = 'board-cell__wall';
     wall.classList.add(cellType === 'horizontalWall' ? 'board-cell__wall--h' : 'board-cell__wall--v');
     wall.dataset.action = key;
+    wall.dataset.wallX = String(wallAnchor.wx);
+    wall.dataset.wallY = String(wallAnchor.wy);
+    wall.dataset.wallOrientation = wallAnchor.wallType;
     wall.dataset.isValid = String(isValid);
 
     if (owner) {
@@ -614,6 +638,43 @@ function renderBestMoveGhost(grid, moveKey, playerToMove) {
   const ghost = document.createElement('div');
   ghost.className = isWall ? 'bm-ghost bm-ghost--wall' : `bm-ghost bm-ghost--pawn bm-ghost--player${playerToMove}`;
   el.appendChild(ghost);
+}
+
+function renderDebugBlockedEdges(grid, blockedEdgeSet) {
+  for (const edgeKey of blockedEdgeSet) {
+    const [a, b] = edgeKey.split('|');
+    const [ax, ay] = a.split(',').map(Number);
+    const [bx, by] = b.split(',').map(Number);
+    const squareA = toAlgebraicSquare({ x: ax, y: ay });
+    const squareB = toAlgebraicSquare({ x: bx, y: by });
+    for (const sq of [squareA, squareB]) {
+      const el = grid.querySelector(`[data-action="${CSS.escape(sq)}"]`);
+      if (!el) {
+        continue;
+      }
+      const marker = document.createElement('div');
+      marker.className = 'debug-edge-marker';
+      marker.title = `blocked ${squareA}<->${squareB}`;
+      el.appendChild(marker);
+    }
+  }
+}
+
+function renderDebugGoalPath(grid, path, player) {
+  if (!path?.length) {
+    return;
+  }
+  for (const cell of path) {
+    const key = toAlgebraicSquare(cell);
+    const el = grid.querySelector(`[data-action="${CSS.escape(key)}"]`);
+    if (!el) {
+      continue;
+    }
+    const marker = document.createElement('div');
+    marker.className = `debug-path-marker debug-path-marker--${player}`;
+    marker.title = `${player} path to goal via ${key}`;
+    el.appendChild(marker);
+  }
 }
 
 function renderTurnIndicator(playerNum, playerToMove, playerType, engineStatus, engineErrors, aiThinking, winner, freePlay) {

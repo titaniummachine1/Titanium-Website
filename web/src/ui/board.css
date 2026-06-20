@@ -696,3 +696,31 @@
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.3; }
 }
+
+.debug-edge-marker {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4444;
+  border: 1px solid #fff;
+  z-index: 5;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.debug-path-marker {
+  position: absolute;
+  inset: 20%;
+  border: 2px solid #44aaff;
+  border-radius: 4px;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.debug-path-marker--black {
+  border-color: #c87840;
+}
