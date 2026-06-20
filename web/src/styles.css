@@ -1672,14 +1672,76 @@ body {
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.25);
   flex-shrink: 0;
+  position: relative;
+  --ring-color: #8fd48f;
 }
 
 .pawn-icon--seat0 {
   background: var(--p1);
+  --ring-color: #f0d9b5;
 }
 
 .pawn-icon--seat1 {
   background: var(--p2);
+  --ring-color: #c08a4a;
+}
+
+/* Thinking: a rotating arc in the player's colour around their token.
+   Lives in document.body (not the card's innerHTML) so it is never recreated
+   on the card's frequent live re-renders — the spin stays smooth. */
+.pawn-spinner {
+  position: fixed;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ring-color, #8fd48f) 26%, transparent);
+  border-top-color: var(--ring-color, #8fd48f);
+  animation: pawn-spin 0.8s linear infinite;
+  pointer-events: none;
+  box-sizing: border-box;
+  z-index: 50;
+}
+
+.pawn-spinner[data-seat="0"] {
+  --ring-color: #f0d9b5;
+}
+
+.pawn-spinner[data-seat="1"] {
+  --ring-color: #c08a4a;
+}
+
+@keyframes pawn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Error: a clickable badge in the centre of the token; click copies the error. */
+.pawn-icon__error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #c0392b;
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 0 0 2px rgba(192, 57, 43, 0.45);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.pawn-icon__error:hover {
+  background: #e04b39;
+}
+
+.pawn-icon__error--copied {
+  background: #2e8b57;
+  box-shadow: 0 0 0 2px rgba(46, 139, 87, 0.45);
+  animation: none;
 }
 
 /* ─── Play Now button ───────────────────────────────────────────── */

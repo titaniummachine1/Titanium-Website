@@ -142,6 +142,23 @@ export const ENGINE_REGISTRY = new Map([
     },
   ],
   [
+    PlayerType.ZeroInk,
+    {
+      id: PlayerType.ZeroInk,
+      displayName: 'zero.ink (AlphaZero)',
+      // Stateless REST; treated as a local backend (no WS session sync).
+      backend: EngineBackendKind.LOCAL_JS,
+      capabilities: {
+        remoteSync: false,
+        livePv: true,
+        playNow: false,
+        abort: true,
+      },
+      // MCTS-style budget: the Rollouts slider drives `visits`.
+      controls: { visitsSlider: true },
+    },
+  ],
+  [
     PlayerType.KaAI,
     {
       id: PlayerType.KaAI,

@@ -139,7 +139,6 @@
   background: rgba(232, 232, 232, 0.2);
   box-shadow: 0 0 6px rgba(232, 232, 232, 0.5);
   pointer-events: none;
-  animation: bm-pulse 1.2s ease-in-out infinite;
 }
 
 .quoridor-board .pawn {
@@ -174,10 +173,19 @@
   margin: 0;
   align-self: stretch;
   justify-self: stretch;
-  border-radius: 3px;
+  border-radius: 999px;
   z-index: 2;
-  box-shadow: 1px 2px 2px #9c6644;
+  box-shadow: 0 1px 2px rgba(60, 36, 10, 0.35);
   pointer-events: none;
+}
+
+/* Slim the cross-axis so walls read as clean rounded bars, not chunky blocks. */
+.quoridor-board .wallpiece--h {
+  transform: scaleY(0.64);
+}
+
+.quoridor-board .wallpiece--v {
+  transform: scaleX(0.64);
 }
 
 .quoridor-board .wallpiece--player1 {
@@ -219,7 +227,6 @@
   border: 2px dashed #7ec87e;
   background: rgba(126, 200, 126, 0.2);
   box-shadow: 0 0 6px rgba(126, 200, 126, 0.4);
-  animation: bm-pulse 1.2s ease-in-out infinite;
 }
 
 .ace-terminal-overlay {

@@ -39,6 +39,7 @@ import {
   aceGenerationFromPlayerType,
 } from '../lib/aceTier.js';
 import { QuoridorV3EngineClient } from '../lib/quoridorV3Engine.js';
+import { ZeroInkEngineClient } from '../lib/zeroInkEngine.js';
 import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
 import {
   STRENGTH_LEVEL_PRESETS,
@@ -1451,6 +1452,9 @@ export class AppController {
     }
     if (config.kind === 'quoridor-v3') {
       return new QuoridorV3EngineClient(config);
+    }
+    if (config.kind === 'zeroink') {
+      return new ZeroInkEngineClient(config);
     }
     if (
       config.kind === 'ace-v8-family' ||

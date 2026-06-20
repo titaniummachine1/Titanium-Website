@@ -210,7 +210,8 @@ export function isLocalMctsEngine(playerType, engineConfigs) {
     kind === 'quoridor-v3' ||
     kind === 'ace-v8-family' ||
     kind === 'ace-v10-family' ||
-    kind === 'ace-v13-family'
+    kind === 'ace-v13-family' ||
+    kind === 'zeroink'
   );
 }
 

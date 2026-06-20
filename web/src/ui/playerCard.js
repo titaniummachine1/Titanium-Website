@@ -9,7 +9,7 @@
 
 import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
 import { playerColorName } from '../lib/playerColors.js';
-import { formatScoreForCard, isMateScore } from '../lib/engineScore.js';
+import { formatScoreForCard, isMateScore, mateInfo } from '../lib/engineScore.js';
 import { canPlayNow, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
 import {
@@ -23,6 +23,10 @@ function escHtml(s) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escAttr(s) {
+  return escHtml(s).replace(/"/g, '&quot;');
 }
 
 function formatMs(ms) {
@@ -128,6 +132,34 @@ function shortEngineName(playerType) {
   return String(playerType);
 }
 
+/**
+ * Spinner ring around the player's colour token while it thinks.
+ * It lives in document.body — not in the card's innerHTML — so the card's
+ * frequent live re-renders (each engine depth/data refresh) never recreate it
+ * and restart its animation. We only reposition it; the spin stays smooth.
+ */
+function updatePawnSpinner(container, active, seatIndex) {
+  let spinner = container._pawnSpinner;
+  if (!active) {
+    if (spinner?.parentNode) spinner.parentNode.removeChild(spinner);
+    return;
+  }
+  const pawnEl = container.querySelector('.player-card__pawn');
+  if (!pawnEl) return;
+  if (!spinner) {
+    spinner = document.createElement('div');
+    spinner.className = 'pawn-spinner';
+    container._pawnSpinner = spinner;
+  }
+  spinner.dataset.seat = String(seatIndex);
+  const r = pawnEl.getBoundingClientRect();
+  spinner.style.left = `${r.left - 4}px`;
+  spinner.style.top = `${r.top - 4}px`;
+  spinner.style.width = `${r.width + 8}px`;
+  spinner.style.height = `${r.height + 8}px`;
+  if (spinner.parentNode !== document.body) document.body.appendChild(spinner);
+}
+
 export function renderPlayerCard(container, state, seatIndex, controller) {
   const playerType = state.settings.players[seatIndex];
   const isHuman = playerType === PlayerType.Human;
@@ -135,6 +167,11 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
   const isMyTurn = !state.winner && !state.isDraw && state.playerToMove === seatIndex + 1;
   const colorName = playerColorName(seatIndex + 1);
   const ui = state.playerAiSettingsUi?.[seatIndex];
+
+  const engineStatus = state.engineStatus?.[seatIndex];
+  const engineError = state.engineErrors?.[seatIndex];
+  const hasError =
+    !isHuman && engineStatus === 'error' && typeof engineError === 'string' && engineError.length > 0;
 
   const liveSnap = isThinking ? state.liveSearch : null;
   const completedSnap = state.lastCompletedThinkBySeat?.[seatIndex];
@@ -158,7 +195,13 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
 
   let statusText = '';
   if (state.winner) {
-    statusText = state.winner === seatIndex + 1 ? 'Winner!' : '';
+    if (state.winner === seatIndex + 1) {
+      const plies = state.actions?.length ?? 0;
+      const moves = Math.ceil(plies / 2);
+      statusText = `Won in ${moves} move${moves === 1 ? '' : 's'}!`;
+    } else {
+      statusText = '';
+    }
   } else if (state.isDraw) {
     statusText = 'Draw';
   } else if (isThinking) {
@@ -173,6 +216,19 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
   const isMate = isMateScore(score);
   if (score != null && Number.isFinite(Number(score))) {
     scoreDisplay = formatScoreForCard(score);
+    // A *forced* win (e.g. the endgame certificate) reports a flat mate score with
+    // no real distance, so formatScoreForCard collapses it to "Won!". The game isn't
+    // actually over yet — show the winning pawn's real moves-to-goal instead.
+    const mate = mateInfo(score);
+    if (mate && mate.dist === 0 && !state.winner && !state.isDraw) {
+      const winningSeat = mate.sign > 0 ? seatIndex : 1 - seatIndex;
+      const dist = winningSeat === 0 ? state.eval?.whiteDist : state.eval?.blackDist;
+      if (Number.isFinite(dist) && dist > 0) {
+        scoreDisplay = mate.sign > 0 ? `Win in ${dist}` : `Lose in ${dist}`;
+      } else {
+        scoreDisplay = mate.sign > 0 ? 'Winning' : 'Losing';
+      }
+    }
   } else if (rootWinRate != null) {
     scoreDisplay = `${(rootWinRate * 100).toFixed(0)}%`;
   }
@@ -187,7 +243,11 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
     <div class="player-card player-card--seat${seatIndex}${isMyTurn ? ' player-card--active' : ''}${state.winner === seatIndex + 1 ? ' player-card--winner' : ''}" data-player-card-seat="${seatIndex}">
       <div class="player-card__main">
         <div class="player-card__left">
-          <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}"></div>
+          <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}">${
+            hasError
+              ? `<button type="button" class="pawn-icon__error" data-action="copy-engine-error" data-seat="${seatIndex}" title="Engine error — click to copy:&#10;${escAttr(engineError)}" aria-label="Engine error, click to copy">!</button>`
+              : ''
+          }</div>
           <div class="player-card__info">
             <div class="player-card__name">${escHtml(colorName)}</div>
             <div class="player-card__config">${escHtml(configSummary)}</div>
@@ -209,7 +269,45 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
     </div>
   `;
 
+  updatePawnSpinner(container, isThinking && !hasError, seatIndex);
+
   container.querySelector('[data-action="play-now"]')?.addEventListener('click', () => {
     controller.playNow?.();
   });
+
+  container
+    .querySelector('[data-action="copy-engine-error"]')
+    ?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const btn = event.currentTarget;
+      const seat = Number(btn.getAttribute('data-seat'));
+      const message = String(state.engineErrors?.[seat] ?? '');
+      const flashCopied = () => {
+        btn.classList.add('pawn-icon__error--copied');
+        btn.textContent = '✓';
+      };
+      const fallbackCopy = () => {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = message;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        } catch {
+          /* clipboard unavailable — error is still shown in the tooltip */
+        }
+      };
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(message).then(flashCopied, () => {
+          fallbackCopy();
+          flashCopied();
+        });
+      } else {
+        fallbackCopy();
+        flashCopied();
+      }
+    });
 }

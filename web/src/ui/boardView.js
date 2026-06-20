@@ -38,6 +38,7 @@ function addWallElement(boardEl, type, viewSlot, { preview, bad, ghost, owner })
   const el = document.createElement('div');
   el.className =
     'wallpiece' +
+    (type === 0 ? ' wallpiece--h' : ' wallpiece--v') +
     (owner === 1 ? ' wallpiece--player1' : owner === 2 ? ' wallpiece--player2' : '') +
     (preview ? ' preview' + (bad ? ' bad' : '') : '') +
     (ghost ? ' ghost-pv' : '');

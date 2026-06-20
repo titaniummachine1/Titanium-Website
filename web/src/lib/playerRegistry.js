@@ -51,6 +51,15 @@ const TITANIUM_FROZEN_ENGINE = {
     'Same v15 search — pinned pre-train NNUE blob (no micro-train updates). Compare vs live weights side-by-side',
 };
 
+const ZERO_INK_ENGINE = {
+  kind: 'zeroink',
+  name: 'zero.ink (AlphaZero)',
+  key: PlayerType.ZeroInk,
+  modelId: 'resume-188/model_000159',
+  tooltip:
+    'quoridor-zero.ink AlphaZero net over REST. Local dev only (CORS-blocked on static Pages); needs network.',
+};
+
 const ACE_V8_ENGINE = {
   kind: 'ace-v8-family',
   name: 'ACE v8',
@@ -98,6 +107,7 @@ export function getAllEngineConfigs() {
     ACE_V8_ENGINE,
     ACE_V10_ENGINE,
     ACE_V13_ENGINE,
+    ZERO_INK_ENGINE,
     ...remote,
     ...PLACEHOLDER_ENGINES,
   ];
@@ -161,6 +171,12 @@ export function getPlayerOptionGroups() {
       options: [
         { value: PlayerType.IshtarV3, label: 'Ishtar', disabled: false },
         { value: PlayerType.KaAI, label: 'Ka', disabled: false },
+        {
+          value: PlayerType.ZeroInk,
+          label: ZERO_INK_ENGINE.name,
+          disabled: false,
+          tooltip: ZERO_INK_ENGINE.tooltip,
+        },
       ],
     },
     {
@@ -233,6 +249,7 @@ const SEARCH_STOP_LABELS = {
   'ace-v13-ti': 'ACE v13 MoveGen+',
   'titanium-v15': 'Titanium v15 live',
   'titanium-v15-frozen': 'Titanium v15 frozen',
+  zeroink: 'zero.ink',
   mcts: 'MCTS',
   hybrid: 'hybrid',
   race: 'win path',
@@ -435,6 +452,16 @@ export function describeSearchInfo(playerType, searchInfo, engineConfigs) {
       parts.push(`${searchInfo.visits.toLocaleString()} visits`);
     }
     return parts.length ? `Last think: ${parts.join(' · ')}` : '';
+  }
+  if (config?.kind === 'zeroink' && searchInfo.time != null) {
+    const parts = [formatWallClock(searchInfo.time / 1000)];
+    if (searchInfo.visits != null) {
+      parts.push(`${searchInfo.visits.toLocaleString()} visits`);
+    }
+    if (searchInfo.rootWinRate != null) {
+      parts.push(`wr ${(searchInfo.rootWinRate * 100).toFixed(0)}%`);
+    }
+    return parts.join(' · ');
   }
   return '';
 }
