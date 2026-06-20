@@ -10,6 +10,7 @@
 
 import { toAlgebraic } from '../lib/gameLogic.js';
 import { openPlayerDialog } from './playerDialog.js';
+import { formatEngineScore } from '../lib/engineScore.js';
 
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -24,7 +25,7 @@ export function renderGameControls(container, state, controller) {
       <button class="btn btn--small" data-action="new-game" title="Start a new game">New game</button>
       <button class="btn btn--small" data-action="undo" ${canUndo ? '' : 'disabled'} title="Undo last move">Undo</button>
       <button class="btn btn--small" data-action="flip" title="Flip board orientation">Flip</button>
-      <button class="btn btn--small" data-action="copy-notation" ${state.actions.length > 0 ? '' : 'disabled'} title="Copy game notation">Copy</button>
+      <button class="btn btn--small" data-action="logs" title="Show AI thinking log for last move">Logs</button>
       <button class="btn btn--small" data-action="load-notation" title="Load game from notation">Load</button>
       <button class="btn btn--small" data-action="change-players" title="Change players without resetting position">Players</button>
     </div>
@@ -47,20 +48,8 @@ function wireControls(container, state, controller) {
     controller.toggleRotateBoard?.();
   });
 
-  container.querySelector('[data-action="copy-notation"]')?.addEventListener('click', (e) => {
-    const btn = e.currentTarget;
-    const moves = controller.getState().actions.map((a) => toAlgebraic(a)).join(' ');
-    navigator.clipboard.writeText(moves).catch(() => {
-      const ta = document.createElement('textarea');
-      ta.value = moves;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    });
-    const orig = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = orig; }, 1500);
+  container.querySelector('[data-action="logs"]')?.addEventListener('click', () => {
+    openLogsDialog(controller.getState());
   });
 
   container.querySelector('[data-action="load-notation"]')?.addEventListener('click', () => {
@@ -70,6 +59,82 @@ function wireControls(container, state, controller) {
   container.querySelector('[data-action="change-players"]')?.addEventListener('click', () => {
     openPlayerDialog(controller.getState(), controller, { mode: 'changeplayers' });
   });
+}
+
+function formatLogsText(state) {
+  const snaps = state.lastCompletedThinkBySeat ?? [];
+  const lines = [];
+  const players = state.settings?.players ?? [];
+
+  for (let seat = 0; seat < 2; seat++) {
+    const snap = snaps[seat];
+    if (!snap) continue;
+    const color = seat === 0 ? 'White' : 'Black';
+    const engine = players[seat] ?? 'AI';
+    lines.push(`=== ${color} (${engine}) — move: ${snap.move ?? '?'} ===`);
+    const log = snap.depthLog ?? [];
+    if (log.length === 0) {
+      const score = snap.score ?? snap.rootScore;
+      lines.push(`  depth ${snap.depth ?? snap.searchDepth ?? '?'}  score ${score != null ? formatEngineScore(score) : '?'}  nodes ${(snap.nodes ?? 0).toLocaleString()}  ${snap.pv ? 'pv ' + snap.pv : ''}`);
+    } else {
+      for (const e of log) {
+        const score = e.score ?? e.rootScore;
+        const scoreStr = score != null ? formatEngineScore(score) : '?';
+        const nodes = (e.nodes ?? 0).toLocaleString();
+        const pv = e.pv ? '  pv ' + e.pv : '';
+        lines.push(`  d${e.depth}  ${scoreStr}  ${nodes}n${pv}`);
+      }
+    }
+    if (snap.thinkMs != null) lines.push(`  total: ${(snap.thinkMs / 1000).toFixed(2)}s`);
+    lines.push('');
+  }
+
+  if (lines.length === 0) return '(no AI thinking logs available)';
+  return lines.join('\n');
+}
+
+function openLogsDialog(state) {
+  const existing = document.querySelector('.logs-dialog-overlay');
+  if (existing) { existing.remove(); return; }
+
+  const text = formatLogsText(state);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay logs-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="load-dialog" role="dialog" aria-modal="true" aria-label="AI thinking logs" style="max-width:600px">
+      <div class="load-dialog__header">
+        <h2 class="load-dialog__title">AI thinking logs</h2>
+        <button class="load-dialog__close" data-action="close">✕</button>
+      </div>
+      <div class="load-dialog__body">
+        <textarea class="load-dialog__input" rows="18" spellcheck="false" readonly style="font-family:monospace;font-size:0.78rem">${escHtml(text)}</textarea>
+      </div>
+      <div class="load-dialog__footer">
+        <button class="btn btn--primary" data-action="copy-logs">Copy</button>
+        <button class="btn" data-action="close">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.querySelector('[data-action="close"]')?.addEventListener('click', close);
+  overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+  overlay.querySelector('[data-action="copy-logs"]')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    navigator.clipboard.writeText(text).catch(() => {
+      const ta = overlay.querySelector('textarea');
+      ta?.select();
+      document.execCommand('copy');
+    });
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+
+  overlay.querySelector('textarea')?.focus();
 }
 
 function openLoadNotationDialog(controller) {
@@ -161,9 +226,11 @@ export function updateNotationBar(container, state, controller) {
     statusHtml = `<span class="notation-bar__result">Draw</span>`;
   }
 
+  const hasMoves = moves.length > 0;
   container.innerHTML = `
     <div class="notation-bar">
       <div class="notation-bar__moves">${moveHtml}${statusHtml}</div>
+      ${hasMoves ? `<button class="btn btn--small notation-bar__copy" data-action="copy-notation" title="Copy game notation">Copy</button>` : ''}
       ${errors ? `<div class="notation-bar__errors">${escHtml(errors)}</div>` : ''}
     </div>
   `;
@@ -171,4 +238,20 @@ export function updateNotationBar(container, state, controller) {
   // Auto-scroll to end
   const movesEl = container.querySelector('.notation-bar__moves');
   if (movesEl) movesEl.scrollLeft = movesEl.scrollWidth;
+
+  // Wire copy button
+  container.querySelector('[data-action="copy-notation"]')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    const notation = moves.map((a) => toAlgebraic(a)).join(' ');
+    navigator.clipboard.writeText(notation).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = notation;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    });
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
 }
