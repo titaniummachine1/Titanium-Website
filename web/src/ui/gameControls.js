@@ -27,7 +27,7 @@ export function renderGameControls(container, state, controller) {
       <button class="btn btn--small" data-action="flip" title="Flip board orientation">Flip</button>
       <button class="btn btn--small" data-action="logs" title="Show AI thinking log for last move">Logs</button>
       <button class="btn btn--small" data-action="load-notation" title="Load game from notation">Load</button>
-      <button class="btn btn--small" data-action="change-players" title="Change players without resetting position">Players</button>
+      <button class="btn btn--small" data-action="change-players" title="Change players and engine settings">Settings</button>
     </div>
     ${undoPaused ? '<div class="undo-pause-banner">Engine paused after undo — resuming shortly…</div>' : ''}
   `;
@@ -65,27 +65,38 @@ function formatLogsText(state) {
   const snaps = state.lastCompletedThinkBySeat ?? [];
   const lines = [];
   const players = state.settings?.players ?? [];
+  const errors = state.engineErrors ?? {};
 
   for (let seat = 0; seat < 2; seat++) {
     const snap = snaps[seat];
-    if (!snap) continue;
+    const errMsg = errors[seat];
     const color = seat === 0 ? 'White' : 'Black';
     const engine = players[seat] ?? 'AI';
-    lines.push(`=== ${color} (${engine}) — move: ${snap.move ?? '?'} ===`);
-    const log = snap.depthLog ?? [];
-    if (log.length === 0) {
-      const score = snap.score ?? snap.rootScore;
-      lines.push(`  depth ${snap.depth ?? snap.searchDepth ?? '?'}  score ${score != null ? formatEngineScore(score) : '?'}  nodes ${(snap.nodes ?? 0).toLocaleString()}  ${snap.pv ? 'pv ' + snap.pv : ''}`);
-    } else {
-      for (const e of log) {
-        const score = e.score ?? e.rootScore;
-        const scoreStr = score != null ? formatEngineScore(score) : '?';
-        const nodes = (e.nodes ?? 0).toLocaleString();
-        const pv = e.pv ? '  pv ' + e.pv : '';
-        lines.push(`  d${e.depth}  ${scoreStr}  ${nodes}n${pv}`);
-      }
+
+    if (!snap && !errMsg) continue;
+
+    lines.push(`=== ${color} (${engine}) — move: ${snap?.move ?? '?'} ===`);
+
+    if (errMsg) {
+      lines.push(`  ⚠ ENGINE ERROR: ${errMsg}`);
     }
-    if (snap.thinkMs != null) lines.push(`  total: ${(snap.thinkMs / 1000).toFixed(2)}s`);
+
+    if (snap) {
+      const log = snap.depthLog ?? [];
+      if (log.length === 0) {
+        const score = snap.score ?? snap.rootScore;
+        lines.push(`  depth ${snap.depth ?? snap.searchDepth ?? '?'}  score ${score != null ? formatEngineScore(score) : '?'}  nodes ${(snap.nodes ?? 0).toLocaleString()}  ${snap.pv ? 'pv ' + snap.pv : ''}`);
+      } else {
+        for (const e of log) {
+          const score = e.score ?? e.rootScore;
+          const scoreStr = score != null ? formatEngineScore(score) : '?';
+          const nodes = (e.nodes ?? 0).toLocaleString();
+          const pv = e.pv ? '  pv ' + e.pv : '';
+          lines.push(`  d${e.depth}  ${scoreStr}  ${nodes}n${pv}`);
+        }
+      }
+      if (snap.thinkMs != null) lines.push(`  total: ${(snap.thinkMs / 1000).toFixed(2)}s`);
+    }
     lines.push('');
   }
 

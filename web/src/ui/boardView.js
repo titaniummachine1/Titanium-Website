@@ -588,23 +588,40 @@ function renderTurnIndicator(playerNum, playerToMove, playerType, engineStatus, 
   const status = engineStatus[seatIndex] ?? engineStatus[playerType] ?? 'idle';
   const spinner = document.createElement('div');
   spinner.className = 'engine-spinner';
-  if (status === 'error') {
-    spinner.classList.add('engine-spinner--error');
-    spinner.textContent = '!';
-    spinner.title = engineErrors?.[seatIndex]
-      ? `Engine error: ${engineErrors[seatIndex]}`
-      : 'Engine error — try New game or pick another opponent';
+
+  const isError = status === 'error';
+  const isIdle  = !isError && !['pondering', 'searching', 'connecting'].includes(status) && !aiThinking;
+
+  if (isError || isIdle) {
+    const errMsg = engineErrors?.[seatIndex] ?? null;
+    const tipText = isError
+      ? (errMsg ? `⚠ Engine error:\n${errMsg}\n\nClick to copy error log` : '⚠ Engine error — click to copy log')
+      : '⚠ Engine idle on AI turn — click to copy log';
+
+    spinner.classList.add('engine-spinner--warn');
+    spinner.textContent = '⚠';
+    spinner.title = tipText;
+    spinner.style.cursor = 'pointer';
+    spinner.addEventListener('click', () => {
+      const logText = errMsg
+        ? `Engine error (seat ${seatIndex}, ${playerType}):\n${errMsg}`
+        : `Engine idle on seat ${seatIndex} (${playerType}) — no error message`;
+      navigator.clipboard.writeText(logText).catch(() => {});
+      spinner.textContent = '✓';
+      spinner.title = 'Log copied! Please send it to the developer.';
+      setTimeout(() => {
+        spinner.textContent = '⚠';
+        spinner.title = tipText;
+      }, 2500);
+    });
   } else if (status === 'pondering') {
     spinner.title = 'Pondering on opponent time...';
   } else if (aiThinking || status === 'searching') {
     spinner.title = 'Engine is thinking...';
   } else if (status === 'connecting') {
     spinner.title = 'Connecting to engine...';
-  } else {
-    spinner.classList.add('engine-spinner--error');
-    spinner.textContent = '!';
-    spinner.title = 'Engine idle on AI turn — try New game';
   }
+
   wrap.appendChild(spinner);
   return wrap;
 }

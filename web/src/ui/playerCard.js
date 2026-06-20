@@ -11,7 +11,7 @@
 
 import { PlayerType } from '../lib/engineConfig.js';
 import { playerColorName } from '../lib/playerColors.js';
-import { formatEngineScore, isMateScore } from '../lib/engineScore.js';
+import { formatScoreForCard, isMateScore } from '../lib/engineScore.js';
 
 function escHtml(s) {
   return String(s)
@@ -102,8 +102,9 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
 
   // Score display
   let scoreDisplay = '';
+  const isMate = isMateScore(score);
   if (score != null && Number.isFinite(Number(score))) {
-    scoreDisplay = formatEngineScore(score);
+    scoreDisplay = formatScoreForCard(score);
   } else if (rootWinRate != null) {
     scoreDisplay = `${(rootWinRate * 100).toFixed(0)}%`;
   }
@@ -128,10 +129,12 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
         </div>
       </div>
       <div class="player-card__right">
-        ${scoreDisplay ? `<div class="player-card__score">${escHtml(scoreDisplay)}</div>` : ''}
-        ${depth ? `<div class="player-card__meta">d${depth}</div>` : ''}
-        ${nodes > 0 ? `<div class="player-card__meta">${escHtml(formatNodes(nodes))}n</div>` : ''}
-        ${thinkMs != null ? `<div class="player-card__meta">${escHtml(formatMs(thinkMs))}</div>` : ''}
+        <div class="player-card__stats">
+          ${scoreDisplay ? `<span class="player-card__score${isMate ? ' player-card__score--mate' : ''}">${escHtml(scoreDisplay)}</span>` : ''}
+          ${depth != null ? `<span class="player-card__stat"><span class="player-card__stat-label">d</span>${depth}</span>` : ''}
+          ${nodes > 0 ? `<span class="player-card__stat"><span class="player-card__stat-label">n</span>${escHtml(formatNodes(nodes))}</span>` : ''}
+          ${thinkMs != null ? `<span class="player-card__stat">${escHtml(formatMs(thinkMs))}</span>` : ''}
+        </div>
         ${hasValidBestMove ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ''}
       </div>
     </div>

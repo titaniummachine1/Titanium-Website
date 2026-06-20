@@ -49,3 +49,18 @@ export function formatEngineScore(score) {
   const meters = n / 100;
   return `${meters > 0 ? '+' : ''}${meters.toFixed(2)}`;
 }
+
+/** Human-friendly score for the player card. */
+export function formatScoreForCard(score) {
+  if (score == null || !Number.isFinite(Number(score))) {
+    return null;
+  }
+  const n = Number(score);
+  const mate = mateInfo(n);
+  if (mate) {
+    if (mate.dist === 0) return mate.sign > 0 ? 'Won!' : 'Lost';
+    return mate.sign > 0 ? `Win in ${mate.dist}` : `Lose in ${mate.dist}`;
+  }
+  const meters = n / 100;
+  return `${meters > 0 ? '+' : ''}${meters.toFixed(2)}`;
+}
