@@ -1,598 +1,136 @@
-import { WallType, formatCoordinate, toAlgebraic, parseAlgebraic } from '../lib/gameLogic.js';
+/**
+ * Playable board — AceV13.1.html 17×17 groove grid (cells + wall grooves).
+ * Rules: pawns on 9×9 nodes, walls only in grooves, legality via QuoridorBoard (BFS).
+ */
+
+import { parseAlgebraic, toAlgebraic } from '../lib/gameLogic.js';
 import { playerColorName } from '../lib/playerColors.js';
-import {
-  gridIndexToCanonicalCell,
-  gridIndexToCanonicalWall,
-  canonicalCellToAlgebraic,
-  canonicalWallToAlgebraic,
-} from '../game/coordinates.js';
 import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import {
-  blockedEdgesFromCanonicalWalls,
-  canonicalStateFromBoard,
-  findCanonicalPathToGoal,
-  toAlgebraicSquare,
-  canonicalEdgeKey,
-} from '../lib/canonicalState.js';
+  viewMove,
+  wallSlotsFromBoard,
+  engineMoveToAlgebraic,
+  algebraicToEngineMove,
+  pawnCellFromCoordinate,
+} from '../lib/aceBoardCodec.js';
 import {
-  screenRowIndices,
-  screenColIndices,
-  screenRowLabel,
-  screenColumnLabel,
-} from '../lib/screenTransform.js';
-import {
-  catSquareOverlay,
-  catWallOutlineColor,
-  catSquareIndex,
-  isSquareSkipped,
-} from '../lib/catHeatmap.js';
-import {
-  lmrDepthStyle,
-  lmrDisplayText,
-  lmrEffortBarPct,
-  lmrEntryWorthShowing,
-  lmrSubLabel,
-  lmrWallOutlineColor,
-} from '../lib/lmrHeatmap.js';
+  applyGridPos,
+  cellIndexFromGrid,
+  wallGridFromSlot,
+} from '../lib/aceBoardGrid.js';
 import './board.css';
 
-const SQUARE_TRACK = '9fr';
-const WALL_TRACK = '2fr';
-
-function buildGridTracks(count) {
-  return Array.from({ length: count }, (_, index) => (index % 2 === 0 ? SQUARE_TRACK : WALL_TRACK)).join(' ');
-}
-
-export function renderBoard(container, state, controller) {
-  const {
-    board,
-    validActions,
-    playerPositions,
-    wallsRemaining,
-    winner,
-    isDraw,
-    playerToMove,
-    settings,
-    engineStatus,
-    engineErrors,
-    aiThinking,
-    uiMode,
-    catViz,
-    lmrViz,
-  } = state;
-
-  const numRows = board.numRows();
-  const numCols = board.numColumns();
-  const validKeys = new Set(validActions.map((action) => toAlgebraic(action)));
-
-  const wallOwners = new Map();
-  for (const [playerNum, coordinate, wallType] of state.wallsByPlayer) {
-    wallOwners.set(toAlgebraic({ coordinate, wallType }), playerNum);
-  }
-
-  const lastKey = state.lastAction ? toAlgebraic(state.lastAction) : null;
-  const freePlay = uiMode === 'analysis';
-  const canInteract =
-    !winner &&
-    !aiThinking &&
-    uiMode !== 'replay' &&
-    (freePlay || controller.session.isHumanTurn(settings.players));
-  const showCat = settings.showCatVision && catViz && uiMode !== 'replay';
-  const showLmr = settings.showLmrVision && lmrViz && uiMode !== 'replay';
-  const showCoords = settings.displayCoordinates;
-  const showWallCounts = settings.displayRemainingWalls;
-  const isRotated = settings.rotateBoard;
-  const debugParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const debugEdges = debugParams?.get('debugEdges') === '1';
-  const debugPath = debugParams?.get('debugPath') === '1';
-
-  container.innerHTML = '';
-  container.className = 'board-panel';
-
-  const boardShell = document.createElement('div');
-  boardShell.className =
-    'board' +
-    (isRotated ? ' board--rotate' : '') +
-    (showCat ? ' board--cat' : '') +
-    (showLmr ? ' board--lmr' : '') +
-    (freePlay ? ' board--freeplay' : '');
-
-  const engineStateP1 = document.createElement('div');
-  engineStateP1.className = 'engine-state engine-state--p1';
-  engineStateP1.appendChild(
-    renderTurnIndicator(1, playerToMove, settings.players[0], engineStatus, engineErrors, aiThinking, winner, freePlay),
-  );
-
-  const engineStateP2 = document.createElement('div');
-  engineStateP2.className = 'engine-state engine-state--p2';
-  engineStateP2.appendChild(
-    renderTurnIndicator(2, playerToMove, settings.players[1], engineStatus, engineErrors, aiThinking, winner, freePlay),
-  );
-
-  const coordLabelsRow = renderCoordinateLabels('row', numRows, showCoords, controller, isRotated);
-  const coordLabelsCol = renderCoordinateLabels('col', numCols, showCoords, controller, isRotated);
-
-  const wallMarksP1 = renderWallMarks(1, wallsRemaining[0], showWallCounts, controller);
-  const wallMarksP2 = renderWallMarks(2, wallsRemaining[1], showWallCounts, controller);
-
-  const grid = document.createElement('div');
-  grid.className = 'board-grid';
-  grid.style.gridTemplateColumns = buildGridTracks(numCols * 2 - 1);
-  grid.style.gridTemplateRows = buildGridTracks(numRows * 2 - 1);
-
-  for (const p of screenRowIndices(numRows, isRotated)) {
-    for (const h of screenColIndices(numCols, isRotated)) {
-      grid.appendChild(
-        renderBoardCell({
-          p,
-          h,
-          numRows,
-          numCols,
-          isFlipped: isRotated,
-          playerPositions,
-          validKeys,
-          wallOwners,
-          lastKey,
-          canInteract,
-          playerToMove,
-          catViz: showCat ? catViz : null,
-          lmrViz: showLmr ? lmrViz : null,
-        }),
-      );
-    }
-  }
-
-  // Best-move hint ghost — only while engine streams live info with identity checks
-  if (state.settings?.showBestMoveHint !== false) {
-    const bestMoveKey = resolveLiveBestMoveKey(state, { validActions });
-    if (bestMoveKey && bestMoveKey !== lastKey) {
-      renderBestMoveGhost(grid, bestMoveKey, state.playerToMove);
-    }
-  }
-
-  if (debugEdges || debugPath) {
-    const canon = canonicalStateFromBoard(board);
-    if (debugEdges) {
-      renderDebugBlockedEdges(grid, blockedEdgesFromCanonicalWalls(canon));
-    }
-    if (debugPath) {
-      renderDebugGoalPath(grid, findCanonicalPathToGoal(canon, 'white'), 'white');
-      renderDebugGoalPath(grid, findCanonicalPathToGoal(canon, 'black'), 'black');
-    }
-  }
-
-  boardShell.append(
-    engineStateP1,
-    engineStateP2,
-    wallMarksP1,
-    wallMarksP2,
-    coordLabelsRow,
-    coordLabelsCol,
-    grid,
-  );
-
-  if (isDraw && !state.terminalOverlayDismissed) {
-    boardShell.appendChild(renderTerminalOverlay(
-      'Draw — threefold repetition',
-      controller,
-    ));
-  } else if (winner && !state.terminalOverlayDismissed) {
-    boardShell.appendChild(renderTerminalOverlay(
-      `${playerColorName(winner)} wins!`,
-      controller,
-    ));
-  }
-
-  container.appendChild(boardShell);
-
-  wireBoardPointerInput(boardShell, { canInteract, controller });
-}
-
-function wireBoardPointerInput(boardShell, { canInteract, controller }) {
-  if (!canInteract) {
-    return;
-  }
-
-  let activePointerId = null;
-  let previewEl = null;
-
-  const clearPreview = () => {
-    previewEl?.classList.remove(
-      'board-cell__square--drag-preview',
-      'board-cell__wall--drag-preview',
-    );
-    previewEl = null;
-  };
-
-  const actionNodeFromTarget = (target) => target?.closest?.('[data-action]') ?? null;
-
-  const setPreview = (actionNode) => {
-    clearPreview();
-    if (!actionNode || actionNode.dataset.isValid !== 'true') {
-      return;
-    }
-    previewEl =
-      actionNode.querySelector('.board-cell__square, .board-cell__wall') ?? actionNode;
-    previewEl.classList.add(
-      previewEl.classList.contains('board-cell__wall')
-        ? 'board-cell__wall--drag-preview'
-        : 'board-cell__square--drag-preview',
-    );
-  };
-
-  const submitAction = (actionNode) => {
-    if (!actionNode || actionNode.dataset.isValid !== 'true') {
-      return;
-    }
-    const actionKey = actionNode.dataset.action;
-    if (!actionKey) {
-      return;
-    }
-    if (actionKey.length === 2) {
-      controller.tryAction({ coordinate: parseCoord(actionKey) });
-      return;
-    }
-    const wallType = actionKey[2] === 'h' ? WallType.Horizontal : WallType.Vertical;
-    controller.tryAction({
-      coordinate: parseCoord(actionKey.slice(0, 2)),
-      wallType,
-    });
-  };
-
-  boardShell.addEventListener('pointerdown', (event) => {
-    const actionNode = actionNodeFromTarget(event.target);
-    if (!actionNode || actionNode.dataset.isValid !== 'true') {
-      return;
-    }
-    activePointerId = event.pointerId;
-    boardShell.classList.add('board--dragging');
-    boardShell.setPointerCapture(activePointerId);
-    setPreview(actionNode);
-    event.preventDefault();
-  });
-
-  boardShell.addEventListener('pointermove', (event) => {
-    if (activePointerId == null || event.pointerId !== activePointerId) {
-      return;
-    }
-    const under = document.elementFromPoint(event.clientX, event.clientY);
-    setPreview(actionNodeFromTarget(under));
-    event.preventDefault();
-  });
-
-  const finishDrag = (event) => {
-    if (activePointerId == null || event.pointerId !== activePointerId) {
-      return;
-    }
-    try {
-      boardShell.releasePointerCapture(activePointerId);
-    } catch {
-      /* already released */
-    }
-    boardShell.classList.remove('board--dragging');
-    const under = document.elementFromPoint(event.clientX, event.clientY);
-    const actionNode = actionNodeFromTarget(under);
-    clearPreview();
-    activePointerId = null;
-    submitAction(actionNode);
-  };
-
-  boardShell.addEventListener('pointerup', finishDrag);
-  boardShell.addEventListener('pointercancel', (event) => {
-    if (activePointerId == null || event.pointerId !== activePointerId) {
-      return;
-    }
-    try {
-      boardShell.releasePointerCapture(activePointerId);
-    } catch {
-      /* already released */
-    }
-    boardShell.classList.remove('board--dragging');
-    clearPreview();
-    activePointerId = null;
+function boardStructureKey(state) {
+  return JSON.stringify({
+    rotate: state.settings?.rotateBoard,
+    showWalls: state.settings?.displayRemainingWalls,
   });
 }
 
-function renderTerminalOverlay(message, controller) {
-  const banner = document.createElement('div');
-  banner.className = 'winner-banner board-terminal-overlay';
-  banner.setAttribute('role', 'dialog');
-  banner.setAttribute('aria-modal', 'true');
-
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'board-terminal-overlay__close';
-  closeBtn.setAttribute('aria-label', 'Close');
-  closeBtn.textContent = '✕';
-
-  const msg = document.createElement('span');
-  msg.textContent = message;
-
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'btn btn--primary winner-banner__newgame';
-  btn.textContent = 'New game';
-  btn.addEventListener('click', () => controller._openPlayerDialog?.({ mode: 'newgame' }));
-
-  const cancelDialog = () => controller.dismissTerminalOverlay?.();
-
-  closeBtn.addEventListener('click', cancelDialog);
-  banner.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      cancelDialog();
-    }
-  });
-  banner.tabIndex = -1;
-  setTimeout(() => banner.focus(), 0);
-
-  banner.append(closeBtn, msg, btn);
-  return banner;
+function liveGhostKey(state, validActions) {
+  if (state.settings?.showBestMoveHint === false) {
+    return '';
+  }
+  return resolveLiveBestMoveKey(state, { validActions }) ?? '';
 }
 
-function renderBoardCell({
-  p,
-  h,
-  numRows,
-  numCols,
-  isFlipped,
-  playerPositions,
-  validKeys,
-  wallOwners,
-  lastKey,
-  canInteract,
-  playerToMove,
-  catViz,
-  lmrViz,
-}) {
-  const isEvenRow = p % 2 === 0;
-  const isEvenCol = h % 2 === 0;
-
-  const cellCoord = gridIndexToCanonicalCell(h, p, numRows, numCols, isFlipped);
-  const wallAnchor = cellCoord
-    ? null
-    : gridIndexToCanonicalWall(h, p, numRows, numCols, isFlipped);
-
-  let cellType;
-  if (cellCoord) {
-    cellType = 'square';
-  } else if (wallAnchor) {
-    cellType = wallAnchor.wallType === 'h' ? 'horizontalWall' : 'verticalWall';
-  } else {
-    cellType = 'wallIntersection';
-  }
-
-  const cell = document.createElement('div');
-  cell.dataset.cellType = cellType;
-
-  if (cellType === 'square') {
-    const algebraic = canonicalCellToAlgebraic(cellCoord.x, cellCoord.y);
-    const coordinate = { row: algebraic.row, column: algebraic.column };
-    cell.dataset.coordinate = formatCoordinate(coordinate);
-    const key = formatCoordinate(coordinate);
-    const pawnPlayer = playerPositions.findIndex(
-      (pos) => pos.row === coordinate.row && pos.column === coordinate.column,
-    );
-    const isValid = validKeys.has(key) && canInteract && pawnPlayer < 0;
-    const isPrev = lastKey === key;
-    const engineRow = cellCoord.y;
-    const engineCol = cellCoord.x;
-    const sqIdx = catSquareIndex(engineRow, engineCol);
-    const heat = catViz?.squares?.[sqIdx] ?? 0;
-    const reachable =
-      catViz?.reachable == null ? true : catViz.reachable[sqIdx] === true;
-    const skipped = catViz && isSquareSkipped(reachable);
-    const overlay = catViz
-      ? catSquareOverlay(heat, reachable, {
-        coldCm: catViz.coldCm,
-        hotCm: catViz.hotCm,
-        maxCm: catViz.maxCm,
-      })
-      : null;
-
-    const square = document.createElement('div');
-    square.className = 'board-cell__square';
-    square.classList.toggle('board-cell__square--prev', isPrev);
-    square.classList.toggle('board-cell__square--valid', isValid);
-    const lmrEntry = lmrViz?.moveIndex?.get(key);
-    if (lmrViz && lmrEntry?.kind === 'pawn' && lmrEntryWorthShowing(lmrEntry, lmrViz)) {
-      square.classList.add('board-cell__square--lmr');
-      const style = lmrDepthStyle(lmrEntry, lmrViz);
-      const effort = lmrEffortBarPct(lmrEntry, lmrViz);
-      const tint = document.createElement('div');
-      tint.className = 'board-cell__lmr-tint';
-      tint.style.backgroundColor = style.fill;
-      square.appendChild(tint);
-      if (effort > 0) {
-        const bar = document.createElement('div');
-        bar.className = 'board-cell__lmr-effort-bar';
-        bar.style.setProperty('--lmr-effort', `${effort}%`);
-        square.appendChild(bar);
-      }
-      const val = document.createElement('span');
-      val.className =
-        'board-cell__lmr-val' + (style.textLight ? ' board-cell__lmr-val--light' : '');
-      val.textContent = lmrDisplayText(lmrEntry, lmrViz);
-      square.appendChild(val);
-      const sub = lmrSubLabel(lmrEntry, lmrViz);
-      if (sub) {
-        const subEl = document.createElement('span');
-        subEl.className = 'board-cell__lmr-sub';
-        subEl.textContent = sub;
-        square.appendChild(subEl);
-      }
-      const mode = lmrViz.shallow ? 'pre-search plan' : 'searched';
-      square.title = `LMR ${mode}: ${style.label} · #${lmrEntry.order + 1}${lmrEntry.reSearched ? ' · re-search' : ''}`;
-    }
-
-    if (catViz) {
-      square.classList.add('board-cell__square--cat');
-      if (skipped) {
-        square.classList.add('board-cell__square--skipped');
-      }
-      if (overlay) {
-        const tint = document.createElement('div');
-        tint.className = 'board-cell__cat-tint';
-        tint.style.backgroundColor = overlay.fill;
-        square.appendChild(tint);
-      }
-      // Raw engine heat in centi-squares — exactly what search sees, no scaling.
-      if (!skipped && heat > 0) {
-        const cold = catViz.coldCm ?? 60;
-        const hot = catViz.hotCm ?? 160;
-        const val = document.createElement('span');
-        val.className =
-          'board-cell__cat-val ' +
-          (heat >= hot
-            ? 'board-cell__cat-val--hot'
-            : heat >= cold
-              ? 'board-cell__cat-val--warm'
-              : 'board-cell__cat-val--cold');
-        val.textContent = String(heat);
-        square.appendChild(val);
-      }
-    }
-    square.dataset.action = key;
-    square.dataset.isValid = String(isValid);
-    if (catViz) {
-      const cold = catViz.coldCm ?? 60;
-      const hot = catViz.hotCm ?? 160;
-      square.title = skipped
-        ? 'Skipped — unreachable void'
-        : heat >= hot
-          ? `CAT hot ${heat} cm (tactical / no LMR)`
-          : heat >= cold
-            ? `CAT warm ${heat} cm (corridor)`
-            : heat > 0
-              ? `CAT cold ${heat} cm (LMR fringe)`
-              : 'Off corridor — cold';
-    }
-
-    if (pawnPlayer >= 0) {
-      const pawn = document.createElement('div');
-      pawn.className = `board-cell__pawn board-cell__pawn--player${pawnPlayer + 1}`;
-      square.appendChild(pawn);
-    }
-
-    cell.appendChild(square);
-    return cell;
-  }
-
-  if (cellType === 'horizontalWall' || cellType === 'verticalWall') {
-    const wallAction = canonicalWallToAlgebraic(wallAnchor.wx, wallAnchor.wy, wallAnchor.wallType);
-    const coordinate = wallAction.coordinate;
-    const wallType = wallAction.wallType === 'h' ? WallType.Horizontal : WallType.Vertical;
-    cell.dataset.coordinate = formatCoordinate(coordinate);
-    const key = toAlgebraic({ coordinate, wallType });
-    const owner = wallOwners.get(key);
-    const isValid = validKeys.has(key) && canInteract;
-    const isPrev = lastKey === key;
-    const wallCat = catViz?.wallIndex?.get(key);
-
-    const wall = document.createElement('div');
-    wall.className = 'board-cell__wall';
-    wall.classList.add(cellType === 'horizontalWall' ? 'board-cell__wall--h' : 'board-cell__wall--v');
-    wall.dataset.action = key;
-    wall.dataset.wallX = String(wallAnchor.wx);
-    wall.dataset.wallY = String(wallAnchor.wy);
-    wall.dataset.wallOrientation = wallAnchor.wallType;
-    wall.dataset.isValid = String(isValid);
-
-    if (owner) {
-      wall.classList.add('board-cell__wall--placed', `board-cell__wall--player${owner}`);
-    } else if (isValid) {
-      wall.classList.add('board-cell__wall--valid', `board-cell__wall--player${playerToMove}`);
-      cell.classList.add('board-cell--wall-valid');
-    }
-
-    cell.appendChild(wall);
-
-    const lmrWall = lmrViz?.moveIndex?.get(key);
-    if (lmrViz && lmrWall?.kind === 'wall' && !owner && lmrEntryWorthShowing(lmrWall, lmrViz)) {
-      const hint = document.createElement('div');
-      hint.className = 'board-cell__lmr-wall-hint';
-      const style = lmrDepthStyle(lmrWall, lmrViz);
-      hint.style.setProperty('--lmr-wall-color', lmrWallOutlineColor(lmrWall, lmrViz));
-      hint.style.backgroundColor = style.fill;
-      hint.dataset.lmrMode = style.mode ?? '';
-      const wallEffort = lmrEffortBarPct(lmrWall, lmrViz);
-      if (wallEffort > 0) {
-        hint.style.setProperty('--lmr-effort', `${wallEffort}%`);
-        hint.classList.add('board-cell__lmr-wall-hint--bar');
-      }
-      const tag = document.createElement('span');
-      tag.className = 'board-cell__lmr-wall-tag';
-      tag.textContent = lmrDisplayText(lmrWall, lmrViz);
-      hint.appendChild(tag);
-      const sub = lmrSubLabel(lmrWall, lmrViz);
-      if (sub) {
-        const subTag = document.createElement('span');
-        subTag.className = 'board-cell__lmr-wall-sub';
-        subTag.textContent = sub;
-        hint.appendChild(subTag);
-      }
-      const mode = lmrViz.shallow ? 'pre-search plan' : 'searched';
-      hint.title = `LMR ${mode}: ${style.label} · order ${lmrWall.order + 1}${lmrWall.reSearched ? ' · re-search' : ''}`;
-      cell.appendChild(hint);
-    } else if (catViz && wallCat && !owner) {
-      const hint = document.createElement('div');
-      hint.className = 'board-cell__cat-wall-hint';
-      if (wallCat.skip) {
-        hint.classList.add('board-cell__cat-wall-hint--skipped');
-      }
-      const scale = {
-        coldCm: catViz.coldCm,
-        hotCm: catViz.hotCm,
-        maxCm: catViz.maxCm,
-      };
-      const outline = catWallOutlineColor(wallCat.heat, scale);
-      const fill = catSquareOverlay(wallCat.heat, true, scale);
-      hint.style.setProperty('--cat-wall-color', outline);
-      if (fill) {
-        hint.style.setProperty('--cat-wall-fill', fill.fill);
-      }
-      if (wallCat.heat > 0) {
-        const tag = document.createElement('span');
-        tag.className = 'board-cell__cat-wall-tag';
-        tag.textContent = String(wallCat.heat);
-        hint.appendChild(tag);
-      }
-      hint.title = wallCat.skip
-        ? `CAT skipped (pruned)`
-        : wallCat.search
-          ? `CAT ${wallCat.heat} cm (searchable)`
-          : `CAT ${wallCat.heat} cm (cold fringe)`;
-      cell.appendChild(hint);
-    }
-  }
-
-  return cell;
+function addWallElement(boardEl, type, viewSlot, { preview, bad, ghost, owner }) {
+  const el = document.createElement('div');
+  el.className =
+    'wallpiece' +
+    (owner === 1 ? ' wallpiece--player1' : owner === 2 ? ' wallpiece--player2' : '') +
+    (preview ? ' preview' + (bad ? ' bad' : '') : '') +
+    (ghost ? ' ghost-pv' : '');
+  const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
+  applyGridPos(el, gr, gc, rowSpan, colSpan);
+  boardEl.appendChild(el);
+  return el;
 }
 
-function renderCoordinateLabels(axis, count, visible, controller, isFlipped = false) {
-  const wrap = document.createElement('div');
-  wrap.className =
-    'coord-labels coord-labels--' +
-    (axis === 'row' ? 'row' : 'col') +
-    (visible ? ' coord-labels--visible' : '');
-  wrap.addEventListener('click', () => controller.toggleDisplayCoordinates?.());
-
-  for (let index = 0; index < count; index++) {
-    if (index > 0) {
-      const spacer = document.createElement('div');
-      spacer.className = 'coord-labels__spacer';
-      wrap.appendChild(spacer);
-    }
-
-    const label = document.createElement('span');
-    label.className = 'coord-labels__label';
-    label.textContent = axis === 'row'
-      ? screenRowLabel(index, count, isFlipped)
-      : screenColumnLabel(index, isFlipped);
-    wrap.appendChild(label);
+function slotCandidates(gtype, r, c, ev, el) {
+  const rect = el.getBoundingClientRect();
+  if (gtype === 'h') {
+    const frac = (ev.clientX - rect.left) / rect.width;
+    const first = frac < 0.5 ? c - 1 : c;
+    const second = frac < 0.5 ? c : c - 1;
+    return [0, validSlot(r, first), validSlot(r, second)];
   }
+  if (gtype === 'v') {
+    const fracY = (ev.clientY - rect.top) / rect.height;
+    const first = fracY < 0.5 ? r - 1 : r;
+    const second = fracY < 0.5 ? r : r - 1;
+    return [1, validSlot(first, c), validSlot(second, c)];
+  }
+  return [0, validSlot(r, c), null];
 
-  return wrap;
+  function validSlot(rr, cc) {
+    return rr >= 0 && rr <= 7 && cc >= 0 && cc <= 7 ? rr * 8 + cc : null;
+  }
+}
+
+function pickWallSlot(gtype, r, c, ev, el, board, isFlipped) {
+  const cand = slotCandidates(gtype, r, c, ev, el);
+  const type = cand[0];
+  const wbase = type === 0 ? 100 : 200;
+  for (let i = 1; i <= 2; i++) {
+    if (cand[i] === null) {
+      continue;
+    }
+    const engineSlot = viewMove(wbase + cand[i], isFlipped) % 100;
+    const alg = engineMoveToAlgebraic(wbase + engineSlot);
+    if (board.isValid(parseAlgebraic(alg))) {
+      return { type, viewSlot: cand[i], legal: true, alg };
+    }
+  }
+  if (cand[1] !== null) {
+    const engineSlot = viewMove(wbase + cand[1], isFlipped) % 100;
+    const alg = engineMoveToAlgebraic(wbase + engineSlot);
+    const action = parseAlgebraic(alg);
+    if (!board.collidesWithExistingWall(action)) {
+      return { type, viewSlot: cand[1], legal: false, alg };
+    }
+  }
+  return null;
+}
+
+function buildBoardDom(boardEl) {
+  const cellEls = [];
+  const grooves = [];
+  for (let gr = 1; gr <= 17; gr++) {
+    for (let gc = 1; gc <= 17; gc++) {
+      const isCellRow = gr % 2 === 1;
+      const isCellCol = gc % 2 === 1;
+      const el = document.createElement('div');
+      applyGridPos(el, gr, gc);
+      if (isCellRow && isCellCol) {
+        el.className = 'cell';
+        const cell = cellIndexFromGrid(gr, gc);
+        el.dataset.cell = String(cell);
+        cellEls[cell] = el;
+      } else {
+        el.className = 'groove';
+        if (!isCellRow && isCellCol) {
+          el.dataset.gtype = 'h';
+          el.dataset.gr = String((gr - 2) / 2);
+          el.dataset.gc = String((gc - 1) / 2);
+        } else if (isCellRow && !isCellCol) {
+          el.dataset.gtype = 'v';
+          el.dataset.gr = String((gr - 1) / 2);
+          el.dataset.gc = String((gc - 2) / 2);
+        } else {
+          el.dataset.gtype = 'x';
+          el.dataset.gr = String((gr - 2) / 2);
+          el.dataset.gc = String((gc - 2) / 2);
+        }
+        grooves.push(el);
+      }
+      boardEl.appendChild(el);
+    }
+  }
+  const pawnEls = [document.createElement('div'), document.createElement('div')];
+  pawnEls[0].className = 'pawn p0';
+  pawnEls[1].className = 'pawn p1';
+  return { cellEls, grooves, pawnEls, wallEls: {} };
 }
 
 function renderWallMarks(playerNum, remaining, visible, controller) {
@@ -624,113 +162,296 @@ function renderWallMarks(playerNum, remaining, visible, controller) {
   return wrap;
 }
 
-function parseCoord(text) {
-  return { column: text[0], row: Number.parseInt(text[1], 10) };
-}
-
-/** Overlay a dashed ghost highlight on the best-move cell/wall element. */
-function renderBestMoveGhost(grid, moveKey, playerToMove) {
-  if (!moveKey) return;
-  const el = grid.querySelector(`[data-action="${CSS.escape(moveKey)}"]`);
-  if (!el) return;
-
-  const isWall = moveKey.endsWith('h') || moveKey.endsWith('v');
-  const ghost = document.createElement('div');
-  ghost.className = isWall ? 'bm-ghost bm-ghost--wall' : `bm-ghost bm-ghost--pawn bm-ghost--player${playerToMove}`;
-  el.appendChild(ghost);
-}
-
-function renderDebugBlockedEdges(grid, blockedEdgeSet) {
-  for (const edgeKey of blockedEdgeSet) {
-    const [a, b] = edgeKey.split('|');
-    const [ax, ay] = a.split(',').map(Number);
-    const [bx, by] = b.split(',').map(Number);
-    const squareA = toAlgebraicSquare({ x: ax, y: ay });
-    const squareB = toAlgebraicSquare({ x: bx, y: by });
-    for (const sq of [squareA, squareB]) {
-      const el = grid.querySelector(`[data-action="${CSS.escape(sq)}"]`);
-      if (!el) {
-        continue;
-      }
-      const marker = document.createElement('div');
-      marker.className = 'debug-edge-marker';
-      marker.title = `blocked ${squareA}<->${squareB}`;
-      el.appendChild(marker);
-    }
-  }
-}
-
-function renderDebugGoalPath(grid, path, player) {
-  if (!path?.length) {
+function syncWallRack(dom, state, controller) {
+  const rack = dom.wallRack;
+  if (!rack) {
     return;
   }
-  for (const cell of path) {
-    const key = toAlgebraicSquare(cell);
-    const el = grid.querySelector(`[data-action="${CSS.escape(key)}"]`);
-    if (!el) {
+  const { wallsRemaining, settings } = state;
+  const visible = settings.displayRemainingWalls;
+  const isFlipped = settings.rotateBoard;
+
+  rack.replaceChildren();
+  const top = renderWallMarks(isFlipped ? 1 : 2, wallsRemaining[isFlipped ? 0 : 1], visible, controller);
+  const bottom = renderWallMarks(isFlipped ? 2 : 1, wallsRemaining[isFlipped ? 1 : 0], visible, controller);
+  rack.append(top, bottom);
+}
+
+function renderTerminalOverlay(message, controller) {
+  const banner = document.createElement('div');
+  banner.className = 'ace-terminal-overlay';
+  banner.setAttribute('role', 'dialog');
+  banner.setAttribute('aria-modal', 'true');
+  banner.innerHTML =
+    `<span>${message}</span>` +
+    '<button type="button" class="btn btn--small ace-terminal-overlay__close">New game</button>';
+  banner.querySelector('button').addEventListener('click', () => {
+    controller.dismissTerminalOverlay?.();
+    controller._openPlayerDialog?.({ mode: 'newgame' });
+  });
+  return banner;
+}
+
+function syncBoardDom(dom, state, controller) {
+  const { board, validActions, playerPositions, settings, aiThinking, winner, isDraw, uiMode } =
+    state;
+
+  const isFlipped = settings.rotateBoard;
+  const { cellEls, pawnEls, wallEls } = dom;
+  const boardEl = dom.root;
+  const lastKey = state.lastAction ? toAlgebraic(state.lastAction) : null;
+  const freePlay = uiMode === 'analysis';
+  const canInteract =
+    !winner &&
+    !isDraw &&
+    !aiThinking &&
+    uiMode !== 'replay' &&
+    (freePlay || controller.session.isHumanTurn(settings.players));
+
+  const validKeys = new Set(validActions.map((a) => toAlgebraic(a)));
+  const wallOwners = new Map();
+  for (const [playerNum, coordinate, wallType] of state.wallsByPlayer ?? []) {
+    wallOwners.set(toAlgebraic({ coordinate, wallType }), playerNum);
+  }
+  const pawnValid = new Set();
+  for (const key of validKeys) {
+    if (key.length !== 2) {
       continue;
     }
-    const marker = document.createElement('div');
-    marker.className = `debug-path-marker debug-path-marker--${player}`;
-    marker.title = `${player} path to goal via ${key}`;
-    el.appendChild(marker);
+    const cell = pawnCellFromCoordinate(parseAlgebraic(key).coordinate);
+    pawnValid.add(viewMove(cell, isFlipped));
+  }
+
+  const whiteCell = pawnCellFromCoordinate(playerPositions[0]);
+  const blackCell = pawnCellFromCoordinate(playerPositions[1]);
+  cellEls[viewMove(whiteCell, isFlipped)]?.appendChild(pawnEls[0]);
+  cellEls[viewMove(blackCell, isFlipped)]?.appendChild(pawnEls[1]);
+
+  for (const key of Object.keys(wallEls)) {
+    wallEls[key].remove();
+    delete wallEls[key];
+  }
+
+  const { hw, vw } = wallSlotsFromBoard(board);
+  for (let slot = 0; slot < 64; slot++) {
+    if (hw[slot]) {
+      const viewSlot = viewMove(100 + slot, isFlipped) % 100;
+      const alg = engineMoveToAlgebraic(100 + slot);
+      wallEls[`h${slot}`] = addWallElement(boardEl, 0, viewSlot, {
+        preview: false,
+        owner: wallOwners.get(alg),
+      });
+    }
+    if (vw[slot]) {
+      const viewSlot = viewMove(200 + slot, isFlipped) % 100;
+      const alg = engineMoveToAlgebraic(200 + slot);
+      wallEls[`v${slot}`] = addWallElement(boardEl, 1, viewSlot, {
+        preview: false,
+        owner: wallOwners.get(alg),
+      });
+    }
+  }
+
+  cellEls.forEach((cell) => {
+    cell.classList.remove('hl', 'lastc', 'ghost-pawn');
+    cell.removeAttribute('data-action');
+  });
+  boardEl.querySelectorAll('.wallpiece.lastw, .wallpiece.ghost-pv').forEach((w) => {
+    w.classList.remove('lastw', 'ghost-pv');
+    if (w.classList.contains('preview')) {
+      w.remove();
+    }
+  });
+
+  if (lastKey) {
+    if (lastKey.length === 2) {
+      const cell = viewMove(pawnCellFromCoordinate(parseAlgebraic(lastKey).coordinate), isFlipped);
+      cellEls[cell]?.classList.add('lastc');
+    } else {
+      const move = algebraicToEngineMove(lastKey);
+      if (move >= 100) {
+        const k = (move < 200 ? 'h' : 'v') + (move % 100);
+        wallEls[k]?.classList.add('lastw');
+      }
+    }
+  }
+
+  const ghostKey = liveGhostKey(state, validActions);
+  if (ghostKey && ghostKey !== lastKey) {
+    if (ghostKey.length === 2) {
+      const cell = viewMove(pawnCellFromCoordinate(parseAlgebraic(ghostKey).coordinate), isFlipped);
+      const el = cellEls[cell];
+      if (el) {
+        el.classList.add('ghost-pawn');
+        el.dataset.action = ghostKey;
+      }
+    } else {
+      const move = algebraicToEngineMove(ghostKey);
+      if (move >= 100) {
+        const type = move < 200 ? 0 : 1;
+        const viewSlot = viewMove(move, isFlipped) % 100;
+        addWallElement(boardEl, type, viewSlot, {
+          preview: true,
+          bad: false,
+          ghost: true,
+        });
+      }
+    }
+  }
+
+  if (canInteract) {
+    for (const cellIdx of pawnValid) {
+      const cell = cellEls[cellIdx];
+      if (!cell) {
+        continue;
+      }
+      cell.classList.add('hl');
+      cell.dataset.action = engineMoveToAlgebraic(viewMove(cellIdx, isFlipped));
+    }
+    if (board.playerHasWalls()) {
+      dom.grooves.forEach((g) => g.classList.add('active'));
+    } else {
+      dom.grooves.forEach((g) => g.classList.remove('active'));
+    }
+  } else {
+    dom.grooves.forEach((g) => g.classList.remove('active'));
+  }
+
+  dom.previewEl?.remove();
+  dom.previewEl = null;
+
+  syncWallRack(dom, state, controller);
+
+  dom.overlay?.remove();
+  dom.overlay = null;
+  if (isDraw && !state.terminalOverlayDismissed) {
+    dom.overlay = renderTerminalOverlay('Draw — threefold repetition', controller);
+    boardEl.appendChild(dom.overlay);
+  } else if (winner && !state.terminalOverlayDismissed) {
+    dom.overlay = renderTerminalOverlay(`${playerColorName(winner)} wins!`, controller);
+    boardEl.appendChild(dom.overlay);
   }
 }
 
-function renderTurnIndicator(playerNum, playerToMove, playerType, engineStatus, engineErrors, aiThinking, winner, freePlay) {
-  const wrap = document.createElement('div');
-  wrap.className = 'turn-indicator';
-
-  if (winner || playerToMove !== playerNum) {
-    return wrap;
+function bindBoardInput(container, getState, controller) {
+  if (container._boardInputBound) {
+    return;
   }
+  container._boardInputBound = true;
 
-  if (freePlay || playerType === 'human') {
-    const dot = document.createElement('div');
-    dot.className = `turn-dot turn-dot--player${playerNum}`;
-    dot.title = 'Your turn';
-    wrap.appendChild(dot);
-    return wrap;
-  }
+  container.addEventListener('click', (ev) => {
+    const state = getState();
+    if (!state) {
+      return;
+    }
+    const isFlipped = state.settings.rotateBoard;
+    const cell = ev.target.closest('.quoridor-board .cell');
+    if (cell?.classList.contains('hl')) {
+      const alg = cell.dataset.action;
+      if (alg) {
+        controller.tryAction(parseAlgebraic(alg));
+      } else {
+        const engineCell = viewMove(Number(cell.dataset.cell), isFlipped);
+        controller.tryAction(parseAlgebraic(engineMoveToAlgebraic(engineCell)));
+      }
+      return;
+    }
+    const groove = ev.target.closest('.quoridor-board .groove');
+    if (!groove?.classList.contains('active')) {
+      return;
+    }
+    const pick = pickWallSlot(
+      groove.dataset.gtype,
+      Number(groove.dataset.gr),
+      Number(groove.dataset.gc),
+      ev,
+      groove,
+      state.board,
+      isFlipped,
+    );
+    if (pick?.legal) {
+      controller.tryAction(parseAlgebraic(pick.alg));
+    }
+  });
 
-  const seatIndex = playerNum - 1;
-  const status = engineStatus[seatIndex] ?? engineStatus[playerType] ?? 'idle';
-  const spinner = document.createElement('div');
-  spinner.className = 'engine-spinner';
-
-  const isError = status === 'error';
-  const isIdle  = !isError && !['pondering', 'searching', 'connecting'].includes(status) && !aiThinking;
-
-  if (isError || isIdle) {
-    const errMsg = engineErrors?.[seatIndex] ?? null;
-    const tipText = isError
-      ? (errMsg ? `⚠ Engine error:\n${errMsg}\n\nClick to copy error log` : '⚠ Engine error — click to copy log')
-      : '⚠ Engine idle on AI turn — click to copy log';
-
-    spinner.classList.add('engine-spinner--warn');
-    spinner.textContent = '⚠';
-    spinner.title = tipText;
-    spinner.style.cursor = 'pointer';
-    spinner.addEventListener('click', () => {
-      const logText = errMsg
-        ? `Engine error (seat ${seatIndex}, ${playerType}):\n${errMsg}`
-        : `Engine idle on seat ${seatIndex} (${playerType}) — no error message`;
-      navigator.clipboard.writeText(logText).catch(() => {});
-      spinner.textContent = '✓';
-      spinner.title = 'Log copied! Please send it to the developer.';
-      setTimeout(() => {
-        spinner.textContent = '⚠';
-        spinner.title = tipText;
-      }, 2500);
+  container.addEventListener('mousemove', (ev) => {
+    const state = getState();
+    const dom = container._boardDom;
+    if (!state || !dom || state.aiThinking || state.winner || state.uiMode === 'replay') {
+      dom?.previewEl?.remove();
+      if (dom) {
+        dom.previewEl = null;
+      }
+      return;
+    }
+    const groove = ev.target.closest('.quoridor-board .groove');
+    dom.previewEl?.remove();
+    dom.previewEl = null;
+    if (!groove?.classList.contains('active')) {
+      return;
+    }
+    const pick = pickWallSlot(
+      groove.dataset.gtype,
+      Number(groove.dataset.gr),
+      Number(groove.dataset.gc),
+      ev,
+      groove,
+      state.board,
+      state.settings.rotateBoard,
+    );
+    if (!pick) {
+      return;
+    }
+    dom.previewEl = addWallElement(dom.root, pick.type, pick.viewSlot, {
+      preview: true,
+      bad: !pick.legal,
+      owner: state.playerToMove,
     });
-  } else if (status === 'pondering') {
-    spinner.title = 'Pondering on opponent time...';
-  } else if (aiThinking || status === 'searching') {
-    spinner.title = 'Engine is thinking...';
-  } else if (status === 'connecting') {
-    spinner.title = 'Connecting to engine...';
+  });
+
+  container.addEventListener('mouseleave', () => {
+    const dom = container._boardDom;
+    dom?.previewEl?.remove();
+    if (dom) {
+      dom.previewEl = null;
+    }
+  });
+}
+
+export function renderBoard(container, state, controller) {
+  const structureKey = boardStructureKey(state);
+  const existing = container.querySelector('.quoridor-board');
+
+  if (existing && container.dataset.boardStructureKey === structureKey && container._boardDom) {
+    syncBoardDom(container._boardDom, state, controller);
+    return;
   }
 
-  wrap.appendChild(spinner);
-  return wrap;
+  container.innerHTML = '';
+  container.dataset.boardStructureKey = structureKey;
+  container.className = 'board-panel';
+
+  const gridWrap = document.createElement('div');
+  gridWrap.className = 'board-panel__grid-wrap';
+
+  const boardEl = document.createElement('div');
+  boardEl.className = 'quoridor-board';
+  boardEl.id = 'quoridor-board';
+
+  const wallRack = document.createElement('aside');
+  wallRack.className = 'board-wall-rack';
+  wallRack.setAttribute('aria-hidden', 'true');
+
+  const dom = buildBoardDom(boardEl);
+  dom.root = boardEl;
+  dom.previewEl = null;
+  dom.overlay = null;
+  dom.wallRack = wallRack;
+
+  gridWrap.appendChild(boardEl);
+  container.append(gridWrap, wallRack);
+  container._boardDom = dom;
+  bindBoardInput(container, () => controller.getState(), controller);
+
+  syncBoardDom(dom, state, controller);
 }

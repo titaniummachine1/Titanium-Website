@@ -507,16 +507,44 @@ class TitaniumSeatSession {
   }
 
   enqueue(line) {
-    this.chain = this.chain.then(() => {
-      if (!this.child) {
-        this.spawn();
-      }
-      return new Promise((resolve, reject) => {
-        this.pending = { resolve, reject };
-        this.child.stdin.write(`${line}\n`);
+    this.chain = this.chain
+      .catch(() => {
+        /* recover after interrupted go — next op must not stay wedged */
+      })
+      .then(() => {
+        if (!this.child) {
+          this.spawn();
+        }
+        return new Promise((resolve, reject) => {
+          this.pending = { resolve, reject };
+          try {
+            this.child.stdin.write(`${line}\n`);
+          } catch (err) {
+            this.pending = null;
+            reject(err);
+          }
+        });
       });
-    });
     return this.chain;
+  }
+
+  /** Kill an in-flight `go` on this seat only — other seats are unaffected. */
+  stopSearch(reason = 'stopped') {
+    const pending = this.pending;
+    if (!pending) {
+      return Promise.resolve(false);
+    }
+    this.pending = null;
+    this.onStderrLine = null;
+    pending.reject(new Error(reason));
+    if (this.child) {
+      try {
+        this.child.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+    }
+    return Promise.resolve(true);
   }
 
   reset() {
@@ -572,7 +600,7 @@ function destroySeatSession(seatId) {
   }
 }
 
-async function handleSessionOp(payload, res, wantsStream) {
+async function handleSessionOp(payload, res, wantsStream, req) {
   const seatId = String(payload.seatId ?? '');
   const op = String(payload.op ?? '');
   const engine = payload.engine ? normalizeGenmoveEngine(String(payload.engine)) : null;
@@ -608,6 +636,13 @@ async function handleSessionOp(payload, res, wantsStream) {
     return;
   }
 
+  if (op === 'stop') {
+    const stopped = await session.stopSearch('stop');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true, stopped }));
+    return;
+  }
+
   if (op === 'go') {
     const timeSec = Math.max(0.1, Number(payload.timeSec ?? payload.timeMs / 1000) || 10);
     const maxNodes = Math.max(1, Number(payload.maxNodes ?? payload.maxSimulations) || 2_000_000_000);
@@ -633,35 +668,58 @@ async function handleSessionOp(payload, res, wantsStream) {
       }
     };
 
-    const line = await session.go(timeSec, maxNodes, onStderr);
-    const match = /^bestmove\s+(\S+)/.exec(line);
-    if (!match || match[1] === '(none)') {
-      if (wantsStream) {
-        writeEvent({ type: 'error', error: `no legal move: ${line}` });
-        res.end();
-      } else {
-        res.statusCode = 500;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: `no legal move: ${line}` }));
-      }
-      return;
-    }
-
-    const stoppedBy = session.engine ?? 'minimax';
-    const payloadOut = {
-      type: 'bestmove',
-      algebraic: match[1],
-      stoppedBy,
+    const abortGo = () => {
+      void session.stopSearch('client disconnected');
     };
-
-    if (wantsStream) {
-      writeEvent(payloadOut);
-      res.end();
-      return;
+    if (req) {
+      req.on('close', abortGo);
     }
 
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ algebraic: match[1], stoppedBy }));
+    try {
+      const line = await session.go(timeSec, maxNodes, onStderr);
+      const match = /^bestmove\s+(\S+)/.exec(line);
+      if (!match || match[1] === '(none)') {
+        if (wantsStream) {
+          writeEvent({ type: 'error', error: `no legal move: ${line}` });
+          res.end();
+        } else {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: `no legal move: ${line}` }));
+        }
+        return;
+      }
+
+      const stoppedBy = session.engine ?? 'minimax';
+      const payloadOut = {
+        type: 'bestmove',
+        algebraic: match[1],
+        stoppedBy,
+      };
+
+      if (wantsStream) {
+        writeEvent(payloadOut);
+        res.end();
+        return;
+      }
+
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ algebraic: match[1], stoppedBy }));
+    } catch (err) {
+      if (wantsStream && !res.writableEnded) {
+        res.end();
+        return;
+      }
+      if (!res.headersSent) {
+        res.statusCode = 499;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: err.message ?? String(err) }));
+      }
+    } finally {
+      if (req) {
+        req.off('close', abortGo);
+      }
+    }
     return;
   }
 
@@ -766,7 +824,7 @@ export function titaniumProxyPlugin() {
             const payload = JSON.parse(body || '{}');
             const wantsStream =
               req.headers.accept?.includes('text/event-stream') || payload.stream === true;
-            await handleSessionOp(payload, res, wantsStream);
+            await handleSessionOp(payload, res, wantsStream, req);
           } catch (err) {
             if (!res.headersSent) {
               res.statusCode = 500;

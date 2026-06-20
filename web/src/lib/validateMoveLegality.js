@@ -11,6 +11,7 @@ export async function validateMoveLegality({
   historyTokens,
   positionKey,
   signal,
+  trustCanonicalOnly = false,
 }) {
   const canonicalSet =
     canonicalLegalMoves instanceof Set
@@ -21,6 +22,14 @@ export async function validateMoveLegality({
     return {
       ok: false,
       reason: 'canonical-illegal',
+      titanium: null,
+    };
+  }
+
+  if (trustCanonicalOnly) {
+    return {
+      ok: true,
+      reason: null,
       titanium: null,
     };
   }

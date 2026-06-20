@@ -9,7 +9,7 @@ import { GorisansonEngineClient, TitaniumEngineClient } from '../lib/localMctsEn
 import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
 import { useStaticEngineBackend } from '../lib/engineBackend.js';
 import { resolveOnBestMoveResult } from '../lib/onBestMoveResult.js';
-import { positionKeyFromActions, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
+import { positionKeyFromActions, resolveLiveBestMoveKey, pvFirstMoveFromLiveSearch } from '../lib/liveBestMove.js';
 import { positionKeyFromHistory as historyPositionKey } from '../lib/remoteSync.js';
 import {
   buildDiagnosticContext,
@@ -283,6 +283,8 @@ export class AppController {
     this._undoPaused = false;
     this._undoPauseTimer = null;
     this._playNowLock = false;
+    /** Serialize engine commits — concurrent applyEngineMove must not double-apply. */
+    this._engineApplyChain = Promise.resolve();
     this._terminalOverlayDismissed = false;
     this._lastDiagnostic = null;
     this.startupConfirmed = false;
@@ -304,12 +306,17 @@ export class AppController {
   getState() {
     const snapshot = this.session.getSnapshot();
     const distanceEval = naiveDistanceEval(this.session.board);
+    const terminal = snapshot.winner != null || snapshot.isDraw;
 
     return {
       ...snapshot,
       settings: { ...this.settings },
       engineStatus: { ...this.engineStatus },
       engineErrors: { ...this.engineErrors },
+      aiThinking: terminal ? false : this.aiThinking,
+      liveSearch: terminal ? null : this.liveSearch,
+      thinkingPlayerType: terminal ? null : this.thinkingPlayerType,
+      thinkingSeatIndex: terminal ? null : this.thinkingSeatIndex,
       eval: {
         p1: distanceEval.p1,
         margin: distanceEval.margin,
@@ -317,8 +324,6 @@ export class AppController {
         blackDist: distanceEval.blackDist,
         pv: this.eval.pv ?? [],
       },
-      liveSearch: this.liveSearch,
-      aiThinking: this.aiThinking,
       searchGeneration: this._activeSearchSeq,
       positionKey: this.currentPositionKey(),
       strengthLevelPresets: STRENGTH_LEVEL_PRESETS,
@@ -331,15 +336,13 @@ export class AppController {
         this.settings.playerAiSettings,
         this.engineConfigs,
       ),
-      thinkingPlayerType: this.thinkingPlayerType,
-      thinkingSeatIndex: this.thinkingSeatIndex,
       searchInfoLine: describeActiveSearchInfo(
         this.settings.players,
         this.searchInfoBySeat,
         this.engineConfigs,
         {
-          thinkingSeatIndex: this.thinkingSeatIndex,
-          aiThinking: this.aiThinking,
+          thinkingSeatIndex: terminal ? null : this.thinkingSeatIndex,
+          aiThinking: terminal ? false : this.aiThinking,
         },
       ),
       activeSearchInfo: this.thinkingSeatIndex != null
@@ -453,18 +456,18 @@ export class AppController {
     return this.settings.players[1 - humanSeat] !== PlayerType.Human;
   }
 
-  _cancelActiveAiSearch() {
-    if (this._activeAiAbort) {
+  _abortEngineSearch({ bumpRequestSeq = false, stoppedBy = 'cancelled', seatIndex = null } = {}) {
+    const seat = seatIndex ?? this.thinkingSeatIndex;
+    if (this._activeAiAbort && (seat == null || this.thinkingSeatIndex === seat)) {
       this._activeAiAbort.abort();
       this._activeAiAbort = null;
     }
-    const seat = this.thinkingSeatIndex;
     if (seat != null) {
-      this.getEngineForSeat(seat)?.cancelSearch?.();
+      void this._stopSeatEngineSearch(seat);
       this.lastThinkBySeat[seat] = buildThinkSeatSnapshot({
         engine: this.engineLabelForSeat(seat),
         live: false,
-        stoppedBy: 'cancelled',
+        stoppedBy,
         depthLog: this.searchInfoBySeat[seat]?.depthLog ?? [],
         searchDepth: this.searchInfoBySeat[seat]?.searchDepth,
         whiteDist: this.searchInfoBySeat[seat]?.whiteDist,
@@ -473,13 +476,37 @@ export class AppController {
         nodes: this.searchInfoBySeat[seat]?.nodes,
         simulations: this.searchInfoBySeat[seat]?.simulations,
       });
+      if (this.searchInfoBySeat[seat]) {
+        this.searchInfoBySeat[seat] = {
+          ...this.searchInfoBySeat[seat],
+          stoppedBy,
+        };
+      }
+      this.engineStatus[seat] = 'idle';
     }
-    this.aiThinking = false;
-    this.thinkingPlayerType = null;
-    this.thinkingSeatIndex = null;
-    this.liveSearch = null;
-    this._moveRequestSeq += 1;
-    this._activeSearchSeq = 0;
+    if (seat == null || this.thinkingSeatIndex === seat) {
+      this.aiThinking = false;
+      this.thinkingPlayerType = null;
+      this.thinkingSeatIndex = null;
+      this.liveSearch = null;
+    }
+    if (bumpRequestSeq) {
+      this._moveRequestSeq += 1;
+      this._activeSearchSeq = 0;
+    }
+  }
+
+  /** Stop search on one seat only — never touches the other engine client. */
+  async _stopSeatEngineSearch(seatIndex) {
+    const engine = this.getEngineForSeat(seatIndex);
+    if (!engine?.cancelSearch) {
+      return;
+    }
+    await engine.cancelSearch();
+  }
+
+  _cancelActiveAiSearch() {
+    this._abortEngineSearch({ bumpRequestSeq: true });
   }
 
   _undoPlyCount() {
@@ -2007,7 +2034,21 @@ export class AppController {
     this.lastCompletedThinkBySeat[seatIndex] = snap;
   }
 
-  async applyEngineMove({
+  async applyEngineMove(params) {
+    const prior = this._engineApplyChain;
+    let releaseApply;
+    this._engineApplyChain = prior.then(
+      () => new Promise((resolve) => { releaseApply = resolve; }),
+    );
+    await prior;
+    try {
+      return await this._applyEngineMoveLocked(params);
+    } finally {
+      releaseApply();
+    }
+  }
+
+  async _applyEngineMoveLocked({
     action,
     playerType,
     seatIndex,
@@ -2020,6 +2061,7 @@ export class AppController {
     gameGeneration,
     engine,
     validationSignal = null,
+    fromPlayNow = false,
   }) {
     const moveKey = toAlgebraic(action);
     const current = this.session.getSnapshot();
@@ -2152,6 +2194,7 @@ export class AppController {
       historyTokens,
       positionKey: currentPositionKey,
       signal: validationSignal ?? undefined,
+      trustCanonicalOnly: fromPlayNow,
     });
 
     if (!legality.ok) {
@@ -2317,6 +2360,8 @@ export class AppController {
       });
     }
     if (this.session.winner != null || this.session.isDraw) {
+      this._cancelActiveAiSearch();
+      this.stopAllPonders();
       this.engineErrors[seatIndex] = null;
       this.engineStatus[seatIndex] = 'idle';
       this.onChange?.();
@@ -2649,7 +2694,7 @@ export class AppController {
   }
 
   /**
-   * Stop current search and play the best move found so far.
+   * Stop current search and play the best move found so far (Stockfish-style: clock expired).
    */
   playNow() {
     if (this._playNowLock || !this.aiThinking) return;
@@ -2657,9 +2702,17 @@ export class AppController {
     if (seatIndex == null) return;
 
     const snapshot = this.session.getSnapshot();
+    const liveSearchSnap = this.liveSearch
+      ? {
+          ...this.liveSearch,
+          depthLog: [...(this.liveSearch.depthLog ?? [])],
+        }
+      : null;
+    const validKeys = new Set(snapshot.validActions.map((mv) => toAlgebraic(mv)));
+
     const stateForCheck = {
-      aiThinking: this.aiThinking,
-      liveSearch: this.liveSearch,
+      aiThinking: true,
+      liveSearch: liveSearchSnap,
       thinkingSeatIndex: seatIndex,
       winner: snapshot.winner,
       isDraw: snapshot.isDraw,
@@ -2669,7 +2722,20 @@ export class AppController {
       validActions: snapshot.validActions,
       searchGeneration: this._activeSearchSeq,
     };
-    const bestAlgebraic = resolveLiveBestMoveKey(stateForCheck);
+
+    let bestAlgebraic = resolveLiveBestMoveKey(stateForCheck);
+    if (!bestAlgebraic) {
+      const searchInfo = this.searchInfoBySeat[seatIndex] ?? {};
+      const fallback = pvFirstMoveFromLiveSearch({
+        ...(liveSearchSnap ?? {}),
+        depthLog: liveSearchSnap?.depthLog ?? searchInfo.depthLog ?? [],
+        rootMoves: liveSearchSnap?.rootMoves ?? searchInfo.rootMoves ?? [],
+        pv: liveSearchSnap?.pv,
+      });
+      if (fallback && validKeys.has(fallback)) {
+        bestAlgebraic = fallback;
+      }
+    }
     if (!bestAlgebraic) return;
 
     let action;
@@ -2679,9 +2745,7 @@ export class AppController {
       return;
     }
 
-    if (!snapshot.validActions.some((mv) => toAlgebraic(mv) === bestAlgebraic)) {
-      return;
-    }
+    if (!validKeys.has(bestAlgebraic)) return;
 
     const playerType = this.settings.players[seatIndex];
     const requestPly = snapshot.actions.length;
@@ -2693,25 +2757,60 @@ export class AppController {
     const requestSeq = this._moveRequestSeq;
 
     this._playNowLock = true;
-    this._cancelActiveAiSearch();
+    void (async () => {
+      try {
+        if (this._activeAiAbort && this.thinkingSeatIndex === seatIndex) {
+          this._activeAiAbort.abort();
+          this._activeAiAbort = null;
+        }
+        await this._stopSeatEngineSearch(seatIndex);
 
-    const validationController = new AbortController();
+        const si = this.searchInfoBySeat[seatIndex] ?? {};
+        this.lastThinkBySeat[seatIndex] = buildThinkSeatSnapshot({
+          engine: this.engineLabelForSeat(seatIndex),
+          live: false,
+          stoppedBy: 'time',
+          depthLog: si.depthLog ?? [],
+          searchDepth: si.searchDepth,
+          whiteDist: si.whiteDist,
+          blackDist: si.blackDist,
+          rootScore: si.rootScore,
+          nodes: si.nodes,
+          simulations: si.simulations,
+        });
+        this.searchInfoBySeat[seatIndex] = { ...si, stoppedBy: 'time' };
+        this.aiThinking = false;
+        this.thinkingPlayerType = null;
+        this.thinkingSeatIndex = null;
+        this.liveSearch = null;
+        this.engineStatus[seatIndex] = 'idle';
+        this.onChange?.();
 
-    void this.applyEngineMove({
-      action,
-      playerType,
-      seatIndex,
-      requestSeq,
-      requestPly,
-      requestPlayerToMove,
-      requestHistory,
-      requestPositionKey,
-      gameGeneration,
-      engine,
-      validationSignal: validationController.signal,
-    }).finally(() => {
-      this._playNowLock = false;
-    });
+        const result = await this.applyEngineMove({
+          action,
+          playerType,
+          seatIndex,
+          requestSeq,
+          requestPly,
+          requestPlayerToMove,
+          requestHistory,
+          requestPositionKey,
+          gameGeneration,
+          engine,
+          fromPlayNow: true,
+        });
+
+        if (result !== true) {
+          const reason = typeof result === 'string' ? result : 'play-now-failed';
+          this.engineErrors[seatIndex] = `Play now failed (${reason}) — search cancelled`;
+          this.engineStatus[seatIndex] = 'error';
+          this.onChange?.();
+          queueMicrotask(() => this.maybeRequestAiMove());
+        }
+      } finally {
+        this._playNowLock = false;
+      }
+    })();
   }
 
   /**

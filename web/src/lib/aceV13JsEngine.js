@@ -92,7 +92,7 @@ export class AceV13JsEngineClient {
     this.setStatus('idle');
   }
 
-  cancelSearch() {
+  async cancelSearch() {
     this.queuedRequest = null;
     this.pendingRequest = null;
     if (this.worker) {
@@ -107,7 +107,7 @@ export class AceV13JsEngineClient {
   }
 
   destroy() {
-    this.cancelSearch();
+    void this.cancelSearch();
     this.algebraicMoves = [];
   }
 

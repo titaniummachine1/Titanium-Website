@@ -7,6 +7,17 @@ export const TITANIUM_MATE_VALUE = 20_000;
 export const TITANIUM_MATE_THRESHOLD = TITANIUM_MATE_VALUE - 500;
 
 /**
+ * Convert engine mate plies to Quoridor "moves" for display (AceV13: ceil(plies / 2)).
+ * @param {number} plies
+ */
+export function quoridorMovesFromMatePlies(plies) {
+  if (plies <= 0) {
+    return 0;
+  }
+  return Math.ceil(plies / 2);
+}
+
+/**
  * @returns {{ dist: number, sign: 1 | -1 } | null}
  */
 export function mateInfo(score) {
@@ -44,7 +55,7 @@ export function formatEngineScore(score) {
     if (mate.dist === 0) {
       return `${sign}#`;
     }
-    return `${sign}M${mate.dist}`;
+    return `${sign}M${quoridorMovesFromMatePlies(mate.dist)}`;
   }
   const meters = n / 100;
   return `${meters > 0 ? '+' : ''}${meters.toFixed(2)}`;
@@ -58,8 +69,11 @@ export function formatScoreForCard(score) {
   const n = Number(score);
   const mate = mateInfo(n);
   if (mate) {
-    if (mate.dist === 0) return mate.sign > 0 ? 'Won!' : 'Lost';
-    return mate.sign > 0 ? `Win in ${mate.dist}` : `Lose in ${mate.dist}`;
+    if (mate.dist === 0) {
+      return mate.sign > 0 ? 'Won!' : 'Lost';
+    }
+    const moves = quoridorMovesFromMatePlies(mate.dist);
+    return mate.sign > 0 ? `Win in ${moves}` : `Lose in ${moves}`;
   }
   const meters = n / 100;
   return `${meters > 0 ? '+' : ''}${meters.toFixed(2)}`;

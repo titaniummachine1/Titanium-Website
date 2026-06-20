@@ -131,7 +131,7 @@ export class TitaniumWasmEngineClient {
   ponder() {}
   stopPonder() {}
 
-  cancelSearch() {
+  async cancelSearch() {
     this.queuedRequest = null;
     this.pendingRequest = null;
     if (this.worker) {
@@ -146,7 +146,7 @@ export class TitaniumWasmEngineClient {
   }
 
   destroy() {
-    this.cancelSearch();
+    void this.cancelSearch();
     this.algebraicMoves = [];
   }
 

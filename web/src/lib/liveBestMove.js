@@ -1,8 +1,9 @@
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
+import { canonicalPositionKeyFromActions } from './canonicalState.js';
 
-/** Current position fingerprint — must match live search snapshot. */
+/** Current position fingerprint — canonical board state, not move history alone. */
 export function positionKeyFromActions(actions) {
-  return actions.map((action) => toAlgebraic(action)).join('|');
+  return canonicalPositionKeyFromActions(actions);
 }
 
 function deepestDepthEntry(depthLog) {

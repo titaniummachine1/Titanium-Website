@@ -17,6 +17,7 @@ let passed = 0;
 let failed = 0;
 let fetchDelayMs = 0;
 let sessionCallCount = 0;
+let stopCallCount = 0;
 let goStreamBody = null;
 const originalFetch = globalThis.fetch;
 
@@ -46,6 +47,10 @@ function mockFetch() {
     if (String(url).includes('/api/titanium/session')) {
       sessionCallCount += 1;
       const body = JSON.parse(opts.body ?? '{}');
+      if (body.op === 'stop') {
+        stopCallCount += 1;
+        return { ok: true, json: async () => ({ ok: true, stopped: true }) };
+      }
       if (body.op === 'go') {
         goStreamBody = body;
         const stream = new ReadableStream({
@@ -90,8 +95,8 @@ async function runTests() {
     const client = makeClient();
     const controller = new AbortController();
     client._activeSearch = { requestId: 1, abortController: controller };
-    client.cancelSearch();
-    client.cancelSearch();
+    await client.cancelSearch();
+    await client.cancelSearch();
     assert(controller.signal.aborted, 'controller aborted');
     assert(client._activeSearch === null, 'active search cleared');
   }
@@ -101,6 +106,7 @@ async function runTests() {
     mockFetch();
     fetchDelayMs = 80;
     sessionCallCount = 0;
+    stopCallCount = 0;
     goStreamBody = null;
 
     const client = makeClient();
@@ -116,11 +122,12 @@ async function runTests() {
     });
 
     await sleep(10);
-    client.cancelSearch();
+    await client.cancelSearch();
     await sleep(200);
 
     assert(errorMessage == null, `no engine error banner (${errorMessage})`);
     assert(bestMove == null, 'cancelled request did not commit');
+    assert(stopCallCount >= 1, 'cancelSearch posts session stop');
     restoreFetch();
   }
 
@@ -134,6 +141,9 @@ async function runTests() {
     globalThis.fetch = async (url, opts = {}) => {
       if (String(url).includes('/api/titanium/session')) {
         const body = JSON.parse(opts.body ?? '{}');
+        if (body.op === 'stop') {
+          return { ok: true, json: async () => ({ ok: true, stopped: true }) };
+        }
         if (body.op === 'go') {
           return {
             ok: true,
@@ -158,7 +168,7 @@ async function runTests() {
       isFreshGame: false,
     });
     const firstSignal = client._activeSearch?.abortController?.signal;
-    client.cancelSearch();
+    await client.cancelSearch();
 
     client.requestMove({
       aiSettings: { wallClockSeconds: 8, visitsBudget: 0, strengthLevel: 2 },
@@ -188,6 +198,9 @@ async function runTests() {
     globalThis.fetch = async (url, opts = {}) => {
       if (String(url).includes('/api/titanium/session')) {
         const body = JSON.parse(opts.body ?? '{}');
+        if (body.op === 'stop') {
+          return { ok: true, json: async () => ({ ok: true, stopped: true }) };
+        }
         if (body.op === 'go') {
           return {
             ok: true,
@@ -212,7 +225,7 @@ async function runTests() {
       isFreshGame: false,
     });
     await sleep(5);
-    client.cancelSearch();
+    await client.cancelSearch();
     await sleep(120);
 
     assert(commits === 0, 'stale stream did not commit after cancel');

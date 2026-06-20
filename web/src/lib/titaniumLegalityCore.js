@@ -24,6 +24,7 @@ function canonicalCandidatesFromHistory(historyTokens) {
 }
 
 function titaniumAcceptsMove(historyTokens, move) {
+  // Fresh engine per candidate — never reuse one board across make_move probes.
   const engine = new WasmEngine(false);
   engine.reset();
   const history = historyTokens.map(String);
@@ -41,6 +42,36 @@ function titaniumAcceptsMove(historyTokens, move) {
     return engine.make_move(String(move));
   } catch {
     return false;
+  }
+}
+
+function replayHistoryPlies(history) {
+  const engine = new WasmEngine(false);
+  engine.reset();
+  if (history.length === 0) {
+    return { engine, plies: 0 };
+  }
+  const plies = engine.position(history.join(' '));
+  return { engine, plies };
+}
+
+/** Ensure WASM position replay is unchanged after filtering all canonical candidates. */
+export function assertEnumerationPreservesPosition(historyTokens) {
+  const history = historyTokens.map(String);
+  const { plies: pliesBefore } = replayHistoryPlies(history);
+  if (history.length > 0 && pliesBefore !== history.length) {
+    throw invalidPositionError(
+      `Titanium position replay mismatch: expected ${history.length} plies, got ${pliesBefore}`,
+    );
+  }
+
+  enumerateTitaniumLegalMoves(history);
+
+  const { plies: pliesAfter } = replayHistoryPlies(history);
+  if (pliesAfter !== pliesBefore) {
+    throw new Error(
+      `enumeration mutated position: plies before ${pliesBefore} after ${pliesAfter}`,
+    );
   }
 }
 

@@ -4,6 +4,7 @@ import {
   toAlgebraic,
   isWallAction,
   formatCoordinate,
+  bothPlayersReachGoals,
 } from '../lib/gameLogic.js';
 
 import { PlayerType } from '../lib/engineConfig.js';
@@ -53,7 +54,8 @@ export class GameSession {
       playerToMove: this.board.playerToMove(),
       playerPositions: this.board._playerPositions.map((coordinate) => ({ ...coordinate })),
       wallsRemaining: this.board._wallsRemaining.map((count) => count),
-      validActions: this.board.validActions(),
+      validActions:
+        this.winner !== null || this.isDraw ? [] : this.board.validActions(),
       isTerminal: this.winner !== null || this.isDraw,
       canRedo: this.futureActions.length > 0,
     };
@@ -93,6 +95,17 @@ export class GameSession {
 
     if (!this.board.isValid(action)) {
       return false;
+    }
+
+    if (isWallAction(action)) {
+      const trial = new QuoridorBoard();
+      for (const prior of this.actions) {
+        trial.takeAction(prior);
+      }
+      trial.takeAction(action);
+      if (!bothPlayersReachGoals(trial)) {
+        return false;
+      }
     }
 
     const actingPlayer = this.board.playerToMove();
@@ -170,6 +183,23 @@ export class GameSession {
     this.futureActions = [];
 
     for (const action of actions) {
+      if (!this.board.isValid(action)) {
+        throw new Error(
+          `illegal move ${toAlgebraic(action)} at ply ${this.actions.length + 1}`,
+        );
+      }
+      if (isWallAction(action)) {
+        const trial = new QuoridorBoard();
+        for (const prior of this.actions) {
+          trial.takeAction(prior);
+        }
+        trial.takeAction(action);
+        if (!bothPlayersReachGoals(trial)) {
+          throw new Error(
+            `wall ${toAlgebraic(action)} at ply ${this.actions.length + 1} blocks all paths to goal`,
+          );
+        }
+      }
       const actingPlayer = this.board.playerToMove();
       this.board.takeAction(action);
       this.actions.push(structuredClone(action));

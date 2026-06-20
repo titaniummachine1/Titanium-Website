@@ -14,6 +14,8 @@ import {
   canonicalWallToAlgebraic,
 } from '../game/coordinates.js';
 import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
+import { canonicalPositionKeyFromActions } from '../lib/canonicalState.js';
+import { parseAlgebraic } from '../lib/gameLogic.js';
 import { screenRowIndices, screenColIndices } from '../lib/screenTransform.js';
 import { toAlgebraic } from '../lib/gameLogic.js';
 
@@ -79,6 +81,8 @@ const back = gridIndexToCanonicalCell(h, p, numRows, numCols, false);
 assertEqual(`${back.x},${back.y}`, '4,2', 'e3 grid mapping');
 assertEqual(`${e3.column}${e3.row}`, 'e3', 'e3 algebraic');
 
+const afterE2Key = canonicalPositionKeyFromActions([parseAlgebraic('e2')]);
+
 console.log('\n[highlight] stale PV rejected');
 assertEqual(
   resolveLiveBestMoveKey({
@@ -95,7 +99,7 @@ assertEqual(
       seatIndex: 0,
       playerType: 'titanium-minimax',
       requestSeq: 1,
-      positionKey: 'e2',
+      positionKey: 'e2-only-history',
       pv: 'e3',
     },
   }),
@@ -121,7 +125,7 @@ const pawnState = {
     seatIndex: 0,
     playerType: 'ka-ai',
     requestSeq: 3,
-    positionKey: 'e2',
+    positionKey: afterE2Key,
     depthLog: [{ depth: 2, pv: 'h5' }],
   },
 };

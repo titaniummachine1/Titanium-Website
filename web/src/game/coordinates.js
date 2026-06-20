@@ -214,19 +214,27 @@ export function canonicalCellToGridIndex(x, y, numRows, numCols, isFlipped = fal
 
 // ── Screen transform for flipped board ───────────────────────────────────
 
+/** Map canonical cell to screen row/column (0 = top/left). */
+export function canonicalCellToScreen({ x, y }, isFlipped) {
+  if (isFlipped) {
+    return { screenRow: y, screenColumn: BOARD_SIZE - 1 - x };
+  }
+  return { screenRow: BOARD_SIZE - 1 - y, screenColumn: x };
+}
+
+export function screenCellToCanonical({ screenRow, screenColumn }, isFlipped) {
+  if (isFlipped) {
+    return { x: BOARD_SIZE - 1 - screenColumn, y: screenRow };
+  }
+  return { x: screenColumn, y: BOARD_SIZE - 1 - screenRow };
+}
+
 /**
- * Transform a canonical cell coordinate for screen display.
- * When isFlipped=true the board is rotated 180°; the algebraic coordinate
- * is unchanged but the grid position changes.
- *
- * Returns { screenX: 0..numCols-1, screenY: 0..numRows-1 }
- * where screenY=0 is at the top of the screen.
+ * @deprecated use canonicalCellToScreen
  */
 export function flipScreenTransform(x, y, numRows, numCols, isFlipped) {
-  if (isFlipped) {
-    return { screenX: numCols - 1 - x, screenY: numRows - 1 - y };
-  }
-  return { screenX: x, screenY: y };
+  const { screenRow, screenColumn } = canonicalCellToScreen({ x, y }, isFlipped);
+  return { screenX: screenColumn, screenY: screenRow };
 }
 
 // ── Move encoding ────────────────────────────────────────────────────────
@@ -255,6 +263,37 @@ export function decodeMove(algebraic) {
     return { coordinate, wallType: algebraic[2] };
   }
   return { coordinate };
+}
+
+/**
+ * Map canonical wall anchor to board-grid groove indices (h, p).
+ * Inverse of gridIndexToCanonicalWall — used to paint placed walls directly.
+ */
+export function canonicalWallAnchorToGrid(
+  wx,
+  wy,
+  wallType,
+  numRows = BOARD_SIZE,
+  numCols = BOARD_SIZE,
+  isFlipped = false,
+) {
+  if (wx < 0 || wx >= WALL_GRID_SIZE || wy < 0 || wy >= WALL_GRID_SIZE) {
+    return null;
+  }
+  const isHorizontal = wallType === 'h' || wallType === 'horizontal';
+  if (!isFlipped) {
+    if (isHorizontal) {
+      return { h: wx * 2, p: (numRows - 1 - (wy + 1)) * 2 + 1, orientation: 'h' };
+    }
+    return { h: wx * 2 + 1, p: (numRows - 1 - wy) * 2, orientation: 'v' };
+  }
+  if (isHorizontal) {
+    const cellX = numCols - 1 - wx;
+    return { h: cellX * 2, p: wy * 2 + 1, orientation: 'h' };
+  }
+  const leftX = wx + 1;
+  const cellX = numCols - 1 - leftX;
+  return { h: cellX * 2 + 1, p: wy * 2, orientation: 'v' };
 }
 
 // ── Blocked-edge query helper ────────────────────────────────────────────

@@ -244,6 +244,8 @@ export function formatCanonicalGameLog({
   positionKey,
   blockedEdges,
   isFlipped,
+  winner = null,
+  isDraw = false,
   titaniumLegalMoves = null,
   titaniumResult = null,
 }) {
@@ -266,11 +268,32 @@ export function formatCanonicalGameLog({
   };
 
   const sideLabel = state.sideToMove === 1 ? 'White' : 'Black';
+  const whitePath = findCanonicalPathToGoal(state, 'white');
+  const blackPath = findCanonicalPathToGoal(state, 'black');
   const lines = [
     '=== GAME STATE ===',
     `moves (${history.length}): ${history.join(' ')}`,
     `positionKey: ${positionKey}`,
-    `sideToMove: ${sideLabel} (${state.sideToMove})`,
+  ];
+
+  if (winner === 1) {
+    lines.push('result: White wins');
+  } else if (winner === 2) {
+    lines.push('result: Black wins');
+  } else if (isDraw) {
+    lines.push('result: Draw (threefold repetition)');
+  }
+
+  const gameOver = winner != null || isDraw;
+  if (gameOver) {
+    const lastMove = history.length > 0 ? history[history.length - 1] : '?';
+    lines.push(`winningMove: ${lastMove} (ply ${history.length})`);
+    lines.push('sideToMove: (game over)');
+  } else {
+    lines.push(`sideToMove: ${sideLabel} (${state.sideToMove})`);
+  }
+
+  lines.push(
     `whitePawn: ${whitePawn}`,
     `blackPawn: ${blackPawn}`,
     `whiteWallsRemaining: ${state.wallsRemaining.white}`,
@@ -278,8 +301,15 @@ export function formatCanonicalGameLog({
     `horizontalWalls: ${horizontalWalls.join(' ') || '(none)'}`,
     `verticalWalls: ${verticalWalls.join(' ') || '(none)'}`,
     `blockedEdges: ${[...blockedEdges].map(formatEdge).sort().join(' ') || '(none)'}`,
-    `legalMoves (${legalMoves.length}): ${legalMoves.join(' ')}`,
-  ];
+    `whitePathToGoal: ${whitePath?.length ?? 0} steps`,
+    `blackPathToGoal: ${blackPath?.length ?? 0} steps`,
+  );
+
+  if (gameOver) {
+    lines.push('legalMoves: (none — game over)');
+  } else {
+    lines.push(`legalMoves (${legalMoves.length}): ${legalMoves.join(' ')}`);
+  }
 
   if (titaniumResult) {
     const line = formatTitaniumOracleLine(titaniumResult);

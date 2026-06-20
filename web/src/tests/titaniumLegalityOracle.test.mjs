@@ -22,6 +22,10 @@ import {
   TitaniumOracleStatus,
   unavailableTitaniumOracle,
 } from '../lib/titaniumOracleResult.js';
+import { assertEnumerationPreservesPosition, enumerateTitaniumLegalMoves } from '../lib/titaniumLegalityCore.js';
+import { WasmEngine } from '../wasm/titanium/titanium.js';
+import { readFileSync } from 'node:fs';
+import { initSync } from '../wasm/titanium/titanium.js';
 
 const wasmAvailable = existsSync(wasmModulePath());
 
@@ -157,6 +161,20 @@ if (wasmAvailable) {
   });
   assertEqual(freshResult.status, TitaniumOracleStatus.AVAILABLE, 'fresh signal succeeds');
   assertIncludes(freshResult.moves, 'e2', 'fresh signal contains e2');
+
+  console.log('\n[oracle] enumeration preserves position (fresh engine per candidate)');
+  initSync({ module: readFileSync(wasmModulePath()) });
+  assertEnumerationPreservesPosition([]);
+  assertEnumerationPreservesPosition(['e2']);
+  const afterEnum = enumerateTitaniumLegalMoves(['e2']);
+  assertEqual(afterEnum.length, 131, 'after enum still 131 moves');
+  assertIncludes(afterEnum, 'e8', 'e8 still legal after full enum');
+  assertIncludes(afterEnum, 'd9', 'd9 still legal after full enum');
+  assertIncludes(afterEnum, 'f9', 'f9 still legal after full enum');
+  const probe = new WasmEngine(false);
+  probe.reset();
+  const plies = probe.position('e2');
+  assertEqual(plies, 1, 'probe replay unchanged after enumeration');
 } else {
   console.log('\n[oracle] WASM binary missing — skipping live oracle tests');
   console.log(`  expected at: ${wasmModulePath()}`);

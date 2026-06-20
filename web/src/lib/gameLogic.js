@@ -13,6 +13,12 @@
  *   vd  → transformCoordinate
  */
 
+import {
+  blockedEdgesFromBoard,
+  pawnCanMoveFromBlocked,
+  pawnMovesFromBlocked,
+} from './blockedBoard.js';
+
 // ---------------------------------------------------------------------------
 // Directions & wall types
 // ---------------------------------------------------------------------------
@@ -236,34 +242,8 @@ class QuoridorBoard {
   }
 
   validPawnMoveActions() {
-    const moves = [];
-    const from = this._playerPositions[this._playerToMove - 1];
-
-    for (const direction of allDirections()) {
-      if (!this.pawnCanMove(from, direction)) {
-        continue;
-      }
-
-      const next = stepCoordinate(from, direction);
-
-      if (!this.hasPawn(next)) {
-        moves.push({ coordinate: next });
-        continue;
-      }
-
-      if (this.pawnCanMove(next, direction)) {
-        moves.push({ coordinate: stepCoordinate(next, direction) });
-        continue;
-      }
-
-      for (const side of perpendicularDirections(direction)) {
-        if (this.pawnCanMove(next, side)) {
-          moves.push({ coordinate: stepCoordinate(next, side) });
-        }
-      }
-    }
-
-    return moves;
+    const blocked = blockedEdgesFromBoard(this);
+    return pawnMovesFromBlocked(this, blocked);
   }
 
   validWallActions() {
@@ -345,45 +325,8 @@ class QuoridorBoard {
   }
 
   pawnCanMove(from, direction) {
-    const col = columnToIndex(from.column) - 1;
-    const row = from.row - 1;
-    const delta = {
-      [Direction.Up]: [1, 0],
-      [Direction.Down]: [-1, 0],
-      [Direction.Right]: [0, 1],
-      [Direction.Left]: [0, -1],
-    }[direction];
-    if (!delta) {
-      return false;
-    }
-    const [dr, dc] = delta;
-    const nr = row + dr;
-    const nc = col + dc;
-    if (nr < 0 || nr > 8 || nc < 0 || nc > 8) {
-      return false;
-    }
-    const jsFrom = row + 1;
-    const jsTo = nr + 1;
-
-    if (dr === 1 && dc === 0) {
-      return (
-        !this.hasHorizontalWallJs(jsFrom, col) &&
-        (col === 0 || !this.hasHorizontalWallJs(jsFrom, col - 1))
-      );
-    }
-    if (dr === -1 && dc === 0) {
-      return (
-        !this.hasHorizontalWallJs(jsTo, col) &&
-        (col === 0 || !this.hasHorizontalWallJs(jsTo, col - 1))
-      );
-    }
-    if (dr === 0 && dc === 1) {
-      return !this.hasVerticalWallJs(jsFrom, col) && !this.hasVerticalWallJs(row, col);
-    }
-    if (dr === 0 && dc === -1) {
-      return !this.hasVerticalWallJs(jsTo, nc) && !this.hasVerticalWallJs(nr, nc);
-    }
-    return false;
+    const blocked = blockedEdgesFromBoard(this);
+    return pawnCanMoveFromBlocked(blocked, from, direction);
   }
 
   /** Rust `has_horizontal` — js row 1..8, col 0..7. */

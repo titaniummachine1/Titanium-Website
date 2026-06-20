@@ -65,11 +65,17 @@ export class TitaniumEngineClient {
     this._syncChain = Promise.resolve();
   }
 
-  cancelSearch() {
+  async cancelSearch() {
     this.queuedRequest = null;
     const active = this._activeSearch;
     this._activeSearch = null;
     this.pendingRequest = null;
+    // Await server stop so this seat's session chain is free before the next ply.
+    try {
+      await this.sessionOp({ op: 'stop' });
+    } catch {
+      /* fetch may already be aborted */
+    }
     cancelActiveSearchRequest(active);
     this.setStatus('idle');
   }
@@ -79,12 +85,12 @@ export class TitaniumEngineClient {
   }
 
   destroy() {
-    this.cancelSearch();
+    void this.cancelSearch();
     this.sessionOp({ op: 'destroy' }).catch(() => {});
   }
 
   resetConnection() {
-    this.cancelSearch();
+    void this.cancelSearch();
     this.appliedPlies = 0;
     this.sessionOp({ op: 'reset' }).catch(() => {});
   }

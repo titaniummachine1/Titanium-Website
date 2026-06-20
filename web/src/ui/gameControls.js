@@ -64,7 +64,7 @@ function wireControls(container, state, controller) {
   });
 
   container.querySelector('[data-action="change-players"]')?.addEventListener('click', () => {
-    openPlayerDialog(controller.getState(), controller, { mode: 'changeplayers' });
+    openPlayerDialog(controller.getState(), controller, { mode: 'settings' });
   });
 }
 
@@ -75,7 +75,8 @@ function formatGameLogHeader(state) {
   const history = (state.actions ?? []).map((a) => toAlgebraic(a));
   const canon = canonicalStateFromBoard(state.board);
   const blockedEdges = blockedEdgesFromCanonicalWalls(canon);
-  const legalMoves = legalMovesFromBoard(state.board);
+  const legalMoves =
+    state.winner != null || state.isDraw ? [] : legalMovesFromBoard(state.board);
   const positionKey = positionKeyFromHistory(state.actions ?? []);
   return formatCanonicalGameLog({
     history,
@@ -84,6 +85,8 @@ function formatGameLogHeader(state) {
     positionKey,
     blockedEdges,
     isFlipped: state.settings?.rotateBoard ?? false,
+    winner: state.winner ?? null,
+    isDraw: state.isDraw ?? false,
   });
 }
 
@@ -142,21 +145,20 @@ function openLogsDialog(state) {
     <div class="load-dialog" role="dialog" aria-modal="true" aria-label="AI thinking logs" style="max-width:600px">
       <div class="load-dialog__header">
         <h2 class="load-dialog__title">AI thinking logs</h2>
-        <button class="load-dialog__close" data-action="close">✕</button>
+        <button type="button" class="load-dialog__close load-dialog__close--dismiss" aria-label="Close">✕</button>
       </div>
       <div class="load-dialog__body">
         <textarea class="load-dialog__input" rows="18" spellcheck="false" readonly style="font-family:monospace;font-size:0.78rem">${escHtml(text)}</textarea>
       </div>
       <div class="load-dialog__footer">
-        <button class="btn btn--primary" data-action="copy-logs">Copy</button>
-        <button class="btn" data-action="close">Close</button>
+        <button type="button" class="btn btn--primary" data-action="copy-logs">Copy</button>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
 
   const close = () => overlay.remove();
-  overlay.querySelector('[data-action="close"]')?.addEventListener('click', close);
+  overlay.querySelector('.load-dialog__close--dismiss')?.addEventListener('click', close);
   overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) close(); });
   overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 

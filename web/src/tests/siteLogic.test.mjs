@@ -5,6 +5,12 @@
 
 import { resolveLiveBestMoveKey, canPlayNow, pvFirstMoveFromLiveSearch } from '../lib/liveBestMove.js';
 import {
+  formatScoreForCard,
+  TITANIUM_MATE_VALUE,
+  quoridorMovesFromMatePlies,
+} from '../lib/engineScore.js';
+import { canonicalPositionKeyFromActions } from '../lib/canonicalState.js';
+import {
   screenRowLabel,
   screenColumnLabel,
   screenRowIndices,
@@ -65,7 +71,7 @@ const baseState = {
     seatIndex: 0,
     playerType: PlayerType.TitaniumMinimax,
     requestSeq: 7,
-    positionKey: '',
+    positionKey: canonicalPositionKeyFromActions([]),
     pv: 'e3',
   },
 };
@@ -82,6 +88,48 @@ assertEqual(
   'illegal pv rejected',
 );
 assert(canPlayNow(baseState), 'canPlayNow when live pv legal');
+
+console.log('\n[mate] Quoridor moves from engine plies (AceV13 parity)');
+assertEqual(quoridorMovesFromMatePlies(1), 1, 'mate in 1 ply = 1 move');
+assertEqual(quoridorMovesFromMatePlies(2), 1, 'mate in 2 plies = 1 move');
+assertEqual(quoridorMovesFromMatePlies(4), 2, 'mate in 4 plies = 2 moves');
+assertEqual(
+  formatScoreForCard(TITANIUM_MATE_VALUE - 4),
+  'Win in 2',
+  'titanium mate score uses half-plies as moves',
+);
+assertEqual(
+  formatScoreForCard(TITANIUM_MATE_VALUE - 1),
+  'Win in 1',
+  'mate in 1 ply displays Win in 1',
+);
+
+console.log('\n[legality] user midgame line replays legally');
+import { QuoridorBoard, parseAlgebraic } from '../lib/gameLogic.js';
+import { GameSession } from '../game/gameSession.js';
+const userLine =
+  'e2 e8 e3 e7 e4 e6 d3h e6h f3h c6h h3h e4v b3h d6 a4v a6h c5v g6h e5 d5 e6 d4 f6 h5v a2h c4 f5 b4 g5 b5 c2h b6 h5 g4h g5 a6 f5 a5 f4 a4 g4 a3 h4'.split(
+    /\s+/,
+  );
+const midBoard = new QuoridorBoard();
+for (const token of userLine) {
+  const action = parseAlgebraic(token);
+  assert(midBoard.isValid(action), `user line legal at ${token}`);
+  midBoard.takeAction(action);
+}
+assertEqual(midBoard.validActions().length, 78, 'user midgame legal move count');
+
+console.log('\n[legality] 62-ply line ends with Black win on g1');
+const winLine =
+  'e2 e8 e3 e7 e4 e6 d3h e6h f3h c6h h3h e4v b3h d6 a4v a6h c5v g6h e5 d5 e6 d4 f6 h5v a2h c4 f5 b4 g4h h7h f4 b5 g4 f7h h4 b6 i4 a6 i5 a5 i6 a4 i7 a3 h7 b3 c2h c3 g7 d3 e2h e3 f7 d7h e7 f3 d7 g3 c7 g2 c8 g1'.split(
+    /\s+/,
+  );
+const winSession = new GameSession();
+for (const token of winLine) {
+  assert(winSession.applyAction(parseAlgebraic(token)), `62-ply applies ${token}`);
+}
+assertEqual(winSession.winner, 2, 'Black wins on g1');
+assertEqual(winSession.getSnapshot().validActions.length, 0, 'no legal moves after win');
 
 console.log('\n[liveBestMove] last committed move not highlighted');
 assertEqual(

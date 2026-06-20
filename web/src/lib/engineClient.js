@@ -29,6 +29,7 @@ import {
   toEngineAlgebraic,
   fromEngineAlgebraic,
 } from './remoteSync.js';
+import { createAbortError } from './engineAbort.js';
 
 const WS_OPEN = 1;
 
@@ -195,6 +196,43 @@ export class EngineClient {
     return this._runFullResync({ moveHistory, gameSnapshot, isFreshGame, positionKey: key });
   }
 
+  /** Explicit pre-go sync — remote engines only. */
+  async ensureSynchronized({
+    history,
+    positionKey,
+    gameSnapshot,
+    isFreshGame,
+    signal,
+  }) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+    const moveHistory = history ?? [];
+    const key = positionKey ?? positionKeyFromHistory(moveHistory);
+    this.updateLocalExpectations(moveHistory, key);
+
+    if (this.syncState === SyncState.DESYNCED) {
+      throw new Error('remote engine DESYNCED — full resync required');
+    }
+    if (
+      this.appliedPlies !== moveHistory.length ||
+      this.appliedPositionKey !== key
+    ) {
+      await this._runFullResync({
+        moveHistory,
+        gameSnapshot,
+        isFreshGame: isFreshGame ?? moveHistory.length === 0,
+        positionKey: key,
+      });
+    }
+    if (this.syncState !== SyncState.SYNCED) {
+      throw new Error(`remote engine not SYNCED (${this.syncState})`);
+    }
+    if (this._pendingMakemoveCount > 0) {
+      throw new Error('remote makemove queue still in flight');
+    }
+  }
+
   makeMoves(actions) {
     const key = positionKeyFromHistory(actions);
     this.updateLocalExpectations(actions, key);
@@ -303,6 +341,16 @@ export class EngineClient {
 
   stopPonder() {
     this.stop();
+  }
+
+  async cancelSearch() {
+    this.pendingSearch = null;
+    if (this.isPondering || this.outstandingSearches > 0) {
+      this._enqueueRaw(CommandKind.STOP, 'stop');
+    }
+    this.isPondering = false;
+    this.outstandingSearches = 0;
+    this.setStatus('idle');
   }
 
   stop() {
