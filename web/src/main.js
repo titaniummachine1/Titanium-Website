@@ -12,7 +12,7 @@
 import { AppController } from './game/appController.js';
 import { renderBoard } from './ui/boardView.js';
 import { renderPlayerCard } from './ui/playerCard.js';
-import { openPlayerDialog } from './ui/playerDialog.js';
+import { openPlayerDialog, refreshOpenPlayerDialog } from './ui/playerDialog.js';
 import { renderGameControls, updateNotationBar } from './ui/gameControls.js';
 
 const appRoot = document.getElementById('app');
@@ -125,7 +125,12 @@ function renderLiveUpdate() {
   }
 }
 
-controller.onChange = render;
+function renderAndRefreshDialog() {
+  render();
+  refreshOpenPlayerDialog(controller.getState());
+}
+
+controller.onChange = renderAndRefreshDialog;
 controller.onLiveUpdate = renderLiveUpdate;
 
 void controller.initializeLegalityOracle();

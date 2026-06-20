@@ -183,7 +183,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
         '<div class="player-dialog__hint">White starts at the bottom and moves upward. Black starts at the top and moves downward.</div>' +
         renderSeatSection(0, selections, groups) +
         renderSeatSection(1, selections, groups) +
-        oracleStatusHtml(state, selections) +
+        '<div data-oracle-hint="1">' + oracleStatusHtml(state, selections) + '</div>' +
         '<div class="player-dialog__options">' +
           '<label class="player-dialog__option-row">' +
             '<input type="checkbox" data-option="bestMoveHint"' + (state.settings?.showBestMoveHint !== false ? ' checked' : '') + '>' +
@@ -200,6 +200,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     '</div>';
 
   document.body.appendChild(overlay);
+  overlay._selections = selections;
   currentDialog = overlay;
   updateStartButtonState(overlay, state, selections);
 
@@ -223,8 +224,9 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
   const cancelDialog = () => { overlay.remove(); currentDialog = null; };
 
   function applyAndClose() {
-    if (oracleBlocksStart(state, selections)) {
-      updateStartButtonState(overlay, controller.getState(), selections);
+    const liveState = controller.getState();
+    if (oracleBlocksStart(liveState, selections)) {
+      refreshOpenPlayerDialog(liveState);
       return;
     }
     savePrefs({
@@ -251,6 +253,23 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
   });
 
   overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) cancelDialog(); });
+}
+
+/** Re-enable Start once the legality oracle finishes loading. */
+export function refreshOpenPlayerDialog(state) {
+  if (!currentDialog) {
+    return;
+  }
+  const overlay = currentDialog;
+  const selections = overlay._selections;
+  if (!selections) {
+    return;
+  }
+  const hintHost = overlay.querySelector('[data-oracle-hint="1"]');
+  if (hintHost) {
+    hintHost.innerHTML = oracleStatusHtml(state, selections);
+  }
+  updateStartButtonState(overlay, state, selections);
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────

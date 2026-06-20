@@ -2517,10 +2517,32 @@ export class AppController {
       if (capturedSignal.aborted || isAbortError(err)) {
         return;
       }
-      if (gameGeneration !== this._gameGeneration || requestSeq !== this._moveRequestSeq) {
+      const stillThisSeat =
+        gameGeneration === this._gameGeneration &&
+        requestSeq === this._moveRequestSeq &&
+        this.thinkingSeatIndex === seatIndex;
+      if (stillThisSeat) {
+        engine.onError?.(err);
         return;
       }
-      engine.onError?.(err);
+      if (
+        gameGeneration === this._gameGeneration &&
+        this.session.playerToMove - 1 === seatIndex &&
+        playerType !== PlayerType.Human &&
+        !this.engineErrors[seatIndex]
+      ) {
+        this.recordEngineFailure(playerType, {
+          ply: requestPly + 1,
+          error: err,
+          budget: describePlayerAiSettings(
+            playerType,
+            this._thinkAiSettings ?? aiSettings,
+            this.engineConfigs,
+          ),
+        });
+        this.onChange?.();
+        queueMicrotask(() => this.maybeRequestAiMove());
+      }
     });
   }
 
