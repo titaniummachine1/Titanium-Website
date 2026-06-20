@@ -1,4 +1,4 @@
-/* Board layout — matches quoridor-ai.netlify.app scraped structure */
+/* Board layout — canonical coordinate rendering (no CSS board rotation) */
 
 .board-panel {
   position: relative;
@@ -7,8 +7,8 @@
   max-width: min(640px, 100%);
   margin-inline: auto;
   touch-action: manipulation;
-  /* Contain all board z-indexes so they never escape above dialogs */
   isolation: isolate;
+  overflow: hidden;
 }
 
 .board--dragging {
@@ -17,6 +17,7 @@
 }
 
 .board {
+  position: relative;
   display: grid;
   width: 100%;
   height: 100%;
@@ -29,25 +30,25 @@
   grid-template-rows: 8fr 45fr 45fr 8fr;
   border-radius: 4%;
   background-color: #f0d9b5;
-  transition: transform 1.2s ease;
+  isolation: isolate;
+  overflow: hidden;
 }
 
+/* Flipped: swap P1/P2 chrome so White appears at top, Black at bottom */
 .board--rotate {
-  transform: rotate(180deg);
-}
-
-.board--rotate [data-cell-type='verticalWall'] {
-  transform: translateY(122%);
-}
-
-.board--rotate [data-cell-type='horizontalWall'] {
-  transform: translate(122%);
+  grid-template-areas:
+    '.                     .                     engine-state-p1'
+    'coordinate-labels-row board-grid            wall-marks-p1'
+    'coordinate-labels-row board-grid            wall-marks-p2'
+    '.                     coordinate-labels-col engine-state-p2';
 }
 
 .board-grid {
   grid-area: board-grid;
   display: grid;
   gap: 0;
+  position: relative;
+  z-index: 0;
 }
 
 .engine-state {
@@ -88,14 +89,10 @@
   height: 4%;
   width: 65%;
   border-radius: 3px;
-  z-index: 5;
+  z-index: 1;
   opacity: 0;
   transition: opacity 0.5s ease;
   box-shadow: 2px 3px 3px #0000004d;
-}
-
-.board--rotate .wall-marks__slot {
-  box-shadow: -2px -3px 3px #0000004d;
 }
 
 .wall-marks__slot--available {
@@ -127,9 +124,8 @@
   opacity: 1;
 }
 
-.board--rotate .wall-marks__count {
-  transform: rotate(180deg);
-}
+.board--rotate .wall-marks--p1 { align-self: start; }
+.board--rotate .wall-marks--p2 { align-self: end; }
 
 .coord-labels {
   display: flex;
@@ -167,10 +163,6 @@
   font-size: 1.3em;
 }
 
-.board--rotate .coord-labels__label {
-  transform: rotate(180deg);
-}
-
 .coord-labels__spacer {
   flex: 2;
 }
@@ -182,10 +174,16 @@
   background-color: #d4a276;
   border-radius: 3px;
   box-shadow: 1px 2px 2px #9c6644;
+  z-index: 0;
 }
 
 .board-cell__square--prev {
   background-color: #deb795;
+}
+
+.board-cell__square--valid {
+  cursor: pointer;
+  z-index: 3;
 }
 
 .board-cell__square--cat {
@@ -217,11 +215,10 @@
 
 .board--cat .board-cell__pawn {
   position: relative;
-  z-index: 5;
+  z-index: 2;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
-/* Raw engine heat (centi-squares) printed on each square in CAT view */
 .board-cell__cat-val {
   position: absolute;
   inset: 0;
@@ -256,12 +253,11 @@
   position: relative;
 }
 
-/* CAT wall hints: one grid half only (placement slot), not spanning the partner cell */
 .board-cell__cat-wall-hint {
   position: absolute;
   border-radius: 3px;
   pointer-events: none;
-  z-index: 4;
+  z-index: 3;
   opacity: 0.88;
   background: var(--cat-wall-fill, rgba(255, 180, 60, 0.22));
   box-shadow: inset 0 0 0 2px var(--cat-wall-color, rgba(255, 160, 0, 0.75));
@@ -293,7 +289,6 @@
   line-height: 1.2;
 }
 
-/* LMR vision */
 .board-cell__square--lmr {
   position: relative;
   overflow: hidden;
@@ -368,7 +363,7 @@
 
 .board--lmr .board-cell__pawn {
   position: relative;
-  z-index: 5;
+  z-index: 2;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
@@ -376,7 +371,7 @@
   position: absolute;
   border-radius: 3px;
   pointer-events: none;
-  z-index: 4;
+  z-index: 3;
   opacity: 1;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--lmr-wall-color, rgba(255, 120, 40, 0.9));
   width: 90%;
@@ -424,7 +419,7 @@
   justify-content: center;
   padding: 0.5rem;
   pointer-events: none;
-  z-index: 50;
+  z-index: 6;
 }
 
 .lmr-hint__card {
@@ -496,19 +491,17 @@
   outline-offset: -2px;
 }
 
-.board-cell__square--valid {
-  cursor: pointer;
-}
-
 .board-cell__square--drag-preview {
   outline: 3px solid rgba(255, 220, 120, 0.95);
   outline-offset: -3px;
   filter: brightness(1.08);
+  z-index: 5;
 }
 
 .board-cell__wall--drag-preview {
   opacity: 0.85 !important;
   box-shadow: 0 0 0 3px rgba(255, 220, 120, 0.95);
+  z-index: 5;
 }
 
 .board-cell__pawn {
@@ -517,8 +510,9 @@
   height: 92%;
   transform: translate(5%, 5%);
   border-radius: 50%;
-  z-index: 10;
+  z-index: 2;
   box-shadow: 1px 2px 2px #9c6644;
+  pointer-events: none;
 }
 
 .board-cell__pawn--player1 {
@@ -532,7 +526,7 @@
 .board-cell__wall {
   position: relative;
   border-radius: 3px;
-  z-index: 8;
+  z-index: 1;
   opacity: 0;
   width: 90%;
   height: 90%;
@@ -552,6 +546,7 @@
 
 .board-cell__wall--valid {
   pointer-events: auto;
+  z-index: 3;
 }
 
 [data-cell-type='horizontalWall'].board-cell--wall-valid:hover .board-cell__wall--valid,
@@ -623,6 +618,7 @@
   justify-content: center;
 }
 
+.board-terminal-overlay,
 .winner-banner {
   position: absolute;
   inset: 0;
@@ -636,8 +632,8 @@
   font-size: 1.5rem;
   font-weight: 700;
   border-radius: 12px;
-  /* Small local z-index — contained by board-panel's isolation: isolate */
-  z-index: 20;
+  z-index: 6;
+  pointer-events: auto;
 }
 
 .winner-banner__newgame {
@@ -663,27 +659,14 @@
   }
 }
 
-@media (min-width: 500px) and (min-height: 500px) {
-  .board--rotate .board-cell__square {
-    box-shadow: -1px -2px 2px #9c6644;
-  }
-
-  .board--rotate .board-cell__pawn {
-    box-shadow: -1px -2px 2px #9c6644;
-  }
-}
-
-/* ── Best-move hint ghost (ACE v13 style) ─────────────────────────── */
-
 .bm-ghost {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 6;
+  z-index: 4;
   animation: bm-pulse 1.2s ease-in-out infinite;
 }
 
-/* Pawn ghost: circular ring inside the target square */
 .bm-ghost--pawn {
   inset: 12%;
   border-radius: 50%;
@@ -701,7 +684,6 @@
   box-shadow: 0 0 6px rgba(80, 40, 10, 0.4);
 }
 
-/* Wall ghost: green rectangle outline over the wall slot */
 .bm-ghost--wall {
   inset: 4%;
   border-radius: 3px;

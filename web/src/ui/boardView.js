@@ -1,5 +1,18 @@
-import { WallType, formatCoordinate, toAlgebraic, parseAlgebraic, isWallAction } from '../lib/gameLogic.js';
+import { WallType, formatCoordinate, toAlgebraic, parseAlgebraic } from '../lib/gameLogic.js';
 import { playerColorName } from '../lib/playerColors.js';
+import {
+  gridIndexToCanonicalCell,
+  gridIndexToCanonicalWall,
+  canonicalCellToAlgebraic,
+  canonicalWallToAlgebraic,
+} from '../game/coordinates.js';
+import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
+import {
+  screenRowIndices,
+  screenColIndices,
+  screenRowLabel,
+  screenColumnLabel,
+} from '../lib/screenTransform.js';
 import {
   catSquareOverlay,
   catWallOutlineColor,
@@ -19,20 +32,8 @@ import './board.css';
 const SQUARE_TRACK = '9fr';
 const WALL_TRACK = '2fr';
 
-function indexToColumnLocal(index) {
-  return String.fromCharCode(index + 96);
-}
-
 function buildGridTracks(count) {
   return Array.from({ length: count }, (_, index) => (index % 2 === 0 ? SQUARE_TRACK : WALL_TRACK)).join(' ');
-}
-
-function columnLabel(colIndex) {
-  return indexToColumnLocal(colIndex);
-}
-
-function rowLabel(rowIndex, numRows) {
-  return String(numRows - rowIndex);
 }
 
 export function renderBoard(container, state, controller) {
@@ -98,8 +99,8 @@ export function renderBoard(container, state, controller) {
     renderTurnIndicator(2, playerToMove, settings.players[1], engineStatus, engineErrors, aiThinking, winner, freePlay),
   );
 
-  const coordLabelsRow = renderCoordinateLabels('row', numRows, showCoords, controller);
-  const coordLabelsCol = renderCoordinateLabels('col', numCols, showCoords, controller);
+  const coordLabelsRow = renderCoordinateLabels('row', numRows, showCoords, controller, isRotated);
+  const coordLabelsCol = renderCoordinateLabels('col', numCols, showCoords, controller, isRotated);
 
   const wallMarksP1 = renderWallMarks(1, wallsRemaining[0], showWallCounts, controller);
   const wallMarksP2 = renderWallMarks(2, wallsRemaining[1], showWallCounts, controller);
@@ -109,14 +110,15 @@ export function renderBoard(container, state, controller) {
   grid.style.gridTemplateColumns = buildGridTracks(numCols * 2 - 1);
   grid.style.gridTemplateRows = buildGridTracks(numRows * 2 - 1);
 
-  for (let p = 0; p < numRows * 2 - 1; p++) {
-    for (let h = 0; h < numCols * 2 - 1; h++) {
+  for (const p of screenRowIndices(numRows, isRotated)) {
+    for (const h of screenColIndices(numCols, isRotated)) {
       grid.appendChild(
         renderBoardCell({
           p,
           h,
           numRows,
           numCols,
+          isFlipped: isRotated,
           playerPositions,
           validKeys,
           wallOwners,
@@ -130,10 +132,10 @@ export function renderBoard(container, state, controller) {
     }
   }
 
-  // Best-move hint ghost — only while engine streams live info
+  // Best-move hint ghost — only while engine streams live info with identity checks
   if (state.settings?.showBestMoveHint !== false) {
-    const bestMoveKey = resolveBestMoveKey(state);
-    if (bestMoveKey) {
+    const bestMoveKey = resolveLiveBestMoveKey(state, { validActions });
+    if (bestMoveKey && bestMoveKey !== lastKey) {
       renderBestMoveGhost(grid, bestMoveKey, state.playerToMove);
     }
   }
@@ -147,31 +149,20 @@ export function renderBoard(container, state, controller) {
     coordLabelsCol,
     grid,
   );
-  container.appendChild(boardShell);
 
   if (isDraw) {
-    const banner = document.createElement('div');
-    banner.className = 'winner-banner';
-    const msg = document.createElement('span');
-    msg.textContent = 'Draw — threefold repetition';
-    const btn = document.createElement('button');
-    btn.className = 'btn btn--primary winner-banner__newgame';
-    btn.textContent = 'New game';
-    btn.addEventListener('click', () => controller._openPlayerDialog?.({ mode: 'newgame' }));
-    banner.append(msg, btn);
-    container.appendChild(banner);
+    boardShell.appendChild(renderTerminalOverlay(
+      'Draw — threefold repetition',
+      controller,
+    ));
   } else if (winner) {
-    const banner = document.createElement('div');
-    banner.className = 'winner-banner';
-    const msg = document.createElement('span');
-    msg.textContent = `${playerColorName(winner)} wins!`;
-    const btn = document.createElement('button');
-    btn.className = 'btn btn--primary winner-banner__newgame';
-    btn.textContent = 'New game';
-    btn.addEventListener('click', () => controller._openPlayerDialog?.({ mode: 'newgame' }));
-    banner.append(msg, btn);
-    container.appendChild(banner);
+    boardShell.appendChild(renderTerminalOverlay(
+      `${playerColorName(winner)} wins!`,
+      controller,
+    ));
   }
+
+  container.appendChild(boardShell);
 
   wireBoardPointerInput(boardShell, { canInteract, controller });
 }
@@ -281,11 +272,25 @@ function wireBoardPointerInput(boardShell, { canInteract, controller }) {
   });
 }
 
+function renderTerminalOverlay(message, controller) {
+  const banner = document.createElement('div');
+  banner.className = 'winner-banner board-terminal-overlay';
+  const msg = document.createElement('span');
+  msg.textContent = message;
+  const btn = document.createElement('button');
+  btn.className = 'btn btn--primary winner-banner__newgame';
+  btn.textContent = 'New game';
+  btn.addEventListener('click', () => controller._openPlayerDialog?.({ mode: 'newgame' }));
+  banner.append(msg, btn);
+  return banner;
+}
+
 function renderBoardCell({
   p,
   h,
   numRows,
   numCols,
+  isFlipped,
   playerPositions,
   validKeys,
   wallOwners,
@@ -295,36 +300,38 @@ function renderBoardCell({
   catViz,
   lmrViz,
 }) {
-  const row = numRows - Math.floor(p / 2);
-  const col = Math.floor(h / 2) + 1;
   const isEvenRow = p % 2 === 0;
   const isEvenCol = h % 2 === 0;
 
+  const cellCoord = gridIndexToCanonicalCell(h, p, numRows, numCols, isFlipped);
+  const wallAnchor = cellCoord
+    ? null
+    : gridIndexToCanonicalWall(h, p, numRows, numCols, isFlipped);
+
   let cellType;
-  if (isEvenRow && isEvenCol) {
+  if (cellCoord) {
     cellType = 'square';
-  } else if (isEvenRow) {
-    cellType = 'verticalWall';
-  } else if (isEvenCol) {
-    cellType = 'horizontalWall';
+  } else if (wallAnchor) {
+    cellType = wallAnchor.wallType === 'h' ? 'horizontalWall' : 'verticalWall';
   } else {
     cellType = 'wallIntersection';
   }
 
   const cell = document.createElement('div');
   cell.dataset.cellType = cellType;
-  cell.dataset.coordinate = formatCoordinate({ row, column: indexToColumnLocal(col) });
 
   if (cellType === 'square') {
-    const coordinate = { row, column: indexToColumnLocal(col) };
+    const algebraic = canonicalCellToAlgebraic(cellCoord.x, cellCoord.y);
+    const coordinate = { row: algebraic.row, column: algebraic.column };
+    cell.dataset.coordinate = formatCoordinate(coordinate);
     const key = formatCoordinate(coordinate);
     const pawnPlayer = playerPositions.findIndex(
       (pos) => pos.row === coordinate.row && pos.column === coordinate.column,
     );
     const isValid = validKeys.has(key) && canInteract && pawnPlayer < 0;
     const isPrev = lastKey === key;
-    const engineRow = row - 1;
-    const engineCol = col - 1;
+    const engineRow = cellCoord.y;
+    const engineCol = cellCoord.x;
     const sqIdx = catSquareIndex(engineRow, engineCol);
     const heat = catViz?.squares?.[sqIdx] ?? 0;
     const reachable =
@@ -427,11 +434,10 @@ function renderBoardCell({
   }
 
   if (cellType === 'horizontalWall' || cellType === 'verticalWall') {
-    const coordinate = {
-      row: row - 1,
-      column: indexToColumnLocal(col),
-    };
-    const wallType = cellType === 'horizontalWall' ? WallType.Horizontal : WallType.Vertical;
+    const wallAction = canonicalWallToAlgebraic(wallAnchor.wx, wallAnchor.wy, wallAnchor.wallType);
+    const coordinate = wallAction.coordinate;
+    const wallType = wallAction.wallType === 'h' ? WallType.Horizontal : WallType.Vertical;
+    cell.dataset.coordinate = formatCoordinate(coordinate);
     const key = toAlgebraic({ coordinate, wallType });
     const owner = wallOwners.get(key);
     const isValid = validKeys.has(key) && canInteract;
@@ -449,10 +455,6 @@ function renderBoardCell({
     } else if (isValid) {
       wall.classList.add('board-cell__wall--valid', `board-cell__wall--player${playerToMove}`);
       cell.classList.add('board-cell--wall-valid');
-    }
-
-    if (isPrev) {
-      wall.style.zIndex = '9';
     }
 
     cell.appendChild(wall);
@@ -519,7 +521,7 @@ function renderBoardCell({
   return cell;
 }
 
-function renderCoordinateLabels(axis, count, visible, controller) {
+function renderCoordinateLabels(axis, count, visible, controller, isFlipped = false) {
   const wrap = document.createElement('div');
   wrap.className =
     'coord-labels coord-labels--' +
@@ -536,7 +538,9 @@ function renderCoordinateLabels(axis, count, visible, controller) {
 
     const label = document.createElement('span');
     label.className = 'coord-labels__label';
-    label.textContent = axis === 'row' ? rowLabel(index, count) : columnLabel(index + 1);
+    label.textContent = axis === 'row'
+      ? screenRowLabel(index, count, isFlipped)
+      : screenColumnLabel(index, isFlipped);
     wrap.appendChild(label);
   }
 
@@ -574,30 +578,6 @@ function renderWallMarks(playerNum, remaining, visible, controller) {
 
 function parseCoord(text) {
   return { column: text[0], row: Number.parseInt(text[1], 10) };
-}
-
-/**
- * Return the best-move key ONLY while the engine is actively streaming
- * live search info. Never shows a move that has already been played.
- */
-function resolveBestMoveKey(state) {
-  if (!state.aiThinking || !state.liveSearch) return null;
-  if (state.winner || state.isDraw) return null;
-
-  const ls = state.liveSearch;
-
-  // PV first move — may be an array of action objects or a space-separated string
-  if (Array.isArray(ls.pv) && ls.pv.length > 0) {
-    try { return toAlgebraic(ls.pv[0]); } catch { /* fall through */ }
-  }
-  if (typeof ls.pv === 'string' && ls.pv.trim()) {
-    return ls.pv.trim().split(/\s+/)[0];
-  }
-
-  // Fall back to the move field on the live snap (some engines emit this)
-  if (ls.move && ls.move !== '(none)') return ls.move;
-
-  return null;
 }
 
 /** Overlay a dashed ghost highlight on the best-move cell/wall element. */

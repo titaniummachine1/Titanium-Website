@@ -901,8 +901,10 @@ body {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
+/* Legacy board rotate rules removed — flip uses canonical screen iteration in boardView.js */
+
 .board-panel--rotated .board {
-  transform: rotate(180deg);
+  /* no transform — orientation handled in JS */
 }
 
 .coord-row {
@@ -1933,6 +1935,42 @@ body {
   color: var(--muted);
   font-family: 'Roboto Mono', monospace;
   white-space: nowrap;
+}
+
+.player-card__settings {
+  width: 100%;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.player-card__settings-toggle {
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: var(--muted);
+  user-select: none;
+}
+
+.player-ai-settings--compact {
+  margin-top: 6px;
+  gap: 6px;
+}
+
+.player-ai-settings--compact .time-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-ai-settings--compact .time-slider {
+  flex: 1;
+}
+
+.player-ai-settings--compact .time-slider-value {
+  font-size: 0.72rem;
+  font-family: 'Roboto Mono', monospace;
+  min-width: 3.5rem;
+  text-align: right;
 }
 
 /* ─── Pawn icons ────────────────────────────────────────────────── */
