@@ -627,14 +627,22 @@
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
+  gap: 14px;
+  background: rgba(0, 0, 0, 0.55);
   color: white;
   font-size: 1.5rem;
   font-weight: 700;
   border-radius: 12px;
-  z-index: 3000;
+  /* Small local z-index — contained by board-panel's isolation: isolate */
+  z-index: 20;
+}
+
+.winner-banner__newgame {
+  font-size: 0.85rem;
+  padding: 8px 20px;
 }
 
 @keyframes board-spin {
@@ -659,4 +667,8 @@
   .board--rotate .board-cell__square {
     box-shadow: -1px -2px 2px #9c6644;
   }
-
+
+  .board--rotate .board-cell__pawn {
+    box-shadow: -1px -2px 2px #9c6644;
+  }
+}

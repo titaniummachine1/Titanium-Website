@@ -144,24 +144,12 @@ export function renderBoard(container, state, controller) {
   if (isDraw) {
     const banner = document.createElement('div');
     banner.className = 'winner-banner';
-    const msg = document.createElement('span');
-    msg.textContent = 'Draw — threefold repetition';
-    const btn = document.createElement('button');
-    btn.className = 'btn btn--primary winner-banner__newgame';
-    btn.textContent = 'New game';
-    btn.addEventListener('click', () => controller._openPlayerDialog?.({ mode: 'newgame' }));
-    banner.append(msg, btn);
+    banner.textContent = 'Draw — threefold repetition';
     container.appendChild(banner);
   } else if (winner) {
     const banner = document.createElement('div');
     banner.className = 'winner-banner';
-    const msg = document.createElement('span');
-    msg.textContent = `${playerColorName(winner)} wins!`;
-    const btn = document.createElement('button');
-    btn.className = 'btn btn--primary winner-banner__newgame';
-    btn.textContent = 'New game';
-    btn.addEventListener('click', () => controller._openPlayerDialog?.({ mode: 'newgame' }));
-    banner.append(msg, btn);
+    banner.textContent = `${playerColorName(winner)} wins!`;
     container.appendChild(banner);
   }
 
@@ -444,7 +432,7 @@ function renderBoardCell({
     }
 
     if (isPrev) {
-      wall.style.zIndex = '9';
+      wall.style.zIndex = '1900';
     }
 
     cell.appendChild(wall);

@@ -1,5 +1,5 @@
 import { GameSession } from './gameSession.js';
-import { naiveDistanceEval, parseAlgebraic } from '../lib/gameLogic.js';
+import { naiveDistanceEval } from '../lib/gameLogic.js';
 import { decodeReplayCode, encodeReplayFromActions } from '../lib/replayCode.js';
 import { fetchCatSnapshot, indexCatWalls } from '../lib/catHeatmap.js';
 import { buildLmrViz, fetchLmrSnapshot } from '../lib/lmrHeatmap.js';
@@ -262,8 +262,6 @@ export class AppController {
     /** Skip onSessionChange → onChange while applyEngineMove is mid-apply (snapshot not ready). */
     this._suppressSessionNotify = false;
     this._activeSearchSeq = 0;
-    this._undoPaused = false;
-    this._undoPauseTimer = null;
 
     this.session.subscribe(() => this.onSessionChange());
     this.migrateLegacyPlayerTypes();
@@ -2035,9 +2033,6 @@ export class AppController {
   }
 
   maybeRequestAiMove() {
-    if (this._undoPaused) {
-      return; // Waiting for undo pause to expire
-    }
     if (this.replay || this.isFreePlayMode()) {
       this.aiThinking = false;
       return;
@@ -2146,190 +2141,5 @@ export class AppController {
       moveHistory,
       isFreshGame,
     });
-  }
-
-  // ── New public API ────────────────────────────────────────────────────────
-
-  /**
-   * Start a new game with the given players and strength settings.
-   */
-  newGameWithPlayers({ players, playerAiSettings } = {}) {
-    if (players && players.length === 2) {
-      for (let seat = 0; seat < 2; seat++) {
-        const playerType = normalizePlayerType(players[seat]);
-        this.settings.players[seat] = playerType;
-        if (playerType !== PlayerType.Human && playerAiSettings && playerAiSettings[seat]) {
-          this.settings.playerAiSettings[seat] = Object.assign({}, playerAiSettings[seat]);
-          const memory = this.settings.playerAiSettingsMemory[seat] || {};
-          memory[playerType] = Object.assign({}, playerAiSettings[seat]);
-          this.settings.playerAiSettingsMemory[seat] = memory;
-        } else if (playerType !== PlayerType.Human) {
-          this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
-        }
-      }
-    }
-    this.persistPlaySettings();
-    this.newGame();
-  }
-
-  /**
-   * Change players mid-game without resetting the board position.
-   */
-  changePlayers({ players, playerAiSettings } = {}) {
-    if (!players || !players.length) return;
-    this._cancelActiveAiSearch();
-    for (let seat = 0; seat < 2; seat++) {
-      const playerType = normalizePlayerType(players[seat] || this.settings.players[seat]);
-      const prevType = this.settings.players[seat];
-      this.settings.players[seat] = playerType;
-      if (prevType !== playerType) {
-        this._moveRequestSeq += 1;
-        this.destroyEngineForSeat(seat);
-      }
-      if (playerType !== PlayerType.Human && playerAiSettings && playerAiSettings[seat]) {
-        this.settings.playerAiSettings[seat] = Object.assign({}, playerAiSettings[seat]);
-        const memory = this.settings.playerAiSettingsMemory[seat] || {};
-        memory[playerType] = Object.assign({}, playerAiSettings[seat]);
-        this.settings.playerAiSettingsMemory[seat] = memory;
-      } else if (playerType !== PlayerType.Human) {
-        this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
-      }
-    }
-    this.persistPlaySettings();
-    this.onChange && this.onChange();
-    this.maybeRequestAiMove();
-  }
-
-  /**
-   * Undo the last move(s) and pause AI for 5 seconds.
-   */
-  undoWithPause() {
-    if (this.replay) return;
-    if (this.aiThinking) {
-      this._cancelActiveAiSearch();
-    }
-    if (this._undoPauseTimer) {
-      clearTimeout(this._undoPauseTimer);
-      this._undoPauseTimer = null;
-    }
-    this._undoPaused = true;
-    this._moveRequestSeq += 1;
-    const plies = this._undoPlyCount();
-    let undone = 0;
-    for (let i = 0; i < plies; i++) {
-      if (!this.session.undo()) break;
-      undone++;
-    }
-    if (undone === 0) {
-      this._undoPaused = false;
-      return;
-    }
-    this.liveSearch = null;
-    this.engineErrors = {};
-    for (const engine of this.engines.values()) {
-      engine.resetConnection();
-    }
-    this.onChange && this.onChange();
-    const self = this;
-    this._undoPauseTimer = setTimeout(function() {
-      self._undoPaused = false;
-      self._undoPauseTimer = null;
-      self.onChange && self.onChange();
-      self.maybeRequestAiMove();
-    }, 5000);
-  }
-
-  /**
-   * Stop current search and play the best move found so far.
-   */
-  playNow() {
-    if (!this.aiThinking) return;
-    const seatIndex = this.thinkingSeatIndex;
-    if (seatIndex == null) return;
-
-    const si = this.searchInfoBySeat[seatIndex];
-    const liveRootMoves = this.liveSearch && this.liveSearch.rootMoves;
-    let bestAlgebraic =
-      (si && si.rootMoves && si.rootMoves[0] && si.rootMoves[0].move) ||
-      (liveRootMoves && liveRootMoves[0] && liveRootMoves[0].move) ||
-      null;
-
-    if (!bestAlgebraic && this.liveSearch && this.liveSearch.depthLog && this.liveSearch.depthLog.length) {
-      const best = this.liveSearch.depthLog.reduce(function(b, e) {
-        return e.depth > (b ? b.depth : 0) ? e : b;
-      }, null);
-      if (best && best.pv) {
-        bestAlgebraic = best.pv.trim().split(/\s+/)[0] || null;
-      }
-    }
-
-    if (!bestAlgebraic) return;
-
-    let action;
-    try {
-      action = parseAlgebraic(bestAlgebraic);
-    } catch (e) {
-      return;
-    }
-    if (!action) return;
-
-    const playerType = this.settings.players[seatIndex];
-    const requestPly = this.session.actions.length;
-    const requestPlayerToMove = this.session.playerToMove;
-    const requestHistory = this.session.actions.map(function(a) { return toAlgebraic(a); }).join(' ');
-    const gameGeneration = this._gameGeneration;
-    const engine = this.getEngineForSeat(seatIndex);
-
-    // Cancel BEFORE capturing requestSeq — _cancelActiveAiSearch bumps _moveRequestSeq.
-    // applyEngineMove must see the post-cancel seq to pass the stale check.
-    this._cancelActiveAiSearch();
-    const requestSeq = this._moveRequestSeq;
-
-    this.applyEngineMove({
-      action,
-      playerType,
-      seatIndex,
-      requestSeq,
-      requestPly,
-      requestPlayerToMove,
-      requestHistory,
-      gameGeneration,
-      engine,
-    });
-  }
-
-  /**
-   * Parse and load a game from space-separated algebraic notation.
-   * Returns { error: string } on failure, null on success.
-   */
-  loadNotationString(text) {
-    if (!text || !text.trim()) return null;
-    const tokens = text.trim().split(/\s+/).filter(Boolean);
-    const actions = [];
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i];
-      try {
-        const action = parseAlgebraic(token);
-        if (!action) return { error: 'Could not parse move: ' + token };
-        actions.push(action);
-      } catch (err) {
-        return { error: 'Invalid move "' + token + '": ' + (err && err.message ? err.message : err) };
-      }
-    }
-    try {
-      this._gameGeneration += 1;
-      this._moveRequestSeq += 1;
-      this.aiThinking = false;
-      this.thinkingPlayerType = null;
-      this.thinkingSeatIndex = null;
-      this.liveSearch = null;
-      this.engineErrors = {};
-      this.replay = null;
-      this.session.rebuildFromActions(actions);
-      this.onChange && this.onChange();
-      return null;
-    } catch (err) {
-      return { error: 'Failed to apply moves: ' + (err && err.message ? err.message : err) };
-    }
   }
 }

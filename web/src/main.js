@@ -1,19 +1,14 @@
-/**
- * Main entry point — clean game layout
- *
- * Layout (desktop and mobile):
- *   top-card (opponent)
- *   board
- *   bottom-card (active player)
- *   controls
- *   notation bar
- */
-
 import { AppController } from './game/appController.js';
 import { renderBoard } from './ui/boardView.js';
-import { renderPlayerCard } from './ui/playerCard.js';
-import { openPlayerDialog } from './ui/playerDialog.js';
-import { renderGameControls, updateNotationBar } from './ui/gameControls.js';
+import {
+  renderSiteHeader,
+  renderSidebar,
+  updateSidebarPanel,
+  updateEngineThinkCards,
+} from './ui/controlsView.js';
+import { renderEvalBar } from './ui/evalBar.js';
+import { renderGameFooter } from './ui/gameFooter.js';
+import { renderPlayersPanel } from './ui/playerSetupView.js';
 
 const appRoot = document.getElementById('app');
 const controller = new AppController();
@@ -21,109 +16,92 @@ if (import.meta.env.DEV) {
   window.__controller = controller;
 }
 
-controller._openPlayerDialog = function(opts) {
-  openPlayerDialog(controller.getState(), controller, opts);
-};
+appRoot.innerHTML = `
+  <div class="app-shell">
+    <header class="site-header" id="header-root"></header>
+    <div class="layout">
+      <aside class="layout__players" id="players-root"></aside>
+      <main class="layout__board" id="board-root">
+        <div class="board-column">
+          <div class="board-row">
+            <aside class="board-row__eval" id="eval-root"></aside>
+            <div class="board-row__grid" id="board-slot"></div>
+          </div>
+          <footer class="game-footer" id="game-footer"></footer>
+        </div>
+      </main>
+      <aside class="layout__sidebar" id="sidebar-root"></aside>
+    </div>
+  </div>
+`;
 
-appRoot.innerHTML =
-  '<div class="app-shell">' +
-    '<div class="game-layout" id="game-layout">' +
-      '<div class="card-slot" id="top-card"></div>' +
-      '<div class="board-slot" id="board-slot"></div>' +
-      '<div class="card-slot" id="bottom-card"></div>' +
-      '<div class="controls-slot" id="controls-slot"></div>' +
-      '<div class="notation-slot" id="notation-slot"></div>' +
-    '</div>' +
-  '</div>';
+const boardRoot = document.getElementById('board-root');
+const boardSlot = document.getElementById('board-slot');
+const headerRoot = document.getElementById('header-root');
+const sidebarRoot = document.getElementById('sidebar-root');
+const playersRoot = document.getElementById('players-root');
+const evalRoot = document.getElementById('eval-root');
+const footerRoot = document.getElementById('game-footer');
 
-var topCardEl    = document.getElementById('top-card');
-var bottomCardEl = document.getElementById('bottom-card');
-var boardSlot    = document.getElementById('board-slot');
-var controlsSlot = document.getElementById('controls-slot');
-var notationSlot = document.getElementById('notation-slot');
+let lastPlayersPanelKey = '';
+let lastSidebarStructureKey = '';
 
-function topSeat(state) {
-  return state.settings.rotateBoard ? 0 : 1;
-}
-function bottomSeat(state) {
-  return state.settings.rotateBoard ? 1 : 0;
-}
-
-var lastControlsKey = '';
-var lastCardKey = '';
-
-function cardKey(state) {
-  var ls = state.liveSearch;
+function playersPanelKey(state) {
+  const { settings } = state;
   return JSON.stringify({
-    players: state.settings.players,
-    playerToMove: state.playerToMove,
-    thinking: state.aiThinking,
-    thinkingSeat: state.thinkingSeatIndex,
-    winner: state.winner,
-    isDraw: state.isDraw,
-    rotated: state.settings.rotateBoard,
-    completedSnaps: state.lastCompletedThinkBySeat
-      ? state.lastCompletedThinkBySeat.map(function(s) {
-          return s ? (s.move + '|' + s.score + '|' + s.depth + '|' + s.nodes + '|' + s.thinkMs) : '';
-        })
-      : [],
-    liveSnap: ls
-      ? (ls.mode + '|' + ls.nodes + '|' + ls.elapsedMs + '|' + ls.searchDepth)
-      : '',
+    mode: settings.uiMode,
+    players: settings.players,
+    ai: settings.playerAiSettings,
   });
 }
 
-function controlsKey(state) {
+function sidebarStructureKey(state) {
+  const errors = Object.entries(state.engineErrors ?? {})
+    .filter(([, message]) => message)
+    .map(([seat, message]) => `${seat}:${message}`)
+    .join('|');
   return JSON.stringify({
-    canUndo: state.actions.length > 0,
-    canRedo: state.canRedo,
+    mode: state.uiMode,
+    hasReplay: Boolean(state.replay),
     winner: state.winner,
     isDraw: state.isDraw,
-    rotated: state.settings.rotateBoard,
-    undoPaused: controller._undoPaused,
+    errors,
   });
+}
+
+function renderBoardArea() {
+  const state = controller.getState();
+  renderEvalBar(evalRoot, state);
+  renderBoard(boardSlot, state, controller);
+  renderGameFooter(footerRoot, state);
 }
 
 function render() {
-  var state = controller.getState();
+  const state = controller.getState();
+  renderBoardArea();
+  renderSiteHeader(headerRoot, state, controller);
 
-  renderBoard(boardSlot, state, controller);
-
-  var ck = cardKey(state);
-  if (ck !== lastCardKey) {
-    renderPlayerCard(topCardEl, state, topSeat(state), controller);
-    renderPlayerCard(bottomCardEl, state, bottomSeat(state), controller);
-    lastCardKey = ck;
+  const panelKey = playersPanelKey(state);
+  if (panelKey !== lastPlayersPanelKey) {
+    renderPlayersPanel(playersRoot, state, controller);
+    lastPlayersPanelKey = panelKey;
   }
 
-  var ctk = controlsKey(state);
-  if (ctk !== lastControlsKey) {
-    renderGameControls(controlsSlot, state, controller);
-    lastControlsKey = ctk;
+  const sbKey = sidebarStructureKey(state);
+  if (sbKey !== lastSidebarStructureKey) {
+    renderSidebar(sidebarRoot, state, controller);
+    lastSidebarStructureKey = sbKey;
+  } else {
+    updateSidebarPanel(sidebarRoot, state, controller);
   }
-
-  updateNotationBar(notationSlot, state, controller);
 }
 
-function renderLiveUpdate() {
-  var state = controller.getState();
-  var ck = cardKey(state);
-  if (ck !== lastCardKey) {
-    renderPlayerCard(topCardEl, state, topSeat(state), controller);
-    renderPlayerCard(bottomCardEl, state, bottomSeat(state), controller);
-    lastCardKey = ck;
-  }
+function renderLiveSearch() {
+  const state = controller.getState();
+  updateSidebarPanel(sidebarRoot, state, controller);
 }
 
 controller.onChange = render;
-controller.onLiveUpdate = renderLiveUpdate;
-
-renderGameControls(controlsSlot, controller.getState(), controller);
+controller.onLiveUpdate = renderLiveSearch;
 render();
-
-// Open player dialog on every load.
-// AI starts only after user clicks "Start game" — maybeRequestAiMove is called
-// inside newGameWithPlayers / changePlayers, not here.
-setTimeout(function() {
-  openPlayerDialog(controller.getState(), controller, { mode: 'newgame' });
-}, 120);
+controller.maybeRequestAiMove();

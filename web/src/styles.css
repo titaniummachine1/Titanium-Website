@@ -878,9 +878,11 @@ body {
   }
 }
 
-/* Board */
+/* Board — isolated stacking context so pawns/walls never escape above dialogs */
 .board-panel {
   position: relative;
+  isolation: isolate;
+  overflow: hidden;
 }
 
 .board {
@@ -1732,7 +1734,8 @@ body {
   font-family: 'Roboto Mono', monospace;
   font-size: 0.8rem;
   color: var(--muted);
-  
+}
+
 /* ─── Player dialog time slider ─────────────────────────────────── */
 
 .player-dialog__time-row {
@@ -2230,25 +2233,3 @@ body {
   border-top: 1px solid var(--border);
 }
 
-/* ─── Winner banner (board-contained, never overlaps dialogs) ───── */
-
-.winner-banner {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  background: rgba(0, 0, 0, 0.55);
-  color: white;
-  font-size: 1.5rem;
-  font-weight: 700;
-  border-radius: 12px;
-  z-index: 20;
-}
-
-.winner-banner__newgame {
-  font-size: 0.85rem;
-  padding: 8px 20px;
-}
