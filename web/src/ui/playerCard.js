@@ -1,11 +1,13 @@
 /**
- * Compact player card — shown above and below the board.
+ * Compact player card — read-only during play.
  *
- * Shows: pawn icon, player name, turn status, thinking progress,
- * engine-specific live settings, and a "Play now" button when safe.
+ * Shows: pawn icon, engine config summary, turn/thinking status,
+ * live telemetry (score, depth, nodes, PV), and Play now when safe.
+ *
+ * Interactive engine settings live only in the unified player dialog.
  */
 
-import { PlayerType } from '../lib/engineConfig.js';
+import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { formatScoreForCard, isMateScore } from '../lib/engineScore.js';
 import { canPlayNow, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
@@ -13,14 +15,8 @@ import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
 import {
   STRENGTH_LEVEL_PRESETS,
   TIME_TO_MOVE_PRESETS,
-  formatMaxDepth,
-  formatVisitsCap,
   formatWallClock,
-  maxDepthFromVisitsBudget,
-  visitsFromSliderPosition,
 } from '../lib/timeControl.js';
-import { renderDiscreteSlider } from './discreteSlider.js';
-import { wireRangeSlider } from './sliderWire.js';
 
 function escHtml(s) {
   return String(s)
@@ -67,132 +63,69 @@ function resolveDepth(snap) {
   return deep?.depth ?? snap.depth ?? snap.searchDepth ?? null;
 }
 
-function renderLiveSettings(ui, playerNum) {
-  if (!ui || ui.isHuman) return '';
-
-  if (ui.isLocalMcts) {
-    const { min: tMin, max: tMax, step: tStep } = ui.wallclockRange;
-    const { min: vMin, max: vMax, step: vStep } = ui.visitsRange;
-    const budgetLabel = ui.isTitanium ? 'Nodes' : ui.isQuoridorV3 ? 'Depth' : 'Rollouts';
-    const visitsSlider = ui.isAceEngine
-      ? ''
-      : `
-        <label class="control-label control-label--sub">${budgetLabel}</label>
-        <div class="time-slider-row">
-          <input type="range" class="time-slider scraped-slider"
-            data-setting="visits-${playerNum}" min="${vMin}" max="${vMax}" step="${vStep}"
-            value="${ui.visitsSliderPosition}" />
-          <output class="time-slider-value" data-visits-label="${playerNum}">${
-            ui.isQuoridorV3
-              ? formatMaxDepth(maxDepthFromVisitsBudget(ui.visitsBudget))
-              : formatVisitsCap(ui.visitsBudget)
-          }</output>
-        </div>`;
-
-    return `
-      <details class="player-card__settings"${ui.isThinking ? ' open' : ''}>
-        <summary class="player-card__settings-toggle">Engine settings</summary>
-        <div class="player-ai-settings player-ai-settings--compact">
-          ${ui.isTitanium
-            ? renderDiscreteSlider({
-              label: 'Strength',
-              settingName: 'strength-level',
-              playerNum,
-              value: ui.strengthLevel,
-              presets: STRENGTH_LEVEL_PRESETS,
-            })
-            : ''}
-          ${ui.isAceFamily
-            ? renderDiscreteSlider({
-              label: 'Version',
-              settingName: 'strength-level',
-              playerNum,
-              value: ui.strengthLevel,
-              presets: aceStrengthPresetsForPlayerType(ui.playerType),
-            })
-            : ''}
-          <label class="control-label control-label--sub">Time</label>
-          <div class="time-slider-row">
-            <input type="range" class="time-slider scraped-slider"
-              data-setting="wallclock-${playerNum}" min="${tMin}" max="${tMax}" step="${tStep}"
-              value="${ui.wallClockSeconds}" />
-            <output class="time-slider-value" data-wallclock-label="${playerNum}">${formatWallClock(ui.wallClockSeconds)}</output>
-          </div>
-          ${visitsSlider}
-        </div>
-      </details>`;
+function expandStrengthLabel(label) {
+  switch (label) {
+    case 'Beg.': return 'Beginner';
+    case 'Inter.': return 'Intermediate';
+    case 'Adv.': return 'Advanced';
+    default: return label;
   }
-
-  if (ui.isRemote) {
-    return `
-      <details class="player-card__settings"${ui.isThinking ? ' open' : ''}>
-        <summary class="player-card__settings-toggle">Engine settings</summary>
-        <div class="player-ai-settings player-ai-settings--compact">
-          ${renderDiscreteSlider({
-            label: 'Strength',
-            settingName: 'strength-level',
-            playerNum,
-            value: ui.strengthLevel,
-            presets: STRENGTH_LEVEL_PRESETS,
-          })}
-          ${renderDiscreteSlider({
-            label: 'Thinking mode',
-            settingName: 'time-to-move',
-            playerNum,
-            value: ui.timeToMove,
-            presets: TIME_TO_MOVE_PRESETS,
-          })}
-        </div>
-      </details>`;
-  }
-
-  return '';
 }
 
-function wireLiveSettings(container, controller, playerNum) {
-  const refresh = () => controller.onChange?.();
+function formatTimeSummary(seconds) {
+  const formatted = formatWallClock(seconds ?? 10);
+  if (formatted.endsWith('ms')) return formatted;
+  if (formatted.endsWith('s') && !formatted.includes(' ')) {
+    return formatted.replace(/s$/, ' s');
+  }
+  return formatted;
+}
 
-  wireRangeSlider(
-    container,
-    `[data-setting="strength-level-${playerNum}"]`,
-    (value) => controller.setPlayerStrengthLevel(playerNum, value, { silent: true }),
-    () => controller._afterLivePlayerSettingChange(playerNum, { rebindEngine: true }),
-  );
+/** Compact read-only config line for the card, e.g. "Ka · Alpha · Long". */
+export function compactPlayerConfigSummary(ui) {
+  if (!ui || ui.isHuman) return 'Human';
 
-  wireRangeSlider(
-    container,
-    `[data-setting="time-to-move-${playerNum}"]`,
-    (value) => controller.setPlayerTimeToMove(playerNum, value, { silent: true }),
-    () => controller._afterLivePlayerSettingChange(playerNum, { rebindEngine: true }),
-  );
+  const engine = shortEngineName(ui.playerType);
 
-  wireRangeSlider(
-    container,
-    `[data-setting="wallclock-${playerNum}"]`,
-    (value) => {
-      controller.setPlayerWallClock(playerNum, value, { silent: true });
-      const label = container.querySelector(`[data-wallclock-label="${playerNum}"]`);
-      if (label) label.textContent = formatWallClock(Number(value));
-    },
-    () => controller._afterLivePlayerSettingChange(playerNum),
-  );
+  if (ui.isRemote) {
+    const strength = expandStrengthLabel(
+      STRENGTH_LEVEL_PRESETS.find((p) => p.id === (ui.strengthLevel ?? StrengthLevel.Alpha))?.label
+        ?? 'Alpha',
+    );
+    const time = TIME_TO_MOVE_PRESETS.find((p) => p.id === (ui.timeToMove ?? TimeToMove.Short))?.label
+      ?? 'Short';
+    return `${engine} · ${strength} · ${time}`;
+  }
 
-  wireRangeSlider(
-    container,
-    `[data-setting="visits-${playerNum}"]`,
-    (value) => {
-      const visits = visitsFromSliderPosition(value);
-      controller.setPlayerVisitsBudget(playerNum, visits, { silent: true });
-      const label = container.querySelector(`[data-visits-label="${playerNum}"]`);
-      if (label) {
-        const isV3 = controller.getPlayerAiSettingsUiForSlot(playerNum).isQuoridorV3;
-        label.textContent = isV3
-          ? formatMaxDepth(maxDepthFromVisitsBudget(visits))
-          : formatVisitsCap(visits);
-      }
-    },
-    () => controller._afterLivePlayerSettingChange(playerNum),
-  );
+  if (ui.isAceFamily) {
+    const tiers = aceStrengthPresetsForPlayerType(ui.playerType);
+    const tier = tiers.find((t) => t.id === (ui.strengthLevel ?? 0))?.label ?? 'JS';
+    return `${engine} · ${tier} · ${formatTimeSummary(ui.wallClockSeconds)}`;
+  }
+
+  if (ui.isTitanium) {
+    const strength = expandStrengthLabel(
+      STRENGTH_LEVEL_PRESETS.find((p) => p.id === (ui.strengthLevel ?? StrengthLevel.Alpha))?.label
+        ?? 'Alpha',
+    );
+    return `${engine} · ${strength} · ${formatTimeSummary(ui.wallClockSeconds)}`;
+  }
+
+  return `${engine} · ${formatTimeSummary(ui.wallClockSeconds)}`;
+}
+
+function shortEngineName(playerType) {
+  if (playerType === PlayerType.TitaniumMinimax || playerType === PlayerType.TitaniumV15Frozen) {
+    return 'Titanium';
+  }
+  if (playerType === PlayerType.GorisansonMCTS) return 'Gorisanson';
+  if (playerType === PlayerType.QuoridorV3) return 'Quoridor v3';
+  if (playerType === PlayerType.KaAI) return 'Ka';
+  if (playerType === PlayerType.IshtarV3 || playerType === PlayerType.IshtarPonder) return 'Ishtar';
+  if (playerType === PlayerType.AceV8) return 'ACE v8';
+  if (playerType === PlayerType.AceV10) return 'ACE v10';
+  if (playerType === PlayerType.AceV13) return 'ACE v13';
+  return String(playerType);
 }
 
 export function renderPlayerCard(container, state, seatIndex, controller) {
@@ -207,7 +140,7 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
   const completedSnap = state.lastCompletedThinkBySeat?.[seatIndex];
   const snap = liveSnap ?? completedSnap;
 
-  const engineName = resolveEngineName(playerType, state, seatIndex);
+  const configSummary = compactPlayerConfigSummary(ui);
   const bestMove = snap?.move ?? (liveSnap ? null : completedSnap?.move ?? null);
   const depth = resolveDepth(snap);
   const nodes = resolveNodes(snap);
@@ -251,50 +184,32 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
   });
 
   container.innerHTML = `
-    <div class="player-card player-card--seat${seatIndex}${isMyTurn ? ' player-card--active' : ''}${state.winner === seatIndex + 1 ? ' player-card--winner' : ''}">
-      <div class="player-card__left">
-        <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}"></div>
-        <div class="player-card__info">
-          <div class="player-card__name">${escHtml(colorName)}
-            <span class="player-card__engine-label">${escHtml(isHuman ? 'Human' : engineName)}</span>
+    <div class="player-card player-card--seat${seatIndex}${isMyTurn ? ' player-card--active' : ''}${state.winner === seatIndex + 1 ? ' player-card--winner' : ''}" data-player-card-seat="${seatIndex}">
+      <div class="player-card__main">
+        <div class="player-card__left">
+          <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}"></div>
+          <div class="player-card__info">
+            <div class="player-card__name">${escHtml(colorName)}</div>
+            <div class="player-card__config">${escHtml(configSummary)}</div>
+            ${statusText ? `<div class="player-card__status${isThinking ? ' player-card__status--thinking' : ''}" data-player-card-status="${seatIndex}">${escHtml(statusText)}</div>` : ''}
+            ${bestMove && !isThinking ? `<div class="player-card__bestmove">played <strong>${escHtml(bestMove)}</strong></div>` : ''}
+            ${livePvMove ? `<div class="player-card__bestmove">pv <strong>${escHtml(livePvMove)}</strong></div>` : ''}
           </div>
-          ${statusText ? `<div class="player-card__status${isThinking ? ' player-card__status--thinking' : ''}">${escHtml(statusText)}</div>` : ''}
-          ${bestMove && !isThinking ? `<div class="player-card__bestmove">played <strong>${escHtml(bestMove)}</strong></div>` : ''}
-          ${livePvMove ? `<div class="player-card__bestmove">pv <strong>${escHtml(livePvMove)}</strong></div>` : ''}
+        </div>
+        <div class="player-card__right">
+          <div class="player-card__stats">
+            ${scoreDisplay ? `<span class="player-card__score${isMate ? ' player-card__score--mate' : ''}">${escHtml(scoreDisplay)}</span>` : ''}
+            ${depth != null ? `<span class="player-card__stat"><span class="player-card__stat-label">d</span>${depth}</span>` : ''}
+            ${nodes > 0 ? `<span class="player-card__stat"><span class="player-card__stat-label">n</span>${escHtml(formatNodes(nodes))}</span>` : ''}
+            ${thinkMs != null ? `<span class="player-card__stat">${escHtml(formatMs(thinkMs))}</span>` : ''}
+          </div>
+          ${showPlayNow ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ''}
         </div>
       </div>
-      <div class="player-card__right">
-        <div class="player-card__stats">
-          ${scoreDisplay ? `<span class="player-card__score${isMate ? ' player-card__score--mate' : ''}">${escHtml(scoreDisplay)}</span>` : ''}
-          ${depth != null ? `<span class="player-card__stat"><span class="player-card__stat-label">d</span>${depth}</span>` : ''}
-          ${nodes > 0 ? `<span class="player-card__stat"><span class="player-card__stat-label">n</span>${escHtml(formatNodes(nodes))}</span>` : ''}
-          ${thinkMs != null ? `<span class="player-card__stat">${escHtml(formatMs(thinkMs))}</span>` : ''}
-        </div>
-        ${showPlayNow ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ''}
-      </div>
-      ${renderLiveSettings(ui ? { ...ui, isThinking } : null, seatIndex + 1)}
     </div>
   `;
-
-  if (!isHuman && ui) {
-    wireLiveSettings(container, controller, seatIndex + 1);
-  }
 
   container.querySelector('[data-action="play-now"]')?.addEventListener('click', () => {
     controller.playNow?.();
   });
-}
-
-function resolveEngineName(playerType, state, seatIndex) {
-  if (playerType === PlayerType.Human) return 'Human';
-  if (playerType === PlayerType.TitaniumMinimax) return 'Titanium v15';
-  if (playerType === PlayerType.TitaniumV15Frozen) return 'Titanium v15 (frozen)';
-  if (playerType === PlayerType.GorisansonMCTS) return 'Gorisanson';
-  if (playerType === PlayerType.QuoridorV3) return 'Quoridor v3';
-  if (playerType === PlayerType.KaAI) return 'Ka';
-  if (playerType === PlayerType.IshtarV3 || playerType === PlayerType.IshtarPonder) return 'Ishtar';
-  if (playerType === PlayerType.AceV10) return 'ACE v10';
-  if (playerType === PlayerType.AceV13) return 'ACE v13';
-  if (playerType === PlayerType.AceV8) return 'ACE v8';
-  return String(playerType);
 }

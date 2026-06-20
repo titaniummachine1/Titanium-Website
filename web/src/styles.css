@@ -1814,15 +1814,22 @@ body {
 
 .player-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 0;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 8px 12px;
   font-size: 0.82rem;
   transition: border-color 0.2s;
+}
+
+.player-card__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 
 .player-card--active {
@@ -1884,6 +1891,14 @@ body {
   font-weight: 400;
 }
 
+.player-card__config {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .player-card__status {
   font-size: 0.76rem;
   color: var(--muted);
@@ -1935,42 +1950,6 @@ body {
   color: var(--muted);
   font-family: 'Roboto Mono', monospace;
   white-space: nowrap;
-}
-
-.player-card__settings {
-  width: 100%;
-  margin-top: 6px;
-  border-top: 1px solid var(--border);
-  padding-top: 6px;
-}
-
-.player-card__settings-toggle {
-  cursor: pointer;
-  font-size: 0.72rem;
-  color: var(--muted);
-  user-select: none;
-}
-
-.player-ai-settings--compact {
-  margin-top: 6px;
-  gap: 6px;
-}
-
-.player-ai-settings--compact .time-slider-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.player-ai-settings--compact .time-slider {
-  flex: 1;
-}
-
-.player-ai-settings--compact .time-slider-value {
-  font-size: 0.72rem;
-  font-family: 'Roboto Mono', monospace;
-  min-width: 3.5rem;
-  text-align: right;
 }
 
 /* ─── Pawn icons ────────────────────────────────────────────────── */

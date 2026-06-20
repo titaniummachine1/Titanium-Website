@@ -10,7 +10,7 @@
     "build:pages": "npm run build:wasm && vite build --mode ghpages",
     "preview": "vite preview",
     "preview:pages": "vite preview --mode ghpages",
-    "test": "node src/tests/parity.test.mjs && node src/tests/siteLogic.test.mjs && node src/tests/browser.integration.test.mjs",
+    "test": "node src/tests/parity.test.mjs && node src/tests/siteLogic.test.mjs && node src/tests/browser.integration.test.mjs && node src/tests/uiOwnership.test.mjs",
     "test:parity": "node src/tests/parity.test.mjs"
   },
   "devDependencies": {
