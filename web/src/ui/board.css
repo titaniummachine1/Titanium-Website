@@ -176,6 +176,7 @@
 }
 
 .board-cell__square {
+  position: relative;
   height: 100%;
   width: 100%;
   background-color: #d4a276;
@@ -188,7 +189,6 @@
 }
 
 .board-cell__square--cat {
-  position: relative;
   overflow: hidden;
 }
 
@@ -680,34 +680,37 @@
   inset: 0;
   pointer-events: none;
   z-index: 6;
-  border-radius: 4px;
   animation: bm-pulse 1.2s ease-in-out infinite;
 }
 
+/* Pawn ghost: circular ring inside the target square */
 .bm-ghost--pawn {
+  inset: 12%;
   border-radius: 50%;
-  margin: 10%;
 }
 
 .bm-ghost--player1 {
-  border: 2px dashed var(--p1-pawn, #e8e8e8);
-  background: rgba(232, 232, 232, 0.18);
-  box-shadow: 0 0 8px rgba(232, 232, 232, 0.4);
+  border: 2px dashed #e8e8e8;
+  background: rgba(232, 232, 232, 0.20);
+  box-shadow: 0 0 6px rgba(232, 232, 232, 0.5);
 }
 
 .bm-ghost--player2 {
-  border: 2px dashed var(--p2-pawn, #3a2a1a);
-  background: rgba(58, 42, 26, 0.18);
-  box-shadow: 0 0 8px rgba(58, 42, 26, 0.4);
+  border: 2px dashed #6b3a1a;
+  background: rgba(80, 40, 10, 0.22);
+  box-shadow: 0 0 6px rgba(80, 40, 10, 0.4);
 }
 
+/* Wall ghost: green rectangle outline over the wall slot */
 .bm-ghost--wall {
+  inset: 4%;
+  border-radius: 3px;
   border: 2px dashed #7ec87e;
-  background: rgba(126, 200, 126, 0.18);
-  box-shadow: 0 0 8px rgba(126, 200, 126, 0.35);
+  background: rgba(126, 200, 126, 0.20);
+  box-shadow: 0 0 6px rgba(126, 200, 126, 0.4);
 }
 
 @keyframes bm-pulse {
-  0%, 100% { opacity: 0.85; }
-  50%       { opacity: 0.35; }
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
 }
