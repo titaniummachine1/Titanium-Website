@@ -69,7 +69,7 @@ function cardKey(state) {
         })
       : [],
     liveSnap: ls
-      ? (ls.mode + '|' + ls.nodes + '|' + ls.elapsedMs + '|' + ls.searchDepth)
+      ? (ls.mode + '|' + ls.nodes + '|' + ls.elapsedMs + '|' + ls.searchDepth + '|' + (typeof ls.pv === 'string' ? ls.pv : ''))
       : '',
   });
 }
@@ -105,17 +105,12 @@ function render() {
 
   updateNotationBar(notationSlot, state, controller);
 
-  var isTerminal = !!(state.winner != null || state.isDraw);
-  if (isTerminal && !lastTerminal) {
-    setTimeout(function() {
-      openPlayerDialog(controller.getState(), controller, { mode: 'newgame' });
-    }, 350);
-  }
-  lastTerminal = isTerminal;
+  lastTerminal = !!(state.winner != null || state.isDraw);
 }
 
 function renderLiveUpdate() {
   var state = controller.getState();
+  renderBoard(boardSlot, state, controller);
   var ck = cardKey(state);
   if (ck !== lastCardKey) {
     renderPlayerCard(topCardEl, state, topSeat(state), controller);

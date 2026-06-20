@@ -44,6 +44,12 @@ assertEqual(
   'rootMoves fallback',
 );
 
+assertEqual(
+  pvFirstMoveFromLiveSearch({ depthLog: [{ depth: 4, pv: 'pv f3h e2' }] }),
+  'f3h',
+  'depthLog strips pv prefix',
+);
+
 console.log('\n[liveBestMove] identity checks');
 const baseState = {
   aiThinking: true,

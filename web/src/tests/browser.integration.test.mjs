@@ -103,6 +103,51 @@ assertEqual(
   'positionKey mismatch',
 );
 
+console.log('\n[highlight] live PV h5 and f3h resolve (normal orientation)');
+const pawnState = {
+  aiThinking: true,
+  winner: null,
+  isDraw: false,
+  thinkingSeatIndex: 0,
+  playerToMove: 1,
+  settings: { players: ['ka-ai', 'human'], showBestMoveHint: true },
+  actions: [{ coordinate: { column: 'e', row: 2 } }],
+  validActions: [
+    { coordinate: { column: 'h', row: 5 } },
+    { coordinate: { column: 'e', row: 3 } },
+  ],
+  searchGeneration: 3,
+  liveSearch: {
+    seatIndex: 0,
+    playerType: 'ka-ai',
+    requestSeq: 3,
+    positionKey: 'e2',
+    depthLog: [{ depth: 2, pv: 'h5' }],
+  },
+};
+assertEqual(resolveLiveBestMoveKey(pawnState), 'h5', 'pawn pv h5');
+
+const wallState = {
+  ...pawnState,
+  validActions: [
+    { coordinate: { column: 'f', row: 3 }, wallType: 'h' },
+  ],
+  liveSearch: {
+    ...pawnState.liveSearch,
+    depthLog: [{ depth: 4, pv: 'f3h' }],
+  },
+};
+assertEqual(resolveLiveBestMoveKey(wallState), 'f3h', 'wall pv f3h');
+
+console.log('\n[highlight] flipped board uses same algebraic keys');
+for (const isFlipped of [false, true]) {
+  const f3h = canonicalWallToAlgebraic(5, 2, 'h');
+  const alg = toAlgebraic(f3h);
+  assertEqual(alg, 'f3h', `wall key stable flipped=${isFlipped}`);
+  const h5cell = canonicalCellToAlgebraic(7, 4);
+  assertEqual(`${h5cell.column}${h5cell.row}`, 'h5', `h5 cell flipped=${isFlipped}`);
+}
+
 console.log('\n[layering] board-local z-index contract documented');
 const layers = {
   grid: 0,

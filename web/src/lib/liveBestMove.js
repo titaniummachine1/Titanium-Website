@@ -10,6 +10,18 @@ function deepestDepthEntry(depthLog) {
   return depthLog.reduce((best, entry) => (entry.depth > (best?.depth ?? 0) ? entry : best));
 }
 
+/** Strip leading "pv" token if present in depth-log strings. */
+function firstPvTokenFromString(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(/\s+/);
+  if (parts[0]?.toLowerCase() === 'pv' && parts.length > 1) {
+    return parts[1];
+  }
+  return parts[0];
+}
+
 /** Extract first PV token from live search payload (never from completed move). */
 export function pvFirstMoveFromLiveSearch(liveSearch) {
   if (!liveSearch) return null;
@@ -17,7 +29,7 @@ export function pvFirstMoveFromLiveSearch(liveSearch) {
   if (Array.isArray(liveSearch.pv) && liveSearch.pv.length > 0) {
     try {
       const head = liveSearch.pv[0];
-      if (typeof head === 'string') return head.trim().split(/\s+/)[0] || null;
+      if (typeof head === 'string') return firstPvTokenFromString(head);
       return toAlgebraic(head);
     } catch {
       /* fall through */
@@ -25,13 +37,13 @@ export function pvFirstMoveFromLiveSearch(liveSearch) {
   }
 
   if (typeof liveSearch.pv === 'string' && liveSearch.pv.trim()) {
-    return liveSearch.pv.trim().split(/\s+/)[0];
+    return firstPvTokenFromString(liveSearch.pv);
   }
 
   const depthLog = liveSearch.depthLog ?? [];
   const deep = deepestDepthEntry(depthLog);
   if (typeof deep?.pv === 'string' && deep.pv.trim()) {
-    return deep.pv.trim().split(/\s+/)[0];
+    return firstPvTokenFromString(deep.pv);
   }
 
   const rootMoves = liveSearch.rootMoves ?? [];
