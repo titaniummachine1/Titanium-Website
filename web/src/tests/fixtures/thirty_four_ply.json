@@ -1,0 +1,10 @@
+{
+  "history": "e2 e8 e3 e7 e4 e6 d3h c6h f3h e4v a6v d4h h3h b3v c5v b5v c1v e7 d4 d7 c7v e8v c4 d8 c8h e8 c3 e9 c2 d9 b2 c9 b7h b9",
+  "expectedAfterPly34": {
+    "sideToMove": 1,
+    "whitePawn": "b2",
+    "blackPawn": "b9",
+    "whiteWallsRemaining": 1,
+    "blackWallsRemaining": 4
+  }
+}
