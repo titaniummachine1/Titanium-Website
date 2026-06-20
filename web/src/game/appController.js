@@ -10,7 +10,8 @@ import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
 import { useStaticEngineBackend } from '../lib/engineBackend.js';
 import { validateMovesWithRust } from '../lib/rustMoveValidate.js';
 import { resolveOnBestMoveResult } from '../lib/onBestMoveResult.js';
-import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
+import { positionKeyFromActions, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
+import { positionKeyFromHistory as remotePositionKey } from '../lib/remoteSync.js';
 import { isAbortError } from '../lib/engineAbort.js';
 import { AceV10JsEngineClient } from '../lib/aceV10JsEngine.js';
 import { AceV13JsEngineClient } from '../lib/aceV13JsEngine.js';
@@ -268,8 +269,7 @@ export class AppController {
     this._undoPaused = false;
     this._undoPauseTimer = null;
     this._playNowLock = false;
-
-    this.session.subscribe(() => this.onSessionChange());
+    this._terminalOverlayDismissed = false;
     this.migrateLegacyPlayerTypes();
     // First paint: Titanium vs local αβ adversary should not always be White.
     this.maybeRandomizeTitaniumAdversarySeats();
@@ -348,6 +348,7 @@ export class AppController {
           meta: this.replay.meta,
         }
         : null,
+      terminalOverlayDismissed: this._terminalOverlayDismissed,
       playReplayCode:
         this.session.actions.length > 0 && this.settings.uiMode === 'play'
           ? encodeReplayFromActions(
@@ -971,6 +972,12 @@ export class AppController {
     this.onChange?.();
   }
 
+  /** Dismiss terminal game overlay without starting a new game or changing settings. */
+  dismissTerminalOverlay() {
+    this._terminalOverlayDismissed = true;
+    this.onChange?.();
+  }
+
   catMovesKey() {
     return this.session.actions.map((action) => toAlgebraic(action)).join('|');
   }
@@ -1043,6 +1050,7 @@ export class AppController {
     this.showCatHint = false;
     this.settings.uiMode = 'play';
     this.eval = { score: 0.5, p1: 0.5, pv: [] };
+    this._terminalOverlayDismissed = false;
     this.session.reset();
     this.invalidateCatCache();
     this.scheduleCatRefresh();
@@ -1272,7 +1280,7 @@ export class AppController {
     this.continueAiAfterEngineSync(action);
   }
 
-  /** After any ply, sync remote seats then request the next AI move (never stall on sync failure). */
+  /** After any ply, sync remote seats then request the next AI move. */
   continueAiAfterEngineSync(action) {
     const gameGeneration = this._gameGeneration;
     void this.syncRemoteEnginesAfterMove(action)
@@ -1281,6 +1289,7 @@ export class AppController {
           return;
         }
         console.error('Engine position sync failed after ply', err);
+        const positionKey = remotePositionKey(this.session.actions);
         for (let seat = 0; seat < this.settings.players.length; seat++) {
           if (this.settings.players[seat] === PlayerType.Human) {
             continue;
@@ -1289,8 +1298,16 @@ export class AppController {
           this.engineErrors[seat] = message;
           this.engineStatus[seat] = 'error';
           const engine = this.getEngineForSeat(seat);
-          if (engine) {
-            engine.appliedPlies = 0;
+          if (engine?.markDesynced) {
+            engine.markDesynced(message);
+            void engine.recoverFromDesync({
+              moveHistory: this.session.actions,
+              gameSnapshot: this.session.getEngineSnapshot(),
+              isFreshGame: this.session.actions.length === 0,
+              positionKey,
+            }).catch((resyncErr) => {
+              console.error('Remote resync failed', resyncErr);
+            });
           }
         }
         this.onChange?.();
@@ -1432,6 +1449,13 @@ export class AppController {
         }
       };
       engine.onInfo = (info) => {
+        if (
+          info.connectionEpoch != null &&
+          engine.connectionEpoch != null &&
+          info.connectionEpoch !== engine.connectionEpoch
+        ) {
+          return;
+        }
         const prev = this.searchInfoBySeat[seatIndex] ?? {};
         const depthLog = info.depthLog?.length
           ? mergeDepthLogs(prev.depthLog, info.depthLog)
@@ -1586,16 +1610,28 @@ export class AppController {
     return this.getEngineForSeat(this.seatIndexForPlayerType(playerType));
   }
 
-  /** Keep engine clients in sync after every ply (incremental makemove or full replay). */
+  /** Keep engine clients in sync after every ply (incremental makemove echo to all remotes). */
   async syncRemoteEnginesAfterMove(action) {
+    const positionKey = remotePositionKey(this.session.actions);
+    const historyLength = this.session.actions.length;
     const ops = [];
     for (let seat = 0; seat < this.settings.players.length; seat++) {
       if (this.settings.players[seat] === PlayerType.Human) {
         continue;
       }
-      const p = this.getEngineForSeat(seat)?.makeMoves?.([action]);
-      if (p?.then) {
-        ops.push(p);
+      const engine = this.getEngineForSeat(seat);
+      const echo = engine?.echoCommittedMove?.(action, positionKey, historyLength);
+      if (echo?.then) {
+        ops.push(echo);
+      } else if (engine?.makeMoves) {
+        ops.push(
+          Promise.resolve(engine.makeMoves([action])).then(() => {
+            if (engine.appliedPlies != null) {
+              engine.appliedPlies = historyLength;
+              engine.appliedPositionKey = positionKey;
+            }
+          }),
+        );
       }
     }
     if (ops.length) {
@@ -1610,10 +1646,12 @@ export class AppController {
     }
 
     const moveHistory = this.session.actions;
+    const positionKey = remotePositionKey(moveHistory);
     engine.syncGameState({
       moveHistory,
       gameSnapshot: this.session.getEngineSnapshot(),
       isFreshGame: moveHistory.length === 0,
+      positionKey,
     });
   }
 
@@ -1776,8 +1814,14 @@ export class AppController {
 
     if (retries <= this._maxIllegalRetries) {
       const engine = this.getEngineForSeat(seatIndex);
-      if (engine) {
-        engine.appliedPlies = 0;
+      if (engine?.recoverFromDesync) {
+        const positionKey = remotePositionKey(this.session.actions);
+        void engine.recoverFromDesync({
+          moveHistory: this.session.actions,
+          gameSnapshot: this.session.getEngineSnapshot(),
+          isFreshGame: this.session.actions.length === 0,
+          positionKey,
+        });
       }
       const retryGen = this._gameGeneration;
       this.moveThinkLog.push({
@@ -1901,19 +1945,26 @@ export class AppController {
     requestPly,
     requestPlayerToMove,
     requestHistory,
+    requestPositionKey,
+    connectionEpoch,
     gameGeneration,
     engine,
   }) {
     const current = this.session.getSnapshot();
     const currentSeat = current.playerToMove - 1;
     const currentPlayerType = this.settings.players[currentSeat];
+    const currentPositionKey = remotePositionKey(current.actions);
     const stale =
       gameGeneration !== this._gameGeneration ||
       requestSeq !== this._moveRequestSeq ||
       current.actions.length !== requestPly ||
       current.playerToMove !== requestPlayerToMove ||
       currentSeat !== seatIndex ||
-      currentPlayerType !== playerType;
+      currentPlayerType !== playerType ||
+      (requestPositionKey != null && requestPositionKey !== currentPositionKey) ||
+      (connectionEpoch != null &&
+        engine?.connectionEpoch != null &&
+        connectionEpoch !== engine.connectionEpoch);
     if (stale) {
       console.warn('Ignoring stale engine move response', {
         playerType,
@@ -2112,6 +2163,7 @@ export class AppController {
     const requestPly = requestSnapshot.actions.length;
     const requestPlayerToMove = requestSnapshot.playerToMove;
     const requestHistory = this.session.actions.map((a) => toAlgebraic(a)).join(' ');
+    const requestPositionKey = remotePositionKey(this.session.actions);
 
     this.aiThinking = true;
     this.thinkingPlayerType = playerType;
@@ -2136,7 +2188,7 @@ export class AppController {
     this.onChange?.();
 
     const gameGeneration = this._gameGeneration;
-    engine.onBestMove = (action) =>
+    engine.onBestMove = (action, _raw, meta) =>
       resolveOnBestMoveResult(
         engine,
         this.applyEngineMove({
@@ -2147,6 +2199,8 @@ export class AppController {
           requestPly,
           requestPlayerToMove,
           requestHistory,
+          requestPositionKey,
+          connectionEpoch: meta?.connectionEpoch,
           gameGeneration,
           engine,
         }),
@@ -2189,6 +2243,8 @@ export class AppController {
       gameSnapshot: this.session.getEngineSnapshot(),
       moveHistory,
       isFreshGame,
+      positionKey: requestPositionKey,
+      requestSeq,
     });
   }
 
@@ -2318,6 +2374,7 @@ export class AppController {
     const requestPly = snapshot.actions.length;
     const requestPlayerToMove = snapshot.playerToMove;
     const requestHistory = snapshot.actions.map((a) => toAlgebraic(a)).join(' ');
+    const requestPositionKey = remotePositionKey(snapshot.actions);
     const gameGeneration = this._gameGeneration;
     const engine = this.getEngineForSeat(seatIndex);
 
@@ -2333,6 +2390,7 @@ export class AppController {
       requestPly,
       requestPlayerToMove,
       requestHistory,
+      requestPositionKey,
       gameGeneration,
       engine,
     }).finally(() => {
