@@ -1,4 +1,4 @@
-import { WallType, formatCoordinate, toAlgebraic } from '../lib/gameLogic.js';
+import { WallType, formatCoordinate, toAlgebraic, parseAlgebraic, isWallAction } from '../lib/gameLogic.js';
 import { playerColorName } from '../lib/playerColors.js';
 import {
   catSquareOverlay,
@@ -128,6 +128,12 @@ export function renderBoard(container, state, controller) {
         }),
       );
     }
+  }
+
+  // Best-move hint ghost (ACE v13 style)
+  const bestMoveKey = resolveBestMoveKey(state);
+  if (bestMoveKey) {
+    renderBestMoveGhost(grid, bestMoveKey, state.playerToMove);
   }
 
   boardShell.append(
@@ -566,6 +572,41 @@ function renderWallMarks(playerNum, remaining, visible, controller) {
 
 function parseCoord(text) {
   return { column: text[0], row: Number.parseInt(text[1], 10) };
+}
+
+/** Extract the current best move key from live or completed search. */
+function resolveBestMoveKey(state) {
+  if (state.winner || state.isDraw) return null;
+
+  // Prefer live PV first move while engine is thinking
+  if (state.aiThinking && state.liveSearch) {
+    const ls = state.liveSearch;
+    // pv may be a string "e5 e6 ..." or first array entry
+    const pvFirst = Array.isArray(ls.pv)
+      ? (ls.pv[0] ? toAlgebraic(ls.pv[0]) : null)
+      : (typeof ls.pv === 'string' ? ls.pv.trim().split(/\s+/)[0] : null);
+    if (pvFirst) return pvFirst;
+    if (ls.move) return ls.move;
+  }
+
+  // Fall back to last completed move for the seat that just moved
+  const lastSeat = state.playerToMove === 1 ? 1 : 0;  // seat that moved last
+  const snap = state.lastCompletedThinkBySeat?.[lastSeat];
+  if (snap?.move && snap.move !== '(none)') return snap.move;
+
+  return null;
+}
+
+/** Overlay a dashed ghost highlight on the best-move cell/wall element. */
+function renderBestMoveGhost(grid, moveKey, playerToMove) {
+  if (!moveKey) return;
+  const el = grid.querySelector(`[data-action="${CSS.escape(moveKey)}"]`);
+  if (!el) return;
+
+  const isWall = moveKey.endsWith('h') || moveKey.endsWith('v');
+  const ghost = document.createElement('div');
+  ghost.className = isWall ? 'bm-ghost bm-ghost--wall' : `bm-ghost bm-ghost--pawn bm-ghost--player${playerToMove}`;
+  el.appendChild(ghost);
 }
 
 function renderTurnIndicator(playerNum, playerToMove, playerType, engineStatus, engineErrors, aiThinking, winner, freePlay) {

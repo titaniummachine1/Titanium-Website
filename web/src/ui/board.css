@@ -672,3 +672,42 @@
     box-shadow: -1px -2px 2px #9c6644;
   }
 }
+
+/* ── Best-move hint ghost (ACE v13 style) ─────────────────────────── */
+
+.bm-ghost {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  border-radius: 4px;
+  animation: bm-pulse 1.2s ease-in-out infinite;
+}
+
+.bm-ghost--pawn {
+  border-radius: 50%;
+  margin: 10%;
+}
+
+.bm-ghost--player1 {
+  border: 2px dashed var(--p1-pawn, #e8e8e8);
+  background: rgba(232, 232, 232, 0.18);
+  box-shadow: 0 0 8px rgba(232, 232, 232, 0.4);
+}
+
+.bm-ghost--player2 {
+  border: 2px dashed var(--p2-pawn, #3a2a1a);
+  background: rgba(58, 42, 26, 0.18);
+  box-shadow: 0 0 8px rgba(58, 42, 26, 0.4);
+}
+
+.bm-ghost--wall {
+  border: 2px dashed #7ec87e;
+  background: rgba(126, 200, 126, 0.18);
+  box-shadow: 0 0 8px rgba(126, 200, 126, 0.35);
+}
+
+@keyframes bm-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%       { opacity: 0.35; }
+}
