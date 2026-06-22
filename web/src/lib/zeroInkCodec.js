@@ -2,6 +2,7 @@
  * Codec between the site's QuoridorBoard model and the quoridor-zero.ink REST API.
  *
  * zero.ink state schema (see memory/zeroink-api-protocol):
+ * zero.ink state schema (POST /api/play `state` payload):
  *   { currentPlayer:0|1, player0Cell, player1Cell, player0Walls, player1Walls,
  *     horizontalWalls:[{x,y}], verticalWalls:[{x,y}] }
  *   cell = row0*9 + col0   (col0,row0 are 0-based, 0..8)

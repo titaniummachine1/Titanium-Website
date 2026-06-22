@@ -2,7 +2,7 @@
  * Opponent registry — local, remote, and future competition targets.
  */
 
-import { PlayerType, getEngineList } from './engineConfig.js';
+import { PlayerType, TimeToMove, getEngineList } from './engineConfig.js';
 import {
   STRENGTH_LEVEL_PRESETS,
   TIME_TO_MOVE_PRESETS,
@@ -55,9 +55,17 @@ const ZERO_INK_ENGINE = {
   kind: 'zeroink',
   name: 'zero.ink (AlphaZero)',
   key: PlayerType.ZeroInk,
-  modelId: 'resume-188/model_000159',
+  // Difficulty maps to MCTS visits — same `visits`-by-timeToMove shape the cloud
+  // engines (Ishtar/Ka) use. The Time preset picks the level; the client POSTs
+  // the matching visit count to /api/play.
+  visits: {
+    [TimeToMove.Intuition]: 3_200,
+    [TimeToMove.Short]: 32_000,
+    [TimeToMove.Medium]: 128_000,
+    [TimeToMove.Long]: 400_000,
+  },
   tooltip:
-    'quoridor-zero.ink AlphaZero net over REST. Local dev only (CORS-blocked on static Pages); needs network.',
+    'quoridor-zero.ink AlphaZero net over REST. Needs network access.',
 };
 
 const ACE_V8_ENGINE = {

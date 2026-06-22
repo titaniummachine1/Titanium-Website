@@ -1,53 +1,38 @@
 /**
  * quoridor-zero.ink — remote AlphaZero bot exposed over a stateless REST API.
  *
- * Unlike Ishtar/Ka (WebSocket + UCI session), every move is a self-contained
- * POST carrying the full position, so this behaves like a local engine client:
- * no session sync. See memory/zeroink-api-protocol for the wire format.
+ * Every move is a self-contained POST to the stable `/api/play` endpoint
+ * carrying the full position, so this behaves like a local engine client: no
+ * session sync. The model is fixed server-side and the server owns the search
+ * backend, threads and cpuct — the only knob we send is `visits` (search
+ * effort): the player's difficulty (the Time preset) indexes the engine's
+ * `visits` map, the same `config.visits[timeToMove]` mechanism the cloud
+ * engines use. The server clamps the value to its allowed band.
  *
- * Move budget is MCTS rollouts (visits), driven by the Rollouts slider — not a
- * time slider. We fire two requests in parallel:
- *   - /api/analysis/policy  (fast): the network's immediate top move + value.
- *     Surfaced as the live best-move ghost + eval while the search runs.
- *   - /api/analysis/search  (visit-bounded): the move actually played
- *     (highest-visit child) plus the refined root value.
+ * Wire format (POST /api/play, Content-Type: application/json):
+ *   Request:  { state: <zero.ink state>, visits }
+ *   Response: { move, score, thinkMs, stateAfter }
+ *     - move.kind is "pawn" (use target cell) or "wall" (orientation + x,y)
+ *     - score is the root eval in [-1, 1] from the side-to-move's perspective
+ *     - stateAfter is the full position after the move (incl. winner)
+ *   Invalid/finished positions return 400 { error }.
  *
- * CORS: quoridor-zero.ink sends no Access-Control-Allow-Origin, so the browser
- * cannot call it cross-origin. In `npm run dev` we go through the Vite proxy
- * (`/zeroink/*`). On static GitHub Pages there is no proxy, so it is unavailable
- * (the fetch fails and we surface a clear error).
+ * The API sends CORS headers (Access-Control-Allow-Origin), so the browser can
+ * call it cross-origin directly in every environment — local dev and static
+ * GitHub Pages alike. A network/CORS failure surfaces as a clear engine error.
  */
 
 import { QuoridorBoard, toAlgebraic } from './gameLogic.js';
 import { boardToZeroInkState, zeroInkMoveToAction, zeroInkMoveToAlgebraic } from './zeroInkCodec.js';
 import { createAbortError } from './engineAbort.js';
-import { clampVisits, isUnlimitedVisits } from './timeControl.js';
+import { TimeToMove } from './engineConfig.js';
 
-const DEFAULT_MODEL = 'resume-188/model_000180';
-// zero.ink runs MCTS server-side; it has no "unlimited/time-only" mode.
-const ZEROINK_DEFAULT_VISITS = 600;
-const ZEROINK_MAX_VISITS = 4000;
-
-/** Same-origin proxied base in dev; direct host otherwise (will CORS-fail on Pages). */
-function zeroInkBase() {
-  if (import.meta.env?.DEV) {
-    return '/zeroink';
-  }
-  return 'https://quoridor-zero.ink';
-}
-
-/** Map the Rollouts budget to a zero.ink MCTS visit count. */
-function visitsFromSettings(aiSettings) {
-  const raw = aiSettings?.visitsBudget;
-  // 0 / unlimited / unset → no time-only mode here, so use a sensible default.
-  const budget = !raw || isUnlimitedVisits(raw) ? ZEROINK_DEFAULT_VISITS : clampVisits(raw);
-  return Math.max(50, Math.min(ZEROINK_MAX_VISITS, Math.round(budget)));
-}
+/** Engine host. CORS is enabled server-side, so we call it directly everywhere. */
+const ZEROINK_HOST = 'https://quoridor-zero.ink';
 
 export class ZeroInkEngineClient {
   constructor(engineConfig) {
     this.config = engineConfig;
-    this.modelId = engineConfig?.modelId ?? DEFAULT_MODEL;
     this.pendingController = null;
     this.queuedRequest = null;
     this.busy = false;
@@ -110,7 +95,7 @@ export class ZeroInkEngineClient {
   }
 
   postJson(path, body, signal) {
-    return fetch(`${zeroInkBase()}${path}`, {
+    return fetch(`${ZEROINK_HOST}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -138,7 +123,8 @@ export class ZeroInkEngineClient {
 
     const board = this.buildBoard(moveHistory);
     const state = boardToZeroInkState(board);
-    const visits = visitsFromSettings(aiSettings);
+    const timeMode = aiSettings?.timeToMove ?? TimeToMove.Short;
+    const visits = this.config?.visits?.[timeMode] ?? this.config?.visits?.[TimeToMove.Short];
 
     const abort = new AbortController();
     this.pendingController = abort;
@@ -151,44 +137,18 @@ export class ZeroInkEngineClient {
       }
     }
 
-    // Fast policy preview → live best-move ghost + eval while the search runs.
-    this.postJson(
-      '/api/analysis/policy',
-      { state, modelId: this.modelId },
-      abort.signal,
-    )
-      .then((policy) => {
-        if (abort.signal.aborted || !this.busy) return;
-        const top = policy?.moves?.[0];
-        if (!top) return;
-        this.onInfo?.({
-          thinking: true,
-          mode: 'zeroink',
-          pv: zeroInkMoveToAlgebraic(top.move),
-          rootWinRate: typeof policy.value === 'number' ? policy.value : undefined,
-          visits,
-        });
-      })
-      .catch(() => {
-        /* preview is best-effort; the search call carries the real result */
-      });
-
     try {
       const result = await this.postJson(
-        '/api/analysis/search',
-        {
-          state,
-          modelId: this.modelId,
-          settings: { visits, cpuct: 2.5, batchSize: 16, threads: 4, useDag: true },
-        },
+        '/api/play',
+        { state, visits },
         abort.signal,
       );
 
-      const best = result?.moves?.[0];
-      if (!best) {
-        throw new Error('zero.ink returned no candidate move');
+      const move = result?.move;
+      if (!move) {
+        throw new Error('zero.ink returned no move');
       }
-      const action = zeroInkMoveToAction(best.move);
+      const action = zeroInkMoveToAction(move);
 
       // Safety net: a wrong coordinate mapping would corrupt the game silently.
       if (!board.isValid(action)) {
@@ -201,9 +161,9 @@ export class ZeroInkEngineClient {
       this.finish();
       this.onInfo?.({
         time: elapsed,
-        rootWinRate: typeof result.rootValue === 'number' ? result.rootValue : undefined,
-        visits: result.totalVisits ?? visits,
-        pv: zeroInkMoveToAlgebraic(best.move),
+        rootWinRate: typeof result.score === 'number' ? result.score : undefined,
+        visits,
+        pv: zeroInkMoveToAlgebraic(move),
         stoppedBy: 'zeroink',
         mode: 'zeroink',
         progress: 1,

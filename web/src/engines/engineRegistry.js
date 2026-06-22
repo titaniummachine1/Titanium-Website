@@ -154,8 +154,8 @@ export const ENGINE_REGISTRY = new Map([
         playNow: false,
         abort: true,
       },
-      // MCTS-style budget: the Rollouts slider drives `visits`.
-      controls: { visitsSlider: true },
+      // Discrete difficulty (Time preset → visits map), same as the cloud engines.
+      controls: { thinkingMode: true },
     },
   ],
   [

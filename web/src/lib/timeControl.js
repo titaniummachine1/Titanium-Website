@@ -164,7 +164,10 @@ export function getEngineConfig(playerType, engineConfigs) {
 }
 
 export function isRemoteEngine(playerType, engineConfigs) {
-  return getEngineConfig(playerType, engineConfigs)?.kind === 'remote';
+  const kind = getEngineConfig(playerType, engineConfigs)?.kind;
+  // zero.ink is a remote engine too — REST instead of WebSocket. It shares the
+  // cloud-engine settings UI (thinking-mode selector → per-engine `visits` map).
+  return kind === 'remote' || kind === 'zeroink';
 }
 
 export function isLocalEngine(playerType, engineConfigs) {
@@ -210,8 +213,7 @@ export function isLocalMctsEngine(playerType, engineConfigs) {
     kind === 'quoridor-v3' ||
     kind === 'ace-v8-family' ||
     kind === 'ace-v10-family' ||
-    kind === 'ace-v13-family' ||
-    kind === 'zeroink'
+    kind === 'ace-v13-family'
   );
 }
 

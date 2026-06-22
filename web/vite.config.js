@@ -16,15 +16,6 @@ export default defineConfig(({ mode }) => {
       fs: {
         allow: [rootDir, path.resolve(rootDir, '..')],
       },
-      // quoridor-zero.ink sends no CORS headers — proxy it server-side in dev.
-      proxy: {
-        '/zeroink': {
-          target: 'https://quoridor-zero.ink',
-          changeOrigin: true,
-          secure: true,
-          rewrite: (p) => p.replace(/^\/zeroink/, ''),
-        },
-      },
     },
     worker: {
       format: 'es',

@@ -60,7 +60,7 @@ const PlayerType = {
   IshtarV3: 'ishtar-v3-ai',
   IshtarPonder: 'ishtar-ponder',
   KaAI: 'ka-ai',
-  /** quoridor-zero.ink AlphaZero bot over REST (dev-proxy only; CORS-blocked on static Pages). */
+  /** quoridor-zero.ink AlphaZero bot over REST (CORS-enabled; works on static Pages). */
   ZeroInk: 'zero-ink',
 };
 
