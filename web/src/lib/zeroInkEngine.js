@@ -23,7 +23,7 @@ import { boardToZeroInkState, zeroInkMoveToAction, zeroInkMoveToAlgebraic } from
 import { createAbortError } from './engineAbort.js';
 import { clampVisits, isUnlimitedVisits } from './timeControl.js';
 
-const DEFAULT_MODEL = 'resume-188/model_000159';
+const DEFAULT_MODEL = 'resume-188/model_000180';
 // zero.ink runs MCTS server-side; it has no "unlimited/time-only" mode.
 const ZEROINK_DEFAULT_VISITS = 600;
 const ZEROINK_MAX_VISITS = 4000;
