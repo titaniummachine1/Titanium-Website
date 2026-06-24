@@ -195,7 +195,7 @@ export class TitaniumEngineClient {
         ? []
         : moveHistory.map((action) => toAlgebraic(action));
 
-    const timeSec = Number(aiSettings?.wallClockSeconds) || 10;
+    const timeSec = Math.max(0.5, Number(aiSettings?.wallClockSeconds) || 10);
     const maxBudget = clampVisits(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     const uct = uctFromStrengthLevel(aiSettings?.strengthLevel);
     const configured = this.config?.engineMode;
@@ -400,7 +400,7 @@ export class TitaniumEngineClient {
             rootScore: data.rootScore ?? finalMeta.rootScore,
             whiteDist: data.whiteDist ?? finalMeta.whiteDist,
             blackDist: data.blackDist ?? finalMeta.blackDist,
-            rootMoves: data.rootMoves ?? finalMeta.rootMoves,
+            rootMoves: data.rootMoves?.length ? data.rootMoves : finalMeta.rootMoves,
           };
 
           const isMinimax = isAlphaBetaEngineMode(stoppedBy);

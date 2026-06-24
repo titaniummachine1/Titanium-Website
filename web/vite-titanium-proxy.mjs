@@ -456,11 +456,12 @@ class TitaniumSeatSession {
         this.engine === 'titanium-v15-frozen')
         ? ['session', '--engine', this.engine]
         : ['session'];
-    this.child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = child;
     this.stdoutBuf = '';
     this.stderrBuf = '';
 
-    this.child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk) => {
       this.stdoutBuf += chunk.toString();
       const lines = this.stdoutBuf.split(/\r?\n/);
       this.stdoutBuf = lines.pop() ?? '';
@@ -469,7 +470,7 @@ class TitaniumSeatSession {
       }
     });
 
-    this.child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk) => {
       this.stderrBuf += chunk.toString();
       const lines = this.stderrBuf.split(/\r?\n/);
       this.stderrBuf = lines.pop() ?? '';
@@ -481,13 +482,18 @@ class TitaniumSeatSession {
       }
     });
 
-    this.child.on('close', () => {
+    child.on('close', () => {
+      if (this.child !== child) {
+        return;
+      }
       if (this.pending) {
         this.pending.reject(new Error(`titanium session ${this.seatId} exited`));
         this.pending = null;
       }
       this.child = null;
-      seatSessions.delete(this.seatId);
+      if (seatSessions.get(this.seatId) === this) {
+        seatSessions.delete(this.seatId);
+      }
     });
   }
 
@@ -528,7 +534,7 @@ class TitaniumSeatSession {
     return this.chain;
   }
 
-  /** Kill an in-flight `go` on this seat only — other seats are unaffected. */
+  /** Interrupt in-flight `go` — kill only this seat's child; next op respawns via enqueue. */
   stopSearch(reason = 'stopped') {
     const pending = this.pending;
     if (!pending) {
@@ -537,9 +543,11 @@ class TitaniumSeatSession {
     this.pending = null;
     this.onStderrLine = null;
     pending.reject(new Error(reason));
-    if (this.child) {
+    const dying = this.child;
+    if (dying) {
+      this.child = null;
       try {
-        this.child.kill('SIGTERM');
+        dying.kill('SIGTERM');
       } catch {
         /* ignore */
       }
@@ -562,7 +570,8 @@ class TitaniumSeatSession {
 
   go(timeSec, maxNodes, onStderrLine) {
     this.onStderrLine = onStderrLine ?? null;
-    return this.enqueue(`go ${timeSec} ${maxNodes}`);
+    // Native session REPL accepts `go TIME_SEC` only (see site/engine session.rs).
+    return this.enqueue(`go ${timeSec}`);
   }
 
   destroy() {

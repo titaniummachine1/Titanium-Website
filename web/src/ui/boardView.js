@@ -3,7 +3,7 @@
  * Rules: pawns on 9×9 nodes, walls only in grooves, legality via QuoridorBoard (BFS).
  */
 
-import { parseAlgebraic, toAlgebraic } from '../lib/gameLogic.js';
+import { parseAlgebraic, toAlgebraic, isWallAction } from '../lib/gameLogic.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import {
@@ -70,29 +70,6 @@ function liveGhostKey(state, validActions) {
   return resolveLiveBestMoveKey(state, { validActions }) ?? '';
 }
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-function createGhostWallRing(isHorizontal) {
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('class', 'ghost-pv-ring');
-  svg.setAttribute('viewBox', '0 0 100 100');
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('aria-hidden', 'true');
-
-  const stroke = document.createElementNS(SVG_NS, 'rect');
-  stroke.setAttribute('class', 'ghost-pv-ring__stroke');
-  stroke.setAttribute('x', '3');
-  stroke.setAttribute('y', '3');
-  stroke.setAttribute('width', '94');
-  stroke.setAttribute('height', '94');
-  // Capsule ends — rx tracks the short axis after stretch.
-  stroke.setAttribute('rx', isHorizontal ? '47' : '47');
-  stroke.setAttribute('ry', isHorizontal ? '47' : '47');
-  stroke.setAttribute('pathLength', '100');
-  svg.appendChild(stroke);
-  return svg;
-}
-
 function clearGhostPawnHints(cellEls) {
   cellEls.forEach((cell) => {
     cell.classList.remove('ghost-pawn', 'ghost-pawn--player1', 'ghost-pawn--player2');
@@ -109,12 +86,6 @@ function addWallElement(boardEl, type, viewSlot, { preview, bad, ghost, owner })
     (ghost ? ' ghost-pv' : '');
   const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
   applyGridPos(el, gr, gc, rowSpan, colSpan);
-  if (ghost) {
-    const inner = document.createElement('div');
-    inner.className = 'ghost-pv-inner';
-    inner.appendChild(createGhostWallRing(type === 0));
-    el.appendChild(inner);
-  }
   boardEl.appendChild(el);
   return el;
 }
@@ -357,14 +328,20 @@ function syncBoardDom(dom, state, controller) {
     dom._ghostWallEl = null;
 
     if (ghostKey) {
-      if (ghostKey.length === 2) {
-        const cell = viewMove(pawnCellFromCoordinate(parseAlgebraic(ghostKey).coordinate), isFlipped);
+      let action;
+      try {
+        action = parseAlgebraic(ghostKey);
+      } catch {
+        action = null;
+      }
+      if (action && !isWallAction(action)) {
+        const cell = viewMove(pawnCellFromCoordinate(action.coordinate), isFlipped);
         const el = cellEls[cell];
         if (el) {
           el.classList.add('ghost-pawn', `ghost-pawn--${sideClass}`);
           el.dataset.action = ghostKey;
         }
-      } else {
+      } else if (action && isWallAction(action)) {
         const move = algebraicToEngineMove(ghostKey);
         if (move >= 100) {
           const type = move < 200 ? 0 : 1;

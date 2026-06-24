@@ -51,6 +51,27 @@ assertEqual(
 );
 
 assertEqual(
+  pvFirstMoveFromLiveSearch(
+    { depthLog: [{ depth: 4, pv: 'e3 e4' }] },
+    { validKeySet: new Set(['e3', 'd3h']), rootMoves: [{ move: 'd3h', score: 120 }, { move: 'e3', score: 80 }] },
+  ),
+  'd3h',
+  'rootMoves wall beats depthLog pawn pv',
+);
+
+assertEqual(
+  pvFirstMoveFromLiveSearch(
+    { depthLog: [{ depth: 4, pv: 'z9 z8' }] },
+    {
+      validKeySet: new Set(['e3', 'd3h']),
+      rootMoves: [{ move: 'z9', score: 999 }, { move: 'd3h', score: 50 }],
+    },
+  ),
+  'd3h',
+  'skip illegal top root move and take next legal wall',
+);
+
+assertEqual(
   pvFirstMoveFromLiveSearch({ depthLog: [{ depth: 4, pv: 'pv f3h e2' }] }),
   'f3h',
   'depthLog strips pv prefix',

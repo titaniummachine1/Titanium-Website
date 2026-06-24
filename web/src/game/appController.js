@@ -9,7 +9,7 @@ import { GorisansonEngineClient, TitaniumEngineClient } from '../lib/localMctsEn
 import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
 import { useStaticEngineBackend } from '../lib/engineBackend.js';
 import { resolveOnBestMoveResult } from '../lib/onBestMoveResult.js';
-import { positionKeyFromActions, resolveLiveBestMoveKey, pvFirstMoveFromLiveSearch } from '../lib/liveBestMove.js';
+import { positionKeyFromActions, resolveLiveBestMoveKey, pvFirstMoveFromLiveSearch, coalesceRootMoves } from '../lib/liveBestMove.js';
 import { positionKeyFromHistory as historyPositionKey } from '../lib/remoteSync.js';
 import {
   buildDiagnosticContext,
@@ -667,6 +667,29 @@ export class AppController {
     return [this.getPlayerAiSettingsUiForSlot(1), this.getPlayerAiSettingsUiForSlot(2)];
   }
 
+  _aiSettingsNeedSessionReset(prevAi, nextAi, playerType) {
+    if (isTitaniumEngine(playerType, this.engineConfigs)) {
+      return (
+        prevAi.wallClockSeconds !== nextAi.wallClockSeconds ||
+        prevAi.titaniumNet !== nextAi.titaniumNet ||
+        prevAi.visitsBudget !== nextAi.visitsBudget
+      );
+    }
+    if (isAceFamily(playerType, this.engineConfigs)) {
+      return (
+        prevAi.wallClockSeconds !== nextAi.wallClockSeconds ||
+        prevAi.strengthLevel !== nextAi.strengthLevel
+      );
+    }
+    if (isLocalMctsEngine(playerType, this.engineConfigs)) {
+      return (
+        prevAi.wallClockSeconds !== nextAi.wallClockSeconds ||
+        prevAi.visitsBudget !== nextAi.visitsBudget
+      );
+    }
+    return false;
+  }
+
   _afterLivePlayerSettingChange(playerNum, { rebindEngine = false } = {}) {
     const seatIndex = playerNum - 1;
     const wasThinkingHere =
@@ -676,6 +699,15 @@ export class AppController {
     }
     if (rebindEngine) {
       this.destroyEngineForSeat(seatIndex);
+    } else {
+      const playerType = this.settings.players[seatIndex];
+      if (
+        isTitaniumEngine(playerType, this.engineConfigs) ||
+        isAceFamily(playerType, this.engineConfigs)
+      ) {
+        const engine = this.engines.get(this.engineSeatKey(seatIndex));
+        engine?.resetConnection?.();
+      }
     }
     this.persistPlaySettings();
     this.onChange?.();
@@ -733,7 +765,11 @@ export class AppController {
   setPlayerWallClock(playerNum, seconds, { silent = false } = {}) {
     const index = playerNum - 1;
     const playerType = this.settings.players[index];
-    if (!isLocalMctsEngine(playerType, this.engineConfigs)) {
+    if (
+      !isLocalMctsEngine(playerType, this.engineConfigs) &&
+      !isTitaniumEngine(playerType, this.engineConfigs) &&
+      !isAceFamily(playerType, this.engineConfigs)
+    ) {
       return;
     }
     const current = this.settings.playerAiSettings[index] ?? {};
@@ -1568,11 +1604,14 @@ export class AppController {
         const depthLog = info.depthLog?.length
           ? mergeDepthLogs(prev.depthLog, info.depthLog)
           : (prev.depthLog ?? []);
+        const rootMoves = coalesceRootMoves(info.rootMoves, prev.rootMoves);
         this.searchInfoBySeat[seatIndex] = finalizeSearchInfo({
           ...prev,
           ...info,
+          rootMoves,
           depthLog,
         });
+        const siMerged = this.searchInfoBySeat[seatIndex];
         if (info.thinking) {
           if (
             !this.aiThinking ||
@@ -1613,7 +1652,7 @@ export class AppController {
               info.rootWinRate != null ? info.rootWinRate : this.liveSearch?.rootWinRate,
             whiteDist: info.whiteDist ?? this.liveSearch?.whiteDist,
             blackDist: info.blackDist ?? this.liveSearch?.blackDist,
-            rootMoves: info.rootMoves ?? this.liveSearch?.rootMoves,
+            rootMoves: siMerged?.rootMoves ?? this.liveSearch?.rootMoves,
             lmrProfile: info.lmrProfile ?? this.liveSearch?.lmrProfile,
             lmrReSearches: info.lmrReSearches ?? this.liveSearch?.lmrReSearches,
             rootScore: liveRootScore,
@@ -2649,6 +2688,7 @@ export class AppController {
     for (let seat = 0; seat < 2; seat++) {
       const playerType = normalizePlayerType(players[seat] || this.settings.players[seat]);
       const prevType = this.settings.players[seat];
+      const prevAi = { ...(this.settings.playerAiSettings[seat] ?? {}) };
       this.settings.players[seat] = playerType;
       if (prevType !== playerType) {
         this._moveRequestSeq += 1;
@@ -2661,6 +2701,15 @@ export class AppController {
         this.settings.playerAiSettingsMemory[seat] = memory;
       } else if (playerType !== PlayerType.Human) {
         this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
+      }
+      const nextAi = this.settings.playerAiSettings[seat] ?? {};
+      if (
+        prevType === playerType &&
+        playerType !== PlayerType.Human &&
+        this._aiSettingsNeedSessionReset(prevAi, nextAi, playerType)
+      ) {
+        const engine = this.engines.get(this.engineSeatKey(seat));
+        engine?.resetConnection?.();
       }
     }
     this.persistPlaySettings();
