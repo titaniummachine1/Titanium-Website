@@ -142,7 +142,7 @@ export function normalizePlayerType(playerType) {
     return PlayerType.TitaniumMinimax;
   }
   if (playerType === PlayerType.AceV10) {
-    return PlayerType.AceV13;
+    return PlayerType.TitaniumMinimax;
   }
   return playerType;
 }

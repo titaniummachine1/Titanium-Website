@@ -67,7 +67,7 @@ export const ENGINE_REGISTRY = new Map([
     PlayerType.TitaniumMinimax,
     {
       id: PlayerType.TitaniumMinimax,
-      displayName: 'Titanium v15 (live NNUE)',
+      displayName: 'Titanium v16 (live NNUE)',
       backend: EngineBackendKind.LOCAL_WASM,
       capabilities: {
         remoteSync: false,
@@ -82,7 +82,7 @@ export const ENGINE_REGISTRY = new Map([
     PlayerType.TitaniumV15Frozen,
     {
       id: PlayerType.TitaniumV15Frozen,
-      displayName: 'Titanium v15 (frozen)',
+      displayName: 'Titanium v16 (frozen)',
       backend: EngineBackendKind.LOCAL_WASM,
       capabilities: {
         remoteSync: false,
@@ -91,38 +91,6 @@ export const ENGINE_REGISTRY = new Map([
         abort: true,
       },
       controls: { timeSlider: true, strength: true, nodes: true },
-    },
-  ],
-  [
-    PlayerType.AceV8,
-    {
-      id: PlayerType.AceV8,
-      displayName: 'ACE v8',
-      backend: EngineBackendKind.LOCAL_JS,
-      resolveBackend: (aiSettings) => aceBackendForTier(aiSettings?.strengthLevel, PlayerType.AceV8),
-      capabilities: {
-        remoteSync: false,
-        livePv: true,
-        playNow: true,
-        abort: true,
-      },
-      controls: { timeSlider: true, strength: true },
-    },
-  ],
-  [
-    PlayerType.AceV10,
-    {
-      id: PlayerType.AceV10,
-      displayName: 'ACE v10',
-      backend: EngineBackendKind.LOCAL_JS,
-      resolveBackend: (aiSettings) => aceBackendForTier(aiSettings?.strengthLevel, PlayerType.AceV10),
-      capabilities: {
-        remoteSync: false,
-        livePv: true,
-        playNow: true,
-        abort: true,
-      },
-      controls: { timeSlider: true, strength: true },
     },
   ],
   [

@@ -74,6 +74,7 @@ function controlsKey(state) {
     winner: state.winner,
     isDraw: state.isDraw,
     rotated: state.settings.rotateBoard,
+    cat: state.settings.showCatVision,
     undoPaused: controller._undoPaused,
   });
 }
@@ -112,6 +113,45 @@ function renderAndRefreshDialog() {
   render();
   refreshOpenPlayerDialog(controller.getState());
 }
+
+function isTextEditingTarget(target) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(
+    target.closest('input, textarea, select, [contenteditable="true"]'),
+  );
+}
+
+function hasOpenDialog() {
+  return Boolean(document.querySelector('.dialog-overlay, .player-dialog, .load-dialog'));
+}
+
+document.addEventListener('keydown', function(event) {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  if (isTextEditingTarget(event.target) || hasOpenDialog()) {
+    return;
+  }
+
+  if (event.key === 'ArrowLeft') {
+    const state = controller.getState();
+    if (state.actions.length > 0) {
+      event.preventDefault();
+      controller.undoWithPause?.();
+    }
+    return;
+  }
+
+  if (event.key === 'ArrowRight') {
+    const state = controller.getState();
+    if (state.canRedo) {
+      event.preventDefault();
+      controller.redo?.();
+    }
+  }
+});
 
 controller.onChange = renderAndRefreshDialog;
 controller.onLiveUpdate = renderLiveUpdate;

@@ -176,6 +176,40 @@
   position: relative;
 }
 
+.quoridor-board .cat-path-cell {
+  position: absolute;
+  inset: 6%;
+  border-radius: 4px;
+  background: rgba(255, 190, 90, var(--cat-alpha, 0.12));
+  pointer-events: none;
+  z-index: 1;
+}
+
+.quoridor-board .cat-path-cell--overlap {
+  background: rgba(255, 255, 255, var(--cat-alpha, 0.18));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.quoridor-board .cat-move-ghost {
+  pointer-events: none;
+}
+
+.quoridor-board .cat-move-ghost--pawn {
+  position: absolute;
+  inset: 6%;
+  border-radius: 5px;
+  background: rgba(210, 28, 28, var(--cat-alpha, 0.35));
+  color: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(0.6rem, 2.2cqw, 0.95rem);
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+  z-index: 4;
+}
+
 .quoridor-board .cell.hl {
   cursor: pointer;
   z-index: 3;
@@ -323,6 +357,18 @@
   pointer-events: none;
 }
 
+.quoridor-board .cat-move-ghost--wall {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  align-self: stretch;
+  justify-self: stretch;
+  border-radius: 999px;
+  background: rgba(210, 28, 28, var(--cat-alpha, 0.4));
+  box-shadow: 0 0 10px rgba(210, 28, 28, calc(var(--cat-alpha, 0.4) * 0.7));
+  z-index: 1;
+}
+
 /* Slim the cross-axis so walls read as clean rounded bars, not chunky blocks. */
 .quoridor-board .wallpiece--h {
   transform: scaleY(0.64);
@@ -369,6 +415,11 @@
 
 .quoridor-board .wallpiece.lastw {
   outline: 2px solid rgba(255, 220, 120, 0.95);
+}
+
+.quoridor-board .wallpiece--player1,
+.quoridor-board .wallpiece--player2 {
+  outline: 1px solid rgba(255, 255, 255, 0.7);
 }
 
 .quoridor-board .wallpiece.ghost-pv {

@@ -10,7 +10,7 @@
     "build:pages": "npm run build:wasm && vite build --mode ghpages",
     "preview": "vite preview",
     "preview:pages": "vite preview --mode ghpages",
-    "test": "node src/tests/parity.test.mjs && node src/tests/siteLogic.test.mjs && node src/tests/blockedBoard.test.mjs && node src/tests/aceBoardGrid.test.mjs && node src/tests/engineBackend.test.mjs && node src/tests/titaniumLegalityOracle.test.mjs && node src/tests/playFlow.test.mjs && node src/tests/remoteProtocol.test.mjs && node src/tests/remoteSync.test.mjs && node src/tests/wallDiagnostics.test.mjs && node src/tests/browser.integration.test.mjs && node src/tests/uiOwnership.test.mjs && node src/tests/titaniumAbort.test.mjs",
+    "test": "node src/tests/parity.test.mjs && node src/tests/siteLogic.test.mjs && node src/tests/blockedBoard.test.mjs && node src/tests/aceBoardGrid.test.mjs && node src/tests/engineBackend.test.mjs && node src/tests/engineIsolation.test.mjs && node src/tests/titaniumLegalityOracle.test.mjs && node src/tests/playFlow.test.mjs && node src/tests/remoteProtocol.test.mjs && node src/tests/remoteSync.test.mjs && node src/tests/wallDiagnostics.test.mjs && node src/tests/browser.integration.test.mjs && node src/tests/uiOwnership.test.mjs && node src/tests/titaniumAbort.test.mjs",
     "test:parity": "node src/tests/parity.test.mjs"
   },
   "devDependencies": {

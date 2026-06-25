@@ -17,8 +17,174 @@ import {
   applyGridPos,
   cellIndexFromGrid,
   wallGridFromSlot,
+  gridFromCellIndex,
 } from '../lib/aceBoardGrid.js';
 import './board.css';
+
+const PATH_Q = new Int16Array(81);
+const DELTA = [-9, 9, -1, 1];
+
+function blockedBitsFromBoard(board) {
+  const blocked = new Uint8Array(81);
+  const { hw, vw } = wallSlotsFromBoard(board);
+  for (let slot = 0; slot < 64; slot++) {
+    const r = (slot / 8) | 0;
+    const c = slot % 8;
+    const a = r * 9 + c;
+    if (hw[slot]) {
+      blocked[a] |= 2;
+      blocked[a + 1] |= 2;
+      blocked[a + 9] |= 1;
+      blocked[a + 10] |= 1;
+    }
+    if (vw[slot]) {
+      blocked[a] |= 8;
+      blocked[a + 9] |= 8;
+      blocked[a + 1] |= 4;
+      blocked[a + 10] |= 4;
+    }
+  }
+  return blocked;
+}
+
+function bfsFromSources(sources, blocked) {
+  const dist = new Uint8Array(81);
+  dist.fill(255);
+  let head = 0;
+  let tail = 0;
+  for (const src of sources) {
+    dist[src] = 0;
+    PATH_Q[tail++] = src;
+  }
+  while (head < tail) {
+    const u = PATH_Q[head++];
+    const r = (u / 9) | 0;
+    const c = u % 9;
+    const du = dist[u] + 1;
+    const b = blocked[u];
+    for (let d = 0; d < 4; d++) {
+      if (b & (1 << d)) continue;
+      if ((d === 0 && r === 0) || (d === 1 && r === 8) || (d === 2 && c === 0) || (d === 3 && c === 8)) {
+        continue;
+      }
+      const v = u + DELTA[d];
+      if (dist[v] > du) {
+        dist[v] = du;
+        PATH_Q[tail++] = v;
+      }
+    }
+  }
+  return dist;
+}
+
+function shortestDagInfo(board, playerPositions) {
+  const blocked = blockedBitsFromBoard(board);
+  const p0 = pawnCellFromCoordinate(playerPositions[0]);
+  const p1 = pawnCellFromCoordinate(playerPositions[1]);
+  const toGoal0 = bfsFromSources([0, 1, 2, 3, 4, 5, 6, 7, 8], blocked);
+  const toGoal1 = bfsFromSources([72, 73, 74, 75, 76, 77, 78, 79, 80], blocked);
+  const from0 = bfsFromSources([p0], blocked);
+  const from1 = bfsFromSources([p1], blocked);
+  const total0 = toGoal0[p0];
+  const total1 = toGoal1[p1];
+  const on0 = new Uint8Array(81);
+  const on1 = new Uint8Array(81);
+  const width0 = new Uint8Array(18);
+  const width1 = new Uint8Array(18);
+  for (let c = 0; c < 81; c++) {
+    if (from0[c] + toGoal0[c] === total0) {
+      on0[c] = 1;
+      if (toGoal0[c] < 18) width0[toGoal0[c]]++;
+    }
+    if (from1[c] + toGoal1[c] === total1) {
+      on1[c] = 1;
+      if (toGoal1[c] < 18) width1[toGoal1[c]]++;
+    }
+  }
+  return { blocked, p0, p1, toGoal0, toGoal1, from0, from1, total0, total1, on0, on1, width0, width1 };
+}
+
+function edgePathImpact(u, v, dag) {
+  let score = 0;
+  if (
+    (dag.from0[u] + 1 + dag.toGoal0[v] === dag.total0 && dag.toGoal0[v] < dag.toGoal0[u]) ||
+    (dag.from0[v] + 1 + dag.toGoal0[u] === dag.total0 && dag.toGoal0[u] < dag.toGoal0[v])
+  ) {
+    const layer = Math.min(dag.toGoal0[u], dag.toGoal0[v]);
+    score += 1 / Math.max(layer < 18 ? dag.width0[layer] : 1, 1);
+  }
+  if (
+    (dag.from1[u] + 1 + dag.toGoal1[v] === dag.total1 && dag.toGoal1[v] < dag.toGoal1[u]) ||
+    (dag.from1[v] + 1 + dag.toGoal1[u] === dag.total1 && dag.toGoal1[u] < dag.toGoal1[v])
+  ) {
+    const layer = Math.min(dag.toGoal1[u], dag.toGoal1[v]);
+    score += 1 / Math.max(layer < 18 ? dag.width1[layer] : 1, 1);
+  }
+  return score;
+}
+
+function wallPathImpact(move, dag) {
+  const slot = move % 100;
+  const a = ((slot / 8) | 0) * 9 + (slot % 8);
+  if (move < 200) {
+    return edgePathImpact(a, a + 9, dag) + edgePathImpact(a + 1, a + 10, dag);
+  }
+  return edgePathImpact(a, a + 1, dag) + edgePathImpact(a + 9, a + 10, dag);
+}
+
+function buildMoveOrderGhosts(state) {
+  if (!state.settings?.showCatVision || state.winner || state.isDraw) {
+    return { pawns: [], walls: [], pathCells: [] };
+  }
+
+  const dag = shortestDagInfo(state.board, state.playerPositions);
+  const mover = state.playerToMove;
+  const distMe = mover === 1 ? dag.toGoal0 : dag.toGoal1;
+  const pawnMe = mover === 1 ? dag.p0 : dag.p1;
+
+  const pathCells = [];
+  for (let cell = 0; cell < 81; cell++) {
+    const overlap = dag.on0[cell] && dag.on1[cell];
+    if (overlap || dag.on0[cell] || dag.on1[cell]) {
+      const distFromMover = Math.abs(((cell / 9) | 0) - ((pawnMe / 9) | 0)) + Math.abs((cell % 9) - (pawnMe % 9));
+      pathCells.push({
+        cell,
+        heat: overlap ? 1 : Math.max(0.25, 0.75 - distFromMover * 0.07),
+        overlap,
+      });
+    }
+  }
+
+  const ordered = [];
+  let maxScore = 1;
+  for (const action of state.validActions ?? []) {
+    const alg = toAlgebraic(action);
+    const move = algebraicToEngineMove(alg);
+    let score = 0;
+    let kind = 'wall';
+    if (move < 100) {
+      score = 1_000_000 - distMe[move] * 1000;
+      kind = 'pawn';
+    } else {
+      score = wallPathImpact(move, dag) * 100_000;
+    }
+    if (move < 100 || score > 0) {
+      ordered.push({ move, alg, score, kind });
+      if (score > maxScore) maxScore = score;
+    }
+  }
+  ordered.sort((a, b) => b.score - a.score);
+  const ranked = ordered.map((entry, idx) => ({
+    ...entry,
+    rank: idx + 1,
+    heat: entry.score / maxScore,
+  }));
+  return {
+    pawns: ranked.filter((entry) => entry.kind === 'pawn'),
+    walls: ranked.filter((entry) => entry.kind === 'wall'),
+    pathCells,
+  };
+}
 
 function boardStructureKey(state) {
   return JSON.stringify({
@@ -109,6 +275,74 @@ function clearGhostPawnHints(cellEls) {
   cellEls.forEach((cell) => {
     cell.classList.remove('ghost-pawn', 'ghost-pawn--player1', 'ghost-pawn--player2');
   });
+}
+
+function clearCatVision(dom) {
+  dom.catEls?.forEach((el) => el.remove());
+  dom.catEls = [];
+}
+
+/** Rank + heat → alpha; compresses score gaps so late-ordered moves stay visible. */
+function catMoveAlpha(rank, total, heat, { min = 0.34, max = 0.92 } = {}) {
+  const order = total > 1 ? 1 - (rank - 1) / (total - 1) : 1;
+  const boosted = Math.pow(Math.max(heat, 0), 0.38);
+  const blend = 0.7 * order + 0.3 * boosted;
+  return min + blend * (max - min);
+}
+
+function addCatPawnGhost(dom, viewCell, heat, rank, total) {
+  const cell = dom.cellEls[viewCell];
+  if (!cell) return;
+  const el = document.createElement('div');
+  el.className = 'cat-move-ghost cat-move-ghost--pawn';
+  el.style.setProperty('--cat-alpha', String(catMoveAlpha(rank, total, heat)));
+  el.textContent = String(rank);
+  cell.appendChild(el);
+  dom.catEls.push(el);
+}
+
+function addCatWallGhost(dom, boardEl, type, viewSlot, heat, rank, total) {
+  const el = document.createElement('div');
+  el.className = 'cat-move-ghost cat-move-ghost--wall ' + (type === 0 ? 'wallpiece--h' : 'wallpiece--v');
+  el.style.setProperty('--cat-alpha', String(catMoveAlpha(rank, total, heat, { min: 0.3, max: 0.9 })));
+  const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
+  applyGridPos(el, gr, gc, rowSpan, colSpan);
+  boardEl.appendChild(el);
+  dom.catEls.push(el);
+}
+
+function renderCatVision(dom, state) {
+  clearCatVision(dom);
+  const ghosts = buildMoveOrderGhosts(state);
+  const isFlipped = state.settings.rotateBoard;
+  const boardEl = dom.root;
+
+  for (const entry of ghosts.pathCells) {
+    const viewCell = viewMove(entry.cell, isFlipped);
+    const cell = dom.cellEls[viewCell];
+    if (!cell) continue;
+    const el = document.createElement('div');
+    el.className = 'cat-path-cell' + (entry.overlap ? ' cat-path-cell--overlap' : '');
+    el.style.setProperty(
+      '--cat-alpha',
+      String(0.14 + Math.pow(Math.max(entry.heat, 0), 0.5) * 0.28),
+    );
+    cell.appendChild(el);
+    dom.catEls.push(el);
+  }
+
+  const wallTotal = ghosts.walls.length;
+  for (const wall of ghosts.walls) {
+    const type = wall.move < 200 ? 0 : 1;
+    const viewSlot = viewMove(wall.move, isFlipped) % 100;
+    addCatWallGhost(dom, boardEl, type, viewSlot, wall.heat, wall.rank, wallTotal);
+  }
+
+  const pawnTotal = ghosts.pawns.length;
+  for (const pawn of ghosts.pawns) {
+    const viewCell = viewMove(pawn.move, isFlipped);
+    addCatPawnGhost(dom, viewCell, pawn.heat, pawn.rank, pawnTotal);
+  }
 }
 
 function addWallElement(boardEl, type, viewSlot, { preview, bad, ghost, owner }) {
@@ -420,6 +654,8 @@ function syncBoardDom(dom, state, controller) {
   dom.previewEl?.remove();
   dom.previewEl = null;
 
+  renderCatVision(dom, state);
+
   syncWallRack(dom, state, controller);
 
   dom.overlay?.remove();
@@ -551,6 +787,7 @@ export function renderBoard(container, state, controller) {
   dom.previewEl = null;
   dom.overlay = null;
   dom.wallRack = wallRack;
+  dom.catEls = [];
 
   gridWrap.appendChild(boardEl);
 

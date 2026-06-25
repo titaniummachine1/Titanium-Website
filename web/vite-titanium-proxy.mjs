@@ -13,6 +13,26 @@ const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 /** Monorepo workspace root (parent of `site/`). Canonical `engine/` lives here. */
 const monorepoRoot = path.resolve(siteRoot, '..');
 const binName = process.platform === 'win32' ? 'titanium.exe' : 'titanium';
+/** Live weights deployed by `training/deploy_trained_ws.py` — override stale embeds in dev. */
+const liveNetWeightsPath = path.join(monorepoRoot, 'engine', 'src', 'titanium', 'net_weights.bin');
+
+/** Live weights override — only for Titanium v15 live; never ACE v13 frozen tiers. */
+function usesLiveNetOverride(engineMode) {
+  const mode = String(engineMode ?? '');
+  return mode === 'titanium-v15' || mode === 'minimax';
+}
+
+function titaniumChildEnv(engineMode = null) {
+  const childEnv = { ...process.env };
+  delete childEnv.TITANIUM_DISABLE_BOOK;
+  delete childEnv.TITANIUM_BRIDGE;
+  if (usesLiveNetOverride(engineMode) && existsSync(liveNetWeightsPath)) {
+    childEnv.TITANIUM_NET_WEIGHTS_PATH = liveNetWeightsPath;
+  } else {
+    delete childEnv.TITANIUM_NET_WEIGHTS_PATH;
+  }
+  return childEnv;
+}
 
 function engineBinaryPaths(root) {
   return [
@@ -300,9 +320,7 @@ function runGenmoveStreaming(moves, options, res) {
   const bin = resolveBinary();
   const { args, engine } = buildGenmoveArgs(moves, options);
 
-  const childEnv = { ...process.env };
-  delete childEnv.TITANIUM_DISABLE_BOOK;
-  delete childEnv.TITANIUM_BRIDGE;
+  const childEnv = titaniumChildEnv(engine);
 
   const child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv });
   let stdout = '';
@@ -368,9 +386,7 @@ function runGenmoveSync(moves, options) {
   const bin = resolveBinary();
   const { args, engine } = buildGenmoveArgs(moves, options);
 
-  const childEnv = { ...process.env };
-  delete childEnv.TITANIUM_DISABLE_BOOK;
-  delete childEnv.TITANIUM_BRIDGE;
+  const childEnv = titaniumChildEnv(engine);
 
   const result = spawnSync(bin, args, {
     encoding: 'utf8',
@@ -445,9 +461,7 @@ class TitaniumSeatSession {
 
   spawn() {
     const bin = resolveBinary();
-    const childEnv = { ...process.env };
-    delete childEnv.TITANIUM_DISABLE_BOOK;
-    delete childEnv.TITANIUM_BRIDGE;
+    const childEnv = titaniumChildEnv(this.engine);
 
     const args =
       this.engine &&
@@ -678,10 +692,13 @@ async function handleSessionOp(payload, res, wantsStream, req) {
     };
 
     const abortGo = () => {
+      if (res.writableEnded) {
+        return;
+      }
       void session.stopSearch('client disconnected');
     };
     if (req) {
-      req.on('close', abortGo);
+      req.on('aborted', abortGo);
     }
 
     try {
@@ -716,6 +733,7 @@ async function handleSessionOp(payload, res, wantsStream, req) {
       res.end(JSON.stringify({ algebraic: match[1], stoppedBy }));
     } catch (err) {
       if (wantsStream && !res.writableEnded) {
+        writeEvent({ type: 'error', error: err.message ?? String(err) });
         res.end();
         return;
       }
@@ -726,7 +744,7 @@ async function handleSessionOp(payload, res, wantsStream, req) {
       }
     } finally {
       if (req) {
-        req.off('close', abortGo);
+        req.off('aborted', abortGo);
       }
     }
     return;

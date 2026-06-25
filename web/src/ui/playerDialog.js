@@ -5,7 +5,7 @@
  *
  *   Remote (Ka / Ishtar):   Strength (Beg→Alpha) + thinking mode
  *   Titanium:               NNUE weights (live/frozen) + thinking time slider
- *   ACE v8/v10/v13:         Tier selector (JS→Rust→MoveGen+) + time slider
+ *   ACE v13:                Tier selector (JS→Rust→MoveGen+) + time slider
  *   Gorisanson / QuoridorV3: Thinking time slider
  *   Human:                  No controls
  *
@@ -20,14 +20,13 @@ import {
   isRemoteEngine,
   isTitaniumEngine,
   isAceFamily,
-  isAceV10Family,
   STRENGTH_LEVEL_PRESETS,
   TITANIUM_NET_LIVE,
   TITANIUM_NET_FROZEN,
 } from '../lib/timeControl.js';
 
 const TITANIUM_NET_OPTIONS = [
-  { label: 'Live NNUE', id: TITANIUM_NET_LIVE },
+  { label: 'Live NNUE (v16)', id: TITANIUM_NET_LIVE },
   { label: 'Frozen NNUE', id: TITANIUM_NET_FROZEN },
 ];
 
@@ -38,13 +37,6 @@ const TIME_TO_MOVE_OPTIONS = [
   { label: 'Short',     id: TimeToMove.Short },
   { label: 'Medium',    id: TimeToMove.Medium },
   { label: 'Long',      id: TimeToMove.Long },
-];
-
-const ACE_V10_TIERS = [
-  { label: 'JS',            id: 0 },
-  { label: 'Rust',          id: 1 },
-  { label: 'MoveGen+',      id: 2 },
-  { label: 'MoveGen+ EME',  id: 3 },
 ];
 
 const ACE_V13_TIERS = [
@@ -76,14 +68,12 @@ function engineCategory(playerType) {
   if (playerType === PlayerType.ZeroInk) return 'zeroink';
   if (isRemoteEngine(playerType, configs)) return 'remote';
   if (isTitaniumEngine(playerType, configs)) return 'titanium';
-  if (isAceV10Family(playerType, configs)) return 'ace-v10';
   if (isAceFamily(playerType, configs)) return 'ace-v13';
   return 'local';
 }
 
-function aceDisplayTiers(playerType) {
-  const configs = getAllEngineConfigs();
-  return isAceV10Family(playerType, configs) ? ACE_V10_TIERS : ACE_V13_TIERS;
+function aceDisplayTiers(_playerType) {
+  return ACE_V13_TIERS;
 }
 
 // ── Prefs ────────────────────────────────────────────────────────────────────
@@ -341,7 +331,7 @@ function renderEngineControls(seat, selections) {
            renderTimeSlider(seat, selections, 'Thinking time');
   }
 
-  if (cat === 'ace-v10' || cat === 'ace-v13') {
+  if (cat === 'ace-v13') {
     return renderAceTierControls(seat, selections, playerType) +
            renderTimeSlider(seat, selections, 'Thinking time');
   }
@@ -522,7 +512,7 @@ function buildAiSettings(playerType, selections, seat) {
     };
   }
 
-  if (cat === 'ace-v10' || cat === 'ace-v13') {
+  if (cat === 'ace-v13') {
     return {
       strengthLevel:    selections.aceStrength[seat] ?? DEFAULT_ACE_TIER,
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,

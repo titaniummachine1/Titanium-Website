@@ -24,17 +24,21 @@ function escHtml(s) {
 }
 
 export function renderGameControls(container, state, controller) {
-  const canUndo = state.actions.length > 0 && !state.winner && !state.isDraw;
+  const canUndo = state.actions.length > 0;
+  const canRedo = !!state.canRedo;
   const undoPaused = controller._undoPaused ?? false;
+  const catActive = state.settings?.showCatVision;
 
   container.innerHTML = `
     <div class="game-controls">
+      <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="undo" ${canUndo ? '' : 'disabled'} title="Undo last move (Left Arrow)" aria-label="Undo last move">←</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="new-game" title="Start a new game">New game</button>
-      <button type="button" class="btn btn--small game-controls__btn" data-action="undo" ${canUndo ? '' : 'disabled'} title="Undo last move">Undo</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="flip" title="Flip board orientation">Flip</button>
+      <button type="button" class="btn btn--small game-controls__btn${catActive ? ' is-active' : ''}" data-action="cat-vision" title="Show legal move-order relevance ghosts">CAT vision</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="logs" title="Show AI thinking log for last move">Logs</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="load-notation" title="Load game from notation">Load</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="change-players" title="Change players and engine settings">Settings</button>
+      <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="redo" ${canRedo ? '' : 'disabled'} title="Redo next move (Right Arrow)" aria-label="Redo next move">→</button>
     </div>
     ${undoPaused ? '<div class="undo-pause-banner">Engine paused after undo — resuming shortly…</div>' : ''}
   `;
@@ -51,8 +55,16 @@ function wireControls(container, state, controller) {
     controller.undoWithPause?.();
   });
 
+  container.querySelector('[data-action="redo"]')?.addEventListener('click', () => {
+    controller.redo?.();
+  });
+
   container.querySelector('[data-action="flip"]')?.addEventListener('click', () => {
     controller.toggleRotateBoard?.();
+  });
+
+  container.querySelector('[data-action="cat-vision"]')?.addEventListener('click', () => {
+    controller.toggleCatVision?.();
   });
 
   container.querySelector('[data-action="logs"]')?.addEventListener('click', () => {

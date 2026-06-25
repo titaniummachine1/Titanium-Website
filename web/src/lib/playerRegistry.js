@@ -27,11 +27,11 @@ const GORISANSON_ENGINE = {
 
 const TITANIUM_ENGINE = {
   kind: 'titanium',
-  name: 'Titanium v15',
+  name: 'Titanium v16',
   key: PlayerType.TitaniumMinimax,
   engineMode: 'titanium-v15',
   tooltip:
-    'Production titanium-v15 — grafted O1 movegen + NNUE (live or frozen weights). Native via `npm run dev`; WASM on GitHub Pages',
+    'Titanium v16 — epoch-3 live NNUE (or frozen baseline). Native via `npm run dev`; WASM on GitHub Pages',
 };
 
 const ZERO_INK_ENGINE = {
@@ -51,14 +51,6 @@ const ZERO_INK_ENGINE = {
     'quoridor-zero.ink AlphaZero net over REST. Needs network access.',
 };
 
-const ACE_V10_ENGINE = {
-  kind: 'ace-v10-family',
-  name: 'ACE v10',
-  key: PlayerType.AceV10,
-  tooltip:
-    'ACE v10 — use Version slider: JS (HTML) → Rust → MoveGen+ → MoveGen+ EME',
-};
-
 const ACE_V13_ENGINE = {
   kind: 'ace-v13-family',
   name: 'ACE v13',
@@ -75,7 +67,6 @@ export function getAllEngineConfigs() {
   return [
     GORISANSON_ENGINE,
     TITANIUM_ENGINE,
-    ACE_V10_ENGINE,
     ACE_V13_ENGINE,
     ZERO_INK_ENGINE,
     ...remote,
@@ -102,12 +93,6 @@ export function getPlayerOptionGroups() {
           label: TITANIUM_ENGINE.name,
           disabled: false,
           tooltip: TITANIUM_ENGINE.tooltip,
-        },
-        {
-          value: PlayerType.AceV10,
-          label: ACE_V10_ENGINE.name,
-          disabled: false,
-          tooltip: ACE_V10_ENGINE.tooltip,
         },
         {
           value: PlayerType.AceV13,
@@ -192,8 +177,8 @@ const SEARCH_STOP_LABELS = {
   'ace-v13-js': 'ACE v13 JS',
   'ace-v13': 'ACE v13 Rust',
   'ace-v13-ti': 'ACE v13 MoveGen+',
-  'titanium-v15': 'Titanium v15 live',
-  'titanium-v15-frozen': 'Titanium v15 frozen',
+  'titanium-v15': 'Titanium v16 live',
+  'titanium-v15-frozen': 'Titanium v16 frozen',
   zeroink: 'zero.ink',
   mcts: 'MCTS',
   hybrid: 'hybrid',
