@@ -10,6 +10,7 @@
 import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { formatScoreForCard, isMateScore, mateInfo } from '../lib/engineScore.js';
+import { resolveDisplayNodes } from '../lib/searchNodes.js';
 import { canPlayNow, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
 import {
@@ -53,18 +54,7 @@ function deepestEntry(depthLog) {
 }
 
 function resolveNodes(snap) {
-  if (!snap) return 0;
-  if (snap.nodeSource === 'bestmove_aggregate') {
-    const total = Number(snap.totalNodesAcrossWorkers) || 0;
-    if (total > 0) return total;
-  }
-  const deep = deepestEntry(snap.depthLog);
-  return Math.max(
-    Number(snap.selectedWorkerNodes) || 0,
-    Number(snap.nodes) || 0,
-    Number(snap.simulations) || 0,
-    Number(deep?.nodes) || 0,
-  );
+  return resolveDisplayNodes(snap);
 }
 
 function formatNodesLine(snap) {
@@ -127,7 +117,7 @@ export function compactPlayerConfigSummary(ui) {
 
   if (ui.isTitanium) {
     const net = titaniumNetLabel({ titaniumNet: ui.titaniumNet });
-    const threads = ui.hasNativeTitaniumLazySmp && ui.cores > 1 ? ` · ${ui.cores} threads` : '';
+    const threads = ui.isTitanium && ui.cores > 1 ? ` · ${ui.cores} threads` : '';
     return `${engine} · ${net} · ${formatTimeSummary(ui.wallClockSeconds)}${threads}`;
   }
 

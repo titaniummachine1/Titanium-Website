@@ -71,6 +71,7 @@ async function handleSearch(eventData) {
     isFreshGame,
     engineMode = 'titanium-v15',
     workerSlot = 0,
+    lmrBias = 0,
     streamProgress = true,
   } = eventData;
   const wasm = await ensureEngine(engineMode);
@@ -108,7 +109,7 @@ async function handleSearch(eventData) {
           maxNodes ?? 0,
           workerSlot,
           0,
-          0,
+          lmrBias,
           onProgress,
         )
       : wasm.go(Math.max(1, timeMs ?? 10_000), maxNodes ?? 0, onProgress);

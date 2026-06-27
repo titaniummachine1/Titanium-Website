@@ -177,7 +177,7 @@ function renderPlayerAiSettings(ui, playerNum) {
           />
           <output class="time-slider-value" data-wallclock-label="${playerNum}">${formatWallClock(ui.wallClockSeconds)}</output>
         </div>
-        ${ui.hasNativeTitaniumLazySmp
+        ${ui.isTitanium
         ? `
         <label class="control-label control-label--sub">Search threads · ${escapeHtml(engineName)}</label>
         <div class="time-slider-row">

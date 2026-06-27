@@ -72,14 +72,14 @@ export const ENGINE_REGISTRY = new Map([
         playNow: true,
         abort: true,
       },
-      controls: { timeSlider: true, strength: true, nodes: true },
+      controls: { timeSlider: true, nodes: true, strength: true },
     },
   ],
   [
     PlayerType.TitaniumV15Frozen,
     {
       id: PlayerType.TitaniumV15Frozen,
-      displayName: 'Titanium v16 (Easy)',
+      displayName: 'Titanium v16 (Frozen)',
       backend: EngineBackendKind.LOCAL_WASM,
       capabilities: {
         remoteSync: false,
@@ -87,7 +87,7 @@ export const ENGINE_REGISTRY = new Map([
         playNow: true,
         abort: true,
       },
-      controls: { timeSlider: true, strength: true, nodes: true },
+      controls: { timeSlider: true, nodes: true },
     },
   ],
   [

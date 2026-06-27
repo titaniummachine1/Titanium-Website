@@ -45,13 +45,18 @@ assert(
 console.log('\n[isolate] Titanium native opt-in and static/WASM routing');
 const viteSrc = readSrc('../vite.config.js');
 const proxySrc = readSrc('../vite-titanium-proxy.mjs');
+const runtimeSrc = readSrc('lib/titaniumRuntime.js');
 assert(viteSrc.includes('titaniumProxyPlugin'), 'dev server exposes native titanium proxy');
 assert(
-  controllerSrc.includes('HAS_NATIVE_TITANIUM_LAZY_SMP'),
-  'native Lazy SMP routing flag exists',
+  runtimeSrc.includes('import.meta.env.PROD'),
+  'production build never enables native titanium',
 );
 assert(
-  controllerSrc.includes("VITE_TITANIUM_NATIVE_PROXY === '1'"),
+  controllerSrc.includes('hasNativeTitaniumLazySmp'),
+  'native Lazy SMP routing uses shared runtime guard',
+);
+assert(
+  runtimeSrc.includes("VITE_TITANIUM_NATIVE_PROXY === '1'"),
   'native Titanium proxy is explicit opt-in, not automatic dev routing',
 );
 assert(
@@ -83,7 +88,7 @@ assert(
 console.log('\n[isolate] WASM workers — dedicated Worker per engine client');
 const tiWasmClient = readSrc('lib/titaniumWasmClient.js');
 const aceWasmClient = readSrc('lib/aceRustWasmClient.js');
-assert(tiWasmClient.includes('new TitaniumWasmWorker()'), 'titanium: own worker');
+assert(tiWasmClient.includes('resolveCores'), 'titanium WASM uses configured core count');
 assert(aceWasmClient.includes('new AceRustWasmWorker()'), 'ace rust: own worker');
 
 console.log('\n[isolate] ACE v13 tiers are not Titanium live NNUE in engine routing');

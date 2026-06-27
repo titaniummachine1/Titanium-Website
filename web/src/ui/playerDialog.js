@@ -31,11 +31,14 @@ import {
   clampCores,
 } from '../lib/timeControl.js';
 
-const TITANIUM_NET_OPTIONS = [
-  { label: 'Easy', id: TITANIUM_NET_EASY },
-  { label: 'Medium', id: TITANIUM_NET_MEDIUM },
-  { label: 'Hard', id: TITANIUM_NET_HARD },
-];
+// Medium/Hard weights are still being trained — only expose them in dev builds.
+const TITANIUM_NET_OPTIONS = import.meta.env.DEV
+  ? [
+      { label: 'Easy', id: TITANIUM_NET_EASY },
+      { label: 'Medium', id: TITANIUM_NET_MEDIUM },
+      { label: 'Hard', id: TITANIUM_NET_HARD },
+    ]
+  : [{ label: 'Easy', id: TITANIUM_NET_EASY }];
 
 const PREFS_KEY = 'quoridor-player-prefs-v4';
 
@@ -60,7 +63,6 @@ const WALL_CLOCK_MIN        = 0.5;
 const WALL_CLOCK_MAX        = 60;
 const WALL_CLOCK_STEP       = 0.5;
 const CORES_MIN             = 1;
-const HAS_NATIVE_TITANIUM_LAZY_SMP = Boolean(import.meta.env?.DEV);
 
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -100,15 +102,13 @@ function loadPrefs(state) {
       aceStrength: saved.aceStrength ?? [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: saved.remoteStrength ?? [StrengthLevel.Alpha, StrengthLevel.Alpha],
       titaniumNet: (saved.titaniumNet ?? [TITANIUM_NET_HARD, TITANIUM_NET_HARD]).map(migrateTitaniumNet),
-      cores: HAS_NATIVE_TITANIUM_LAZY_SMP
-        ? [0, 1].map((seat) =>
-            clampCores(
-              (Array.isArray(saved.cores) ? saved.cores[seat] : null) ??
-                (Array.isArray(saved.threads) ? saved.threads[seat] : null) ??
-                DEFAULT_CORES,
-            ),
-          )
-        : [1, 1],
+      cores: [0, 1].map((seat) =>
+        clampCores(
+          (Array.isArray(saved.cores) ? saved.cores[seat] : null) ??
+            (Array.isArray(saved.threads) ? saved.threads[seat] : null) ??
+            DEFAULT_CORES,
+        ),
+      ),
     };
   } catch {
     return {
@@ -118,7 +118,7 @@ function loadPrefs(state) {
       aceStrength: [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: [StrengthLevel.Alpha, StrengthLevel.Alpha],
       titaniumNet: [TITANIUM_NET_HARD, TITANIUM_NET_HARD],
-      cores: HAS_NATIVE_TITANIUM_LAZY_SMP ? [DEFAULT_CORES, DEFAULT_CORES] : [1, 1],
+      cores: [DEFAULT_CORES, DEFAULT_CORES],
     };
   }
 }
@@ -192,7 +192,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     aceStrength: [...prefs.aceStrength],
     remoteStrength: [...prefs.remoteStrength],
     titaniumNet: [...prefs.titaniumNet],
-    cores: HAS_NATIVE_TITANIUM_LAZY_SMP ? [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])] : [1, 1],
+    cores: [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])],
   };
 
   const groups = getPlayerOptionGroups();
@@ -354,7 +354,7 @@ function renderEngineControls(seat, selections) {
 
   if (cat === 'titanium') {
     return renderTitaniumNetControls(seat, selections) +
-           (HAS_NATIVE_TITANIUM_LAZY_SMP ? renderCoresSlider(seat, selections) : '') +
+           renderCoresSlider(seat, selections) +
            renderTimeSlider(seat, selections, 'Thinking time');
   }
 
@@ -384,7 +384,11 @@ function renderRemoteStrengthControls(seat, selections) {
 }
 
 function renderTitaniumNetControls(seat, selections) {
-  const current = migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD);
+  let current = migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD);
+  // Clamp to available options (e.g. production hides Medium/Hard).
+  if (!TITANIUM_NET_OPTIONS.some((o) => o.id === current)) {
+    current = TITANIUM_NET_OPTIONS[0].id;
+  }
   const btns = TITANIUM_NET_OPTIONS.map((opt) =>
     '<button class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
     ' data-ti-net-btn data-seat="' + seat + '" data-ti-net-id="' + opt.id + '">' +
@@ -568,9 +572,7 @@ function buildAiSettings(playerType, selections, seat) {
       titaniumNet:      migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD),
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
       visitsBudget:     0,
-      cores:            HAS_NATIVE_TITANIUM_LAZY_SMP
-        ? clampCores(selections.cores[seat] ?? DEFAULT_CORES)
-        : 1,
+      cores:            clampCores(selections.cores[seat] ?? DEFAULT_CORES),
     };
   }
 
