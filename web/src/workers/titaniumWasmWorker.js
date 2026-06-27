@@ -14,6 +14,13 @@ function frozenForEngineMode(engineMode) {
   return engineMode === 'titanium-v15-frozen';
 }
 
+async function ensureInit() {
+  if (!initPromise) {
+    initPromise = init();
+  }
+  await initPromise;
+}
+
 async function ensureEngine(engineMode = 'titanium-v15') {
   await ensureInit();
   const frozen = frozenForEngineMode(engineMode);
