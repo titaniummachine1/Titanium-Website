@@ -117,7 +117,7 @@ export function compactPlayerConfigSummary(ui) {
 
   if (ui.isTitanium) {
     const net = titaniumNetLabel({ titaniumNet: ui.titaniumNet });
-    const threads = ui.hasNativeTitaniumLazySmp && ui.cores > 1 ? ` · ${ui.cores} threads` : '';
+    const threads = ui.isTitanium && ui.cores > 1 ? ` · ${ui.cores} threads` : '';
     return `${engine} · ${net} · ${formatTimeSummary(ui.wallClockSeconds)}${threads}`;
   }
 

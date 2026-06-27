@@ -18,7 +18,7 @@ function invalidPositionError(message, cause) {
 
 export function enumerateTitaniumLegalMoves(historyTokens) {
   const history = historyTokens.map(String);
-  const engine = new WasmEngine(0);
+  const engine = new WasmEngine(2);
   engine.reset();
 
   if (history.length > 0) {

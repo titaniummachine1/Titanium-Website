@@ -38,7 +38,7 @@ export const THREADS_HARD_MAX = 8;
 /** Logical CPU count on this machine (browser WASM worker pool size). */
 export function defaultCoreCount() {
   if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0) {
-    return navigator.hardwareConcurrency;
+    return Math.max(1, Math.min(navigator.hardwareConcurrency, 4));
   }
   return 4;
 }

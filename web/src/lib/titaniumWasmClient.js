@@ -42,23 +42,21 @@ export class TitaniumWasmEngineClient {
     }
   }
 
-  /** Initialize WASM + weights in each worker; resolves when all post `ready`. */
-  initWorkers(engineMode = this.config?.engineMode ?? 'titanium-v15') {
+  /** Initialize WASM in each worker sequentially (avoids parallel cold-start traps on Pages). */
+  async initWorkers(engineMode = this.config?.engineMode ?? 'titanium-v15') {
     this.ensureWorkers();
-    const need = this.cores;
-    const promises = [];
-    for (let workerId = 0; workerId < need; workerId++) {
+    const payloads = [];
+    for (let workerId = 0; workerId < this.cores; workerId++) {
       if (this._workerReady.has(workerId)) {
         continue;
       }
-      promises.push(
-        new Promise((resolve, reject) => {
-          this._readyWaiters.set(workerId, { resolve, reject });
-          this.workers[workerId].postMessage({ op: 'init', engineMode, workerSlot: workerId });
-        }),
-      );
+      const data = await new Promise((resolve, reject) => {
+        this._readyWaiters.set(workerId, { resolve, reject });
+        this.workers[workerId].postMessage({ op: 'init', engineMode, workerSlot: workerId });
+      });
+      payloads.push(data);
     }
-    return Promise.all(promises);
+    return payloads;
   }
 
   _resolveReady(workerId, data) {
@@ -361,7 +359,13 @@ export class TitaniumWasmEngineClient {
       this.queuedRequest = params;
       return;
     }
-    void this.startRequest({ ...params, awaitReady: false });
+    void this.startRequest(params).catch((err) => {
+      if (this.pendingRequest) {
+        return;
+      }
+      this.onError?.(err);
+      this.drainQueuedRequest();
+    });
   }
 
   drainQueuedRequest() {
@@ -373,7 +377,7 @@ export class TitaniumWasmEngineClient {
     this.startRequest(next);
   }
 
-  async startRequest({ aiSettings, moveHistory, isFreshGame, awaitReady = false }) {
+  async startRequest({ aiSettings, moveHistory, isFreshGame }) {
     const retryParams = { aiSettings, moveHistory, isFreshGame };
     if (isFreshGame) {
       this.algebraicMoves = [];
@@ -389,17 +393,9 @@ export class TitaniumWasmEngineClient {
 
     this.setStatus('searching');
     this.ensureWorkers();
-    let initMs = 0;
-    if (awaitReady) {
-      const readyStart = performance.now();
-      const readyPayloads = await this.initWorkers(engineMode);
-      initMs = performance.now() - readyStart;
-      for (const p of readyPayloads) {
-        if (p?.initMs != null) {
-          initMs = Math.max(initMs, p.initMs);
-        }
-      }
-    }
+    const readyStart = performance.now();
+    await this.initWorkers(engineMode);
+    const initMs = performance.now() - readyStart;
 
     const started = performance.now();
     this.pendingRequest = {
