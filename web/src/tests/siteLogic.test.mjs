@@ -6,8 +6,7 @@
 import { resolveLiveBestMoveKey, canPlayNow, pvFirstMoveFromLiveSearch } from '../lib/liveBestMove.js';
 import {
   formatScoreForCard,
-  ACE_MATE_VALUE,
-  RACE_MATE_VALUE,
+  TITANIUM_MATE_VALUE,
   quoridorMovesFromMatePlies,
 } from '../lib/engineScore.js';
 import { canonicalPositionKeyFromActions } from '../lib/canonicalState.js';
@@ -139,24 +138,14 @@ assertEqual(quoridorMovesFromMatePlies(1), 1, 'mate in 1 ply = 1 move');
 assertEqual(quoridorMovesFromMatePlies(2), 1, 'mate in 2 plies = 1 move');
 assertEqual(quoridorMovesFromMatePlies(4), 2, 'mate in 4 plies = 2 moves');
 assertEqual(
-  formatScoreForCard(ACE_MATE_VALUE - 4),
+  formatScoreForCard(TITANIUM_MATE_VALUE - 4),
   'Win in 2',
-  'true mate score (MATE-4 plies) shows Win in 2',
+  'titanium mate score uses half-plies as moves',
 );
 assertEqual(
-  formatScoreForCard(ACE_MATE_VALUE - 1),
+  formatScoreForCard(TITANIUM_MATE_VALUE - 1),
   'Win in 1',
   'mate in 1 ply displays Win in 1',
-);
-assertEqual(
-  formatScoreForCard(RACE_MATE_VALUE - 5),
-  'Win in 3',
-  'race-proof win (RACE_MATE-5 plies) shows Win in 3',
-);
-assertEqual(
-  formatScoreForCard(-(RACE_MATE_VALUE - 10)),
-  'Lose in 5',
-  'race-proof loss shows Lose in N',
 );
 
 console.log('\n[legality] user midgame line replays legally');
@@ -229,38 +218,6 @@ const flippedRows = screenRowIndices(9, true);
 assertEqual(normalRows[0], 0, 'normal starts at p=0');
 assertEqual(flippedRows[0], 16, 'flipped starts at bottom screen row');
 assertEqual(screenColIndices(9, true)[0], 16, 'flipped reverses columns');
-
-console.log('\n[searchNodes] Lazy SMP totals');
-import { resolveDisplayNodes, enrichNodeFields } from '../lib/searchNodes.js';
-assertEqual(
-  resolveDisplayNodes({
-    nodes: 67397,
-    totalNodes: 284214,
-    mainThreadNodes: 67397,
-    helperNodes: [65581, 75857, 75379],
-  }),
-  284214,
-  'prefers totalNodes over main-thread nodes',
-);
-assertEqual(
-  resolveDisplayNodes({
-    nodes: 67397,
-    mainThreadNodes: 67397,
-    helperNodes: [65581, 75857, 75379],
-  }),
-  284214,
-  'sums main + helpers when totalNodes missing',
-);
-assertEqual(
-  enrichNodeFields({
-    nodes: 67397,
-    totalNodes: 284214,
-    mainThreadNodes: 67397,
-    helperNodes: [65581, 75857, 75379],
-  }).nodes,
-  284214,
-  'enrichNodeFields exposes aggregate nodes',
-);
 
 console.log('\n════════════════════════════════');
 console.log(`TOTAL: ${passed + failed} tests — passed ${passed}, failed ${failed}`);

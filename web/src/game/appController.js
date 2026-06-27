@@ -22,7 +22,6 @@ import { TitaniumLegalityOracle } from '../lib/titaniumLegalityOracle.js';
 import { createTitaniumLegalityRuntime } from '../lib/titaniumLegalityRuntime.js';
 import { validateMoveLegality } from '../lib/validateMoveLegality.js';
 import { isAbortError } from '../lib/engineAbort.js';
-import { resolveDisplayNodes } from '../lib/searchNodes.js';
 import { getEngineEntryForPlayer } from '../engines/engineRegistry.js';
 import { requestEngineMove } from '../engines/requestEngineMove.js';
 import { validateEngineResultIdentity } from '../engines/validateEngineResultIdentity.js';
@@ -88,10 +87,34 @@ function scoreFromDepthLog(depthLog, rootScore) {
   return rootScore ?? null;
 }
 
+/** Nodes for UI — WASM multi-core searches use the sum across all workers. */
+function resolveTotalNodes(info) {
+  if (info?.nodeSource === 'bestmove_aggregate') {
+    const total = Number(info?.totalNodesAcrossWorkers) || 0;
+    if (total > 0) return total;
+  }
+  if (info?.progress === 1 || info?.nodeSource === 'bestmove_aggregate') {
+    if (info?.nodes != null) {
+      return Number(info.nodes) || 0;
+    }
+    if (info?.selectedWorkerNodes != null) {
+      return Number(info.selectedWorkerNodes) || 0;
+    }
+  }
+  const depthLog = info?.depthLog ?? [];
+  const deep = deepestDepthEntry(depthLog);
+  return Math.max(
+    Number(info?.selectedWorkerNodes) || 0,
+    Number(info?.nodes) || 0,
+    Number(info?.simulations) || 0,
+    Number(deep?.nodes) || 0,
+  );
+}
+
 function finalizeSearchInfo(info) {
   const depthLog = info?.depthLog ? [...info.depthLog] : [];
   const deep = deepestDepthEntry(depthLog);
-  const nodes = resolveDisplayNodes(info);
+  const nodes = resolveTotalNodes(info);
   return {
     ...info,
     depthLog,
@@ -136,7 +159,7 @@ function buildThinkSeatSnapshot({
   thinkMs,
 }) {
   const deep = deepestDepthEntry(depthLog);
-  const resolvedNodes = resolveDisplayNodes({ nodes, simulations, depthLog });
+  const resolvedNodes = resolveTotalNodes({ nodes, simulations, depthLog });
   return {
     live,
     engine,
@@ -1603,7 +1626,7 @@ export class AppController {
         cores: HAS_NATIVE_TITANIUM_LAZY_SMP ? resolveCores(ai) : 1,
       };
       return HAS_NATIVE_TITANIUM_LAZY_SMP
-        ? new TitaniumEngineClient(patched, { seatId: `seat-${seatIndex}` })
+        ? new TitaniumEngineClient(patched)
         : new TitaniumWasmEngineClient(patched);
     }
     return new EngineClient(config);

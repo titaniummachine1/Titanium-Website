@@ -4,7 +4,6 @@
  *
  *   node benchmark/titanium_vs_gorisanson.mjs
  *   node benchmark/titanium_vs_gorisanson.mjs --games 10
- *   node benchmark/titanium_vs_gorisanson.mjs --games 2 --time 4
  */
 
 import { eloFromMatch, playMatch } from './lib/match_engine.mjs';
@@ -15,7 +14,6 @@ import { encodeReplayFromAlgebraic, formatReplayBlock } from './lib/replay_code.
 function parseArgs(argv) {
   const opts = {
     games: 4,
-    timeSec: BENCH_TIME_SEC,
     verbose: false,
     disableBook: false,
   };
@@ -24,8 +22,6 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--games' && argv[i + 1]) {
       opts.games = Number(argv[++i]);
-    } else if (arg === '--time' && argv[i + 1]) {
-      opts.timeSec = Number(argv[++i]);
     } else if (arg === '--no-book') {
       opts.disableBook = true;
     } else if (arg === '--verbose' || arg === '-v') {
@@ -38,7 +34,7 @@ function parseArgs(argv) {
 
 async function main() {
   const opts = parseArgs(process.argv);
-  const budget = { timeSec: opts.timeSec, maxSimulations: BENCH_MAX_SIMULATIONS };
+  const budget = { timeSec: BENCH_TIME_SEC, maxSimulations: BENCH_MAX_SIMULATIONS };
 
   const titanium = { id: RUST_TITANIUM_ID, engine: 'minimax', disableBook: opts.disableBook };
   const gorisanson = { id: GORISANSON_ID };

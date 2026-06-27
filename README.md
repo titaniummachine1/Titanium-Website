@@ -25,7 +25,7 @@ Pushes to `main` auto-deploy via `.github/workflows/deploy-pages.yml`.
 2. **Build and deployment** → Source: **GitHub Actions**
 3. Push to `main` (or run the workflow manually under **Actions**)
 
-**Local dev** (same WASM stack as GitHub Pages — no native `titanium.exe`, fully client-side):
+**Local dev** (Titanium Rust via proxy — not available on static Pages):
 
 ```bash
 cd web && npm install && npm run dev
@@ -43,7 +43,7 @@ On GitHub Pages:
 - **JS engines** — Gorisanson MCTS, Ace v8 (HTML extract), Quoridor v3 αβ
 - **Remote** — Ishtar / Ka (WebSocket)
 
-Locally and on GitHub Pages, **Titanium** and **ACE Rust** run as **WebAssembly** in the browser (no server, no spawned processes). Only **remote** engines (Ishtar / Ka) use WebSocket servers.
+Locally, `npm run dev` uses the native Rust binary (faster); `npm run build:pages` uses WASM like production.
 
 Layout:
 

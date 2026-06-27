@@ -31,14 +31,11 @@ import {
   clampCores,
 } from '../lib/timeControl.js';
 
-// Medium/Hard weights are still being trained — only expose them in dev builds.
-const TITANIUM_NET_OPTIONS = import.meta.env.DEV
-  ? [
-      { label: 'Easy', id: TITANIUM_NET_EASY },
-      { label: 'Medium', id: TITANIUM_NET_MEDIUM },
-      { label: 'Hard', id: TITANIUM_NET_HARD },
-    ]
-  : [{ label: 'Easy', id: TITANIUM_NET_EASY }];
+const TITANIUM_NET_OPTIONS = [
+  { label: 'Easy', id: TITANIUM_NET_EASY },
+  { label: 'Medium', id: TITANIUM_NET_MEDIUM },
+  { label: 'Hard', id: TITANIUM_NET_HARD },
+];
 
 const PREFS_KEY = 'quoridor-player-prefs-v4';
 
@@ -387,11 +384,7 @@ function renderRemoteStrengthControls(seat, selections) {
 }
 
 function renderTitaniumNetControls(seat, selections) {
-  let current = migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD);
-  // Clamp to available options (e.g. production hides Medium/Hard).
-  if (!TITANIUM_NET_OPTIONS.some((o) => o.id === current)) {
-    current = TITANIUM_NET_OPTIONS[0].id;
-  }
+  const current = migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD);
   const btns = TITANIUM_NET_OPTIONS.map((opt) =>
     '<button class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
     ' data-ti-net-btn data-seat="' + seat + '" data-ti-net-id="' + opt.id + '">' +

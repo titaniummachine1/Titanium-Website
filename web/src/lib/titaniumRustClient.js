@@ -11,7 +11,6 @@ import {
   isAbortError,
 } from './engineAbort.js';
 import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel, resolveCores } from './timeControl.js';
-import { enrichNodeFields } from './searchNodes.js';
 
 const SESSION_URL = '/api/titanium/session';
 const GENMOVE_URL = '/api/titanium/genmove';
@@ -415,12 +414,12 @@ export class TitaniumEngineClient {
             ...data,
             stoppedBy,
             depthLog: depthLog ?? finalMeta.depthLog,
+            nodes: data.nodes ?? finalMeta.nodes,
             searchDepth: data.searchDepth ?? finalMeta.searchDepth,
             rootScore: data.rootScore ?? finalMeta.rootScore,
             whiteDist: data.whiteDist ?? finalMeta.whiteDist,
             blackDist: data.blackDist ?? finalMeta.blackDist,
             rootMoves: data.rootMoves?.length ? data.rootMoves : finalMeta.rootMoves,
-            ...enrichNodeFields({ ...finalMeta, ...data, depthLog: depthLog ?? finalMeta.depthLog }),
           };
 
           const isMinimax = isAlphaBetaEngineMode(stoppedBy);
@@ -430,12 +429,6 @@ export class TitaniumEngineClient {
             stoppedBy,
             simulations: isMinimax ? 0 : data.simulations,
             nodes: finalMeta.nodes,
-            totalNodes: finalMeta.totalNodes,
-            totalNodesAcrossWorkers: finalMeta.totalNodesAcrossWorkers,
-            mainThreadNodes: finalMeta.mainThreadNodes,
-            helperNodes: finalMeta.helperNodes,
-            selectedWorkerNodes: finalMeta.selectedWorkerNodes,
-            nodeSource: finalMeta.nodeSource,
             searchDepth: finalMeta.searchDepth,
             depthLog: finalMeta.depthLog,
             whiteDist: finalMeta.whiteDist,
@@ -471,19 +464,12 @@ export class TitaniumEngineClient {
 
           const stoppedBy = finalMeta.stoppedBy ?? data.stoppedBy ?? engineMode;
           const isAbFinal = isAlphaBetaEngineMode(stoppedBy);
-          const finalNodes = enrichNodeFields(finalMeta);
           this.onInfo?.({
             time: elapsed,
             elapsedMs: finalMeta.elapsedMs ?? Math.round(elapsed),
             stoppedBy,
             simulations: isAbFinal ? 0 : (finalMeta.simulations ?? 0),
-            nodes: finalNodes.nodes,
-            totalNodes: finalNodes.totalNodes,
-            totalNodesAcrossWorkers: finalNodes.totalNodesAcrossWorkers,
-            mainThreadNodes: finalNodes.mainThreadNodes,
-            helperNodes: finalNodes.helperNodes,
-            selectedWorkerNodes: finalNodes.selectedWorkerNodes,
-            nodeSource: finalNodes.nodeSource,
+            nodes: finalMeta.nodes ?? 0,
             searchDepth: finalMeta.searchDepth,
             depthLog: finalMeta.depthLog,
             whiteDist: finalMeta.whiteDist,

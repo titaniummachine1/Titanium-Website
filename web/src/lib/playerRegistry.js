@@ -159,7 +159,6 @@ export function describeActiveSearchInfo(
 }
 
 import { formatEngineScore, isMateScore, mateInfo } from './engineScore.js';
-import { resolveDisplayNodes } from './searchNodes.js';
 
 export { formatEngineScore, isMateScore, mateInfo };
 
@@ -242,9 +241,8 @@ function buildSearchDepthHeader(header, { live }) {
     header.playerLabel?.includes('Quoridor v3') ||
     header.playerLabel?.includes('ACE v8') ||
     header.playerLabel?.includes('ACE v13');
-  const displayNodes = resolveDisplayNodes(header);
-  if (displayNodes > 0) {
-    parts.push(`${displayNodes.toLocaleString()} nodes`);
+  if (header.nodes != null) {
+    parts.push(`${Number(header.nodes).toLocaleString()} nodes`);
   } else if (header.simulations != null && !isAb) {
     parts.push(`${Number(header.simulations).toLocaleString()} sims`);
   }
@@ -362,7 +360,7 @@ export function describeSearchInfo(playerType, searchInfo, engineConfigs) {
       isQuoridorV3Engine(playerType, engineConfigs) ||
       isAceEngine(playerType, engineConfigs);
     const budgetLabel = isMinimax
-      ? `${resolveDisplayNodes(searchInfo).toLocaleString()} nodes`
+      ? `${(searchInfo.nodes ?? 0).toLocaleString()} nodes`
       : `${searchInfo.simulations?.toLocaleString() ?? '?'} sims`;
     const winPart =
       !isMinimax && searchInfo.rootWinRate != null
