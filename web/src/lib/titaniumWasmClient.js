@@ -472,7 +472,7 @@ export class TitaniumWasmEngineClient {
         engineMode,
         workerSlot: workerId,
         lmrBias: workerId === 0 ? 0 : workerId * 5,
-        streamProgress: true,
+        streamProgress: import.meta.env.DEV,
       });
     }
   }

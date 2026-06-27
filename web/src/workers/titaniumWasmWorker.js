@@ -85,34 +85,55 @@ async function handleSearch(eventData) {
     wasm.reset();
   }
 
-  const onProgress = streamProgress
-    ? (jsonStr) => {
-        const data = parseProgressJson(jsonStr);
-        if (!data) {
-          return;
+  const onProgress =
+    streamProgress && workerSlot === 0
+      ? (jsonStr) => {
+          const data = parseProgressJson(jsonStr);
+          if (!data) {
+            return;
+          }
+          self.postMessage({
+            type: 'info',
+            thinking: true,
+            workerId: workerSlot,
+            ...data,
+            mode: data.engine ?? data.stoppedBy ?? engineMode,
+          });
         }
-        self.postMessage({
-          type: 'info',
-          thinking: true,
-          workerId: workerSlot,
-          ...data,
-          mode: data.engine ?? data.stoppedBy ?? engineMode,
-        });
-      }
-    : undefined;
+      : undefined;
+
+  const movetime = Math.max(1, timeMs ?? 10_000);
+  const cap = maxNodes ?? 0;
+
+  function runSearch(engine) {
+    if (workerSlot === 0 && lmrBias === 0) {
+      return engine.go(movetime, cap, onProgress);
+    }
+    if (typeof engine.go_with_profile === 'function') {
+      return engine.go_with_profile(movetime, cap, workerSlot, 0, lmrBias, onProgress);
+    }
+    return engine.go(movetime, cap, onProgress);
+  }
 
   const searchT0 = performance.now();
-  const best =
-    typeof wasm.go_with_profile === 'function'
-      ? wasm.go_with_profile(
-          Math.max(1, timeMs ?? 10_000),
-          maxNodes ?? 0,
-          workerSlot,
-          0,
-          lmrBias,
-          onProgress,
-        )
-      : wasm.go(Math.max(1, timeMs ?? 10_000), maxNodes ?? 0, onProgress);
+  let best;
+  try {
+    best = runSearch(wasm);
+  } catch (firstErr) {
+    const msg = firstErr?.message ?? String(firstErr);
+    const isTrap =
+      firstErr instanceof WebAssembly.RuntimeError || /unreachable|panic/i.test(msg);
+    if (!isTrap || engineMode === 'titanium-v15-frozen') {
+      throw firstErr;
+    }
+    const fallback = await ensureEngine('titanium-v15-frozen');
+    if (isFreshGame) {
+      fallback.reset();
+    } else if (history.length > 0) {
+      fallback.position(history.join(' '));
+    }
+    best = runSearch(fallback);
+  }
   const searchWallMs = performance.now() - searchT0;
 
   if (!best || best === '(none)') {
