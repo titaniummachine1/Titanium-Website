@@ -5,13 +5,19 @@
 import { resolveCores } from './timeControl.js';
 
 export function hasNativeTitaniumLazySmp() {
-  if (import.meta.env.PROD) {
+  if (import.meta.env.PROD || import.meta.env.MODE === 'ghpages') {
     return false;
   }
   return import.meta.env?.VITE_TITANIUM_NATIVE_PROXY === '1';
 }
 
-/** Worker count — identical for dev WASM and GitHub Pages WASM. */
+/**
+ * Browser WASM runs one worker (same engine instance as dev without native proxy).
+ * Multiple full WasmEngine copies trap or hang on GitHub Pages.
+ */
 export function resolveTitaniumSearchCores(aiSettings) {
-  return resolveCores(aiSettings);
+  if (hasNativeTitaniumLazySmp()) {
+    return resolveCores(aiSettings);
+  }
+  return 1;
 }

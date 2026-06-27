@@ -52,6 +52,10 @@ assert(
   'production build never enables native titanium',
 );
 assert(
+  runtimeSrc.includes('return 1'),
+  'browser WASM uses a single search worker',
+);
+assert(
   controllerSrc.includes('hasNativeTitaniumLazySmp'),
   'native Lazy SMP routing uses shared runtime guard',
 );

@@ -1,7 +1,6 @@
 /**
  * Titanium v15 — WebAssembly build (αβ + grafted search; GitHub Pages / static hosting).
- * Production uses N Web Workers, each with its own WasmEngine and SearchProfile
- * (root-width lanes via go_with_profile). True shared-TT Lazy SMP needs shared memory.
+ * Production uses one Web Worker with WasmEngine (native Lazy SMP is dev-only via proxy).
  */
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
@@ -68,6 +67,15 @@ export class TitaniumWasmEngineClient {
     }
   }
 
+  _rejectReady(workerId, err) {
+    this._workerReady.delete(workerId);
+    const waiter = this._readyWaiters.get(workerId);
+    if (waiter) {
+      this._readyWaiters.delete(workerId);
+      waiter.reject(err);
+    }
+  }
+
   _onWorkerMessage(slotIndex, event) {
     const data = event.data;
     const workerId = data.workerId ?? slotIndex;
@@ -80,12 +88,17 @@ export class TitaniumWasmEngineClient {
       return;
     }
 
-    const pending = this.pendingRequest;
-    if (!pending) {
-      return;
-    }
-
     if (data.type === 'error') {
+      const initWaiter = this._readyWaiters.get(workerId);
+      if (initWaiter) {
+        this._rejectReady(workerId, new Error(data.message ?? 'WASM worker error'));
+        return;
+      }
+
+      const pending = this.pendingRequest;
+      if (!pending) {
+        return;
+      }
       if (workerId === 0) {
         this.setStatus('error');
         pending.onError?.(new Error(data.message ?? 'WASM worker error'));
@@ -93,6 +106,11 @@ export class TitaniumWasmEngineClient {
       pending.errors ??= new Set();
       pending.errors.add(workerId);
       this._maybeFinishSearch(pending);
+      return;
+    }
+
+    const pending = this.pendingRequest;
+    if (!pending) {
       return;
     }
 
@@ -213,7 +231,9 @@ export class TitaniumWasmEngineClient {
       helpersExpected === 0 ||
       [...pending.results.keys()].filter((id) => id !== 0).length +
         [...(pending.errors ?? [])].filter((id) => id !== 0).length >=
-        helpersExpected;
+        helpersExpected ||
+      // Single-worker WASM: never block the game on helper copies that are not running.
+      need === 1;
 
     if (!helpersSettled) {
       return;
@@ -286,6 +306,14 @@ export class TitaniumWasmEngineClient {
   }
 
   _onWorkerError(slotIndex, event) {
+    const initWaiter = this._readyWaiters.get(slotIndex);
+    if (initWaiter) {
+      const message =
+        event?.message ?? (typeof event === 'string' ? event : null) ?? 'Titanium WASM worker crashed';
+      this._rejectReady(slotIndex, new Error(message));
+      return;
+    }
+
     const pending = this.pendingRequest;
     if (!pending) {
       return;
@@ -318,6 +346,11 @@ export class TitaniumWasmEngineClient {
       w.terminate();
     }
     this.workers = [];
+    this._workerReady.clear();
+    for (const [, waiter] of this._readyWaiters) {
+      waiter.reject(new Error('Worker terminated'));
+    }
+    this._readyWaiters.clear();
   }
 
   ponder() {}
@@ -393,8 +426,18 @@ export class TitaniumWasmEngineClient {
 
     this.setStatus('searching');
     this.ensureWorkers();
+
+    if (this.pendingRequest) {
+      throw new Error('Titanium WASM search already in flight');
+    }
+
     const readyStart = performance.now();
-    await this.initWorkers(engineMode);
+    try {
+      await this.initWorkers(engineMode);
+    } catch (err) {
+      this.setStatus('error');
+      throw err;
+    }
     const initMs = performance.now() - readyStart;
 
     const started = performance.now();
