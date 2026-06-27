@@ -16,7 +16,7 @@ export function renderCatHint(container, state, controller) {
       <p class="cat-hint__title">CAT vision</p>
       <div class="cat-hint__bar" aria-hidden="true"></div>
       <p class="cat-hint__labels"><span>cold</span><span>warm</span><span>hot</span></p>
-      <p class="cat-hint__text">Numbers = raw engine heat in cm. Square tints: ≥60 warm, ≥160 hot. Each wall slot shows one half-segment (where you click); heat printed on that slot. Skipped walls are dimmed.</p>
+      <p class="cat-hint__text">Colors come from the engine CAT heat for this exact position. Square tints show corridor pressure; wall ghosts show searchable wall slots, with skipped walls dimmed.</p>
       <button type="button" class="btn btn--primary btn--small" data-action="dismiss-cat-hint">Got it</button>
     </div>
   `;

@@ -17,13 +17,15 @@ export function isRemoteEngineBackend(kind) {
   return kind === EngineBackendKind.REMOTE_WS;
 }
 
-/** Static hosting / production dist has no Vite Rust proxy. */
+/**
+ * Local Rust engines (Titanium, ACE Rust/MoveGen+) always run in-browser WASM.
+ * Only remote engines (Ka, Ishtar, zero.ink REST) talk to a server.
+ */
+export function useWasmRustEngines() {
+  return true;
+}
+
+/** @deprecated alias — dev and production both use WASM for Titanium / ACE Rust. */
 export function useStaticEngineBackend() {
-  if (import.meta.env?.MODE === 'ghpages') {
-    return true;
-  }
-  if (import.meta.env?.PROD) {
-    return true;
-  }
-  return false;
+  return useWasmRustEngines();
 }

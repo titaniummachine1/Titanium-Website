@@ -6,6 +6,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,7 +16,6 @@ const monorepoRoot = path.resolve(siteRoot, '..');
 const binName = process.platform === 'win32' ? 'titanium.exe' : 'titanium';
 /** Live weights deployed by `training/deploy_trained_ws.py` — override stale embeds in dev. */
 const liveNetWeightsPath = path.join(monorepoRoot, 'engine', 'src', 'titanium', 'net_weights.bin');
-
 /** Live weights override — only for Titanium v15 live; never ACE v13 frozen tiers. */
 function usesLiveNetOverride(engineMode) {
   const mode = String(engineMode ?? '');
@@ -288,12 +288,14 @@ function buildGenmoveArgs(moves, options) {
   const maxNodes = Math.max(1, Number(options.maxNodes) || maxSims);
   const uct = Number(options.uct) || 0.2;
   const engine = normalizeGenmoveEngine(options.engine);
+  const threads = Math.max(1, Math.round(Number(options.cores ?? options.threads) || 1));
 
   const args = ['genmove', ...moves, '--engine', engine, '--time', String(timeSec), '--log'];
   if (engine === 'minimax') {
     args.push('--nodes', String(maxNodes));
   } else if (
     engine === 'titanium-v15' ||
+    engine === 'titanium-v15-medium' ||
     engine === 'titanium-v15-frozen' ||
     engine === 'ace' ||
     engine === 'ace-v8' ||
@@ -309,6 +311,9 @@ function buildGenmoveArgs(moves, options) {
   ) {
     if (options.maxDepth != null) {
       args.push('--depth', String(Math.max(1, Math.round(Number(options.maxDepth)))));
+    }
+    if (threads > 1) {
+      args.push('--threads', String(threads));
     }
   } else {
     args.push('--sims', String(maxSims), '--uct', String(uct));
@@ -448,9 +453,10 @@ function runLmrSync(moves, timeSec = 10, idDepth = 8) {
 const seatSessions = new Map();
 
 class TitaniumSeatSession {
-  constructor(seatId, engine = null) {
+  constructor(seatId, engine = null, threads = 1) {
     this.seatId = seatId;
     this.engine = engine;
+    this.threads = normalizeSessionThreads(threads);
     this.stdoutBuf = '';
     this.stderrBuf = '';
     this.chain = Promise.resolve();
@@ -470,6 +476,9 @@ class TitaniumSeatSession {
         this.engine === 'titanium-v15-frozen')
         ? ['session', '--engine', this.engine]
         : ['session'];
+    if (this.threads > 1) {
+      args.push('--threads', String(this.threads));
+    }
     const child = spawn(bin, args, { cwd: monorepoRoot, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;
     this.stdoutBuf = '';
@@ -513,6 +522,12 @@ class TitaniumSeatSession {
 
   onStdoutLine(line) {
     if (!line || !this.pending) {
+      return;
+    }
+    if (line.startsWith('info ')) {
+      if (this.onStderrLine) {
+        this.onStderrLine(line);
+      }
       return;
     }
     if (line === 'ready' || line.startsWith('ready ') || line.startsWith('bestmove ') || line.startsWith('error ')) {
@@ -602,16 +617,25 @@ class TitaniumSeatSession {
   }
 }
 
-function getSeatSession(seatId, engine = null) {
+function normalizeSessionThreads(value) {
+  const n = Math.round(Number(value) || 1);
+  return Math.max(1, Math.min(16, n));
+}
+
+function getSeatSession(seatId, engine = null, threads = 1) {
   if (!seatId) {
     throw new Error('session seatId required');
   }
+  const normalizedThreads = normalizeSessionThreads(threads);
   const existing = seatSessions.get(seatId);
-  if (existing && (engine ?? null) !== existing.engine) {
+  if (
+    existing &&
+    ((engine ?? null) !== existing.engine || normalizedThreads !== existing.threads)
+  ) {
     existing.destroy();
   }
   if (!seatSessions.has(seatId)) {
-    seatSessions.set(seatId, new TitaniumSeatSession(seatId, engine ?? null));
+    seatSessions.set(seatId, new TitaniumSeatSession(seatId, engine ?? null, normalizedThreads));
   }
   return seatSessions.get(seatId);
 }
@@ -627,7 +651,24 @@ async function handleSessionOp(payload, res, wantsStream, req) {
   const seatId = String(payload.seatId ?? '');
   const op = String(payload.op ?? '');
   const engine = payload.engine ? normalizeGenmoveEngine(String(payload.engine)) : null;
-  const session = getSeatSession(seatId, engine === 'mcts' ? null : engine);
+  const threads = normalizeSessionThreads(payload.cores ?? payload.threads);
+
+  if (op === 'destroy') {
+    destroySeatSession(seatId);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (op === 'stop') {
+    const session = seatSessions.get(seatId);
+    const stopped = session ? await session.stopSearch('stop') : false;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true, stopped }));
+    return;
+  }
+
+  const session = getSeatSession(seatId, engine === 'mcts' ? null : engine, threads);
 
   if (op === 'reset') {
     await session.reset();
@@ -649,20 +690,6 @@ async function handleSessionOp(payload, res, wantsStream, req) {
     await session.makemove(move);
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ ok: true, move }));
-    return;
-  }
-
-  if (op === 'destroy') {
-    destroySeatSession(seatId);
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  if (op === 'stop') {
-    const stopped = await session.stopSearch('stop');
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ok: true, stopped }));
     return;
   }
 
@@ -775,6 +802,86 @@ function runCatSync(moves) {
   return JSON.parse(line);
 }
 
+function parseTrainingGameWire(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return {};
+  if (text.startsWith('{')) {
+    return JSON.parse(text);
+  }
+  const lines = text.split(/\r?\n/);
+  if (lines[0] !== 'TI-GAME-1') {
+    throw new Error('unknown training-game wire format');
+  }
+  const payload = {};
+  for (const line of lines.slice(1)) {
+    if (!line) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq);
+    const value = line.slice(eq + 1);
+    if (key === 'moves') {
+      payload.moves = value.split(/\s+/).filter(Boolean);
+    } else if (key === 'result') {
+      payload.result = Number(value);
+    } else if (key === 'source') {
+      payload.source = value || 'website_finished_game';
+    }
+  }
+  return payload;
+}
+
+function normalizeTrainingResult(payload) {
+  if (payload.result === 1 || payload.result === '1' || payload.winner === 'white') return 1;
+  if (payload.result === -1 || payload.result === '-1' || payload.winner === 'black') return -1;
+  if (payload.result === 0 || payload.result === '0' || payload.winner === 'draw') return 0;
+  return null;
+}
+
+function ingestWebsiteFinishedGame(payload) {
+  const moves = Array.isArray(payload.moves) ? payload.moves.map(String).filter(Boolean) : [];
+  const result = normalizeTrainingResult(payload);
+  if (!moves.length || result == null) {
+    throw new Error('need moves[] and result/winner');
+  }
+  const source = String(payload.source || 'website_finished_game');
+  const python = process.env.PYTHON || 'python';
+  const script = path.join(monorepoRoot, 'training', 'tools', 'datagen', 'ingest_website_game.py');
+
+  const child = spawnSync(
+    python,
+    ['-u', script, '--result', String(result), '--source', source, '--moves', moves.join(' ')],
+    {
+    cwd: monorepoRoot,
+    encoding: 'utf8',
+    timeout: 5000,
+    maxBuffer: 1024 * 1024,
+    },
+  );
+
+  if (child.status === 0) {
+    const tokens = String(child.stdout || '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (tokens[0] === 'OK') {
+      return {
+        ok: true,
+        inserted: true,
+        gameId: Number(tokens[1]),
+        db: tokens.slice(2).join(' '),
+      };
+    }
+    return { ok: true, inserted: true };
+  }
+
+  throw new Error(
+    child.error?.message ||
+      child.stderr?.trim() ||
+      child.stdout?.trim() ||
+      `website game import exited ${child.status}`,
+  );
+}
+
 export function titaniumProxyPlugin() {
   return {
     name: 'titanium-rust-proxy',
@@ -862,6 +969,31 @@ export function titaniumProxyPlugin() {
         });
       });
 
+      server.middlewares.use('/api/titanium/training-game', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end('POST only');
+          return;
+        }
+
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          try {
+            const payload = parseTrainingGameWire(body);
+            const result = ingestWebsiteFinishedGame(payload);
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(result));
+          } catch (err) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: false, error: err.message ?? String(err) }));
+          }
+        });
+      });
+
       server.middlewares.use('/api/titanium/genmove', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;
@@ -883,6 +1015,8 @@ export function titaniumProxyPlugin() {
               maxNodes: payload.maxNodes,
               uct: payload.uct,
               engine: payload.engine ?? 'mcts',
+              cores: payload.cores,
+              threads: payload.cores ?? payload.threads,
             };
 
             const wantsStream =

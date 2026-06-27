@@ -1799,6 +1799,52 @@ body {
   font-weight: 700;
 }
 
+.cat-vision-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 5px 8px;
+  margin: 2px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.72rem;
+}
+
+.cat-vision-controls__check,
+.cat-vision-controls__stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cat-vision-controls__check input {
+  accent-color: var(--p1-wall);
+}
+
+.cat-vision-controls__stepper {
+  flex: 0 1 auto;
+}
+
+.cat-vision-controls__stepper button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cat-vision-controls__stepper button:hover {
+  border-color: var(--p1-wall);
+}
+
 .board-terminal-overlay__close {
   position: absolute;
   top: 10px;

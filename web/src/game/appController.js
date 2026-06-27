@@ -5,9 +5,9 @@ import { fetchCatSnapshot, indexCatWalls } from '../lib/catHeatmap.js';
 import { buildLmrViz, fetchLmrSnapshot } from '../lib/lmrHeatmap.js';
 import { toAlgebraic } from '../lib/gameLogic.js';
 import { EngineClient } from '../lib/engineClient.js';
-import { GorisansonEngineClient, TitaniumEngineClient } from '../lib/localMctsEngine.js';
+import { GorisansonEngineClient } from '../lib/localMctsEngine.js';
+import { TitaniumEngineClient } from '../lib/titaniumRustClient.js';
 import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
-import { useStaticEngineBackend } from '../lib/engineBackend.js';
 import { resolveOnBestMoveResult } from '../lib/onBestMoveResult.js';
 import { positionKeyFromActions, resolveLiveBestMoveKey, pvFirstMoveFromLiveSearch, coalesceRootMoves } from '../lib/liveBestMove.js';
 import { positionKeyFromHistory as historyPositionKey } from '../lib/remoteSync.js';
@@ -87,11 +87,24 @@ function scoreFromDepthLog(depthLog, rootScore) {
   return rootScore ?? null;
 }
 
-/** Total nodes/sims for display — prefer engine total, else deepest ID row. */
+/** Nodes for UI — WASM multi-core searches use the sum across all workers. */
 function resolveTotalNodes(info) {
+  if (info?.nodeSource === 'bestmove_aggregate') {
+    const total = Number(info?.totalNodesAcrossWorkers) || 0;
+    if (total > 0) return total;
+  }
+  if (info?.progress === 1 || info?.nodeSource === 'bestmove_aggregate') {
+    if (info?.nodes != null) {
+      return Number(info.nodes) || 0;
+    }
+    if (info?.selectedWorkerNodes != null) {
+      return Number(info.selectedWorkerNodes) || 0;
+    }
+  }
   const depthLog = info?.depthLog ?? [];
   const deep = deepestDepthEntry(depthLog);
   return Math.max(
+    Number(info?.selectedWorkerNodes) || 0,
     Number(info?.nodes) || 0,
     Number(info?.simulations) || 0,
     Number(deep?.nodes) || 0,
@@ -189,7 +202,9 @@ import {
   normalizePlayerType,
   getEngineConfig,
   resolveTitaniumEngineMode,
-  threadsSliderMax,
+  resolveCores,
+  clampCores,
+  defaultCoreCount,
   TITANIUM_NET_HARD,
   migrateTitaniumNet,
 } from '../lib/timeControl.js';
@@ -199,6 +214,8 @@ import {
   loadPersistedPlaySettings,
   savePersistedPlaySettings,
 } from '../lib/persistedPlaySettings.js';
+
+const HAS_NATIVE_TITANIUM_LAZY_SMP = Boolean(import.meta.env?.DEV);
 
 function isSavedSettingsValid(playerType, saved, engineConfigs) {
   if (isTitaniumEngine(playerType, engineConfigs)) {
@@ -606,11 +623,17 @@ export class AppController {
           ...saved,
           titaniumNet: migrateTitaniumNet(TITANIUM_NET_HARD),
           visitsBudget: saved.visitsBudget ?? 0,
-          threads: saved.threads ?? 1,
+          cores: resolveCores(saved),
         };
       }
-      if (isTitaniumEngine(playerType, this.engineConfigs) && saved.threads == null) {
-        saved = { ...saved, threads: 1 };
+      if (isTitaniumEngine(playerType, this.engineConfigs)) {
+        saved = {
+          ...saved,
+          cores:
+            HAS_NATIVE_TITANIUM_LAZY_SMP
+              ? (saved.cores ?? saved.threads ?? defaultCoreCount())
+              : 1,
+        };
       }
       this.settings.playerAiSettings[index] = { ...saved };
       return;
@@ -654,13 +677,16 @@ export class AppController {
     const index = playerNum - 1;
     const playerType = this.settings.players[index];
     const current = this.settings.playerAiSettings[index];
+    const isTitanium = isTitaniumEngine(playerType, this.engineConfigs);
+    const hasNativeTitaniumLazySmp = isTitanium && HAS_NATIVE_TITANIUM_LAZY_SMP;
+    const cores = isTitanium && !hasNativeTitaniumLazySmp ? 1 : resolveCores(current);
 
     return {
       playerNum,
       playerType,
       isHuman: playerType === PlayerType.Human,
       isLocal: isLocalEngine(playerType, this.engineConfigs),
-      isTitanium: isTitaniumEngine(playerType, this.engineConfigs),
+      isTitanium,
       isQuoridorV3: isQuoridorV3Engine(playerType, this.engineConfigs),
       isAceEngine: isAceEngine(playerType, this.engineConfigs),
       isAceV10Family: isAceV10Family(playerType, this.engineConfigs),
@@ -670,7 +696,8 @@ export class AppController {
       isRemote: isRemoteEngine(playerType, this.engineConfigs),
       isZeroInk: isZeroInkEngine(playerType, this.engineConfigs),
       titaniumNet: migrateTitaniumNet(current?.titaniumNet ?? TITANIUM_NET_HARD),
-      threads: current?.threads ?? 1,
+      cores,
+      hasNativeTitaniumLazySmp,
       strengthLevel: isAceFamily(playerType, this.engineConfigs)
         ? clampAceV10Tier(migrateAceV10Strength(current?.strengthLevel ?? 0), playerType)
         : (current?.strengthLevel ?? StrengthLevel.Alpha),
@@ -701,7 +728,7 @@ export class AppController {
         prevAi.wallClockSeconds !== nextAi.wallClockSeconds ||
         prevAi.titaniumNet !== nextAi.titaniumNet ||
         prevAi.visitsBudget !== nextAi.visitsBudget ||
-        prevAi.threads !== nextAi.threads
+        (HAS_NATIVE_TITANIUM_LAZY_SMP && resolveCores(prevAi) !== resolveCores(nextAi))
       );
     }
     if (isAceFamily(playerType, this.engineConfigs)) {
@@ -843,22 +870,27 @@ export class AppController {
     }
   }
 
-  setPlayerThreads(playerNum, threads, { silent = false } = {}) {
+  setPlayerCores(playerNum, cores, { silent = false } = {}) {
     const index = playerNum - 1;
     const playerType = this.settings.players[index];
     if (!isTitaniumEngine(playerType, this.engineConfigs)) {
       return;
     }
     const current = this.settings.playerAiSettings[index] ?? {};
-    const next = Math.max(1, Math.min(threadsSliderMax(), Number(threads) || 1));
-    this.recordSettingsChange(playerNum, 'threads', current.threads, next);
+    const next = clampCores(cores);
+    this.recordSettingsChange(playerNum, 'cores', resolveCores(current), next);
     this.rememberPlayerAiSettings(playerNum, {
       ...current,
-      threads: next,
+      cores: next,
     });
     if (!silent) {
       this._afterLivePlayerSettingChange(playerNum, { rebindEngine: true });
     }
+  }
+
+  /** @deprecated use setPlayerCores */
+  setPlayerThreads(playerNum, threads, options = {}) {
+    this.setPlayerCores(playerNum, threads, options);
   }
 
   toggleRotateBoard() {
@@ -1293,11 +1325,16 @@ export class AppController {
 
   loadAnalysisPosition(code) {
     this._moveRequestSeq += 1;
+    this._abortEngineSearch({ bumpRequestSeq: false });
     const trimmed = code.trim();
     const { actions } = decodeReplayCode(trimmed);
     this.replay = null;
     this.aiThinking = false;
     this.liveSearch = null;
+    this.engineErrors = {};
+    for (const engine of this.engines.values()) {
+      engine.resetConnection();
+    }
     this.session.rebuildFromActions(actions);
     this.handleCatPositionChanged();
     this.onChange?.();
@@ -1375,6 +1412,7 @@ export class AppController {
 
   loadReplay(code) {
     this._moveRequestSeq += 1;
+    this._abortEngineSearch({ bumpRequestSeq: false });
     const trimmed = code.trim();
     const { actions, meta, algebraic } = decodeReplayCode(trimmed);
     this.replay = {
@@ -1558,13 +1596,7 @@ export class AppController {
       if (generation === 13) return new AceV13JsEngineClient(config);
       return new AceV10JsEngineClient(config);
     }
-    if (useStaticEngineBackend()) {
-      return new AceRustWasmEngineClient({ ...config, engineMode: tier.engineMode });
-    }
-    return new TitaniumEngineClient(
-      { ...config, kind: 'ace', engineMode: tier.engineMode },
-      { seatId: this.engineSeatKey(seatIndex) },
-    );
+    return new AceRustWasmEngineClient({ ...config, engineMode: tier.engineMode });
   }
 
   createEngineClient(config, seatIndex = 0) {
@@ -1591,13 +1623,11 @@ export class AppController {
       const patched = {
         ...config,
         engineMode,
-        threads: ai.threads ?? 1,
+        cores: HAS_NATIVE_TITANIUM_LAZY_SMP ? resolveCores(ai) : 1,
       };
-      if (useStaticEngineBackend()) {
-        return new TitaniumWasmEngineClient(patched);
-      }
-      // Dev: native binary (supports --threads via one-shot genmove when threads > 1).
-      return new TitaniumEngineClient(patched, { seatId: this.engineSeatKey(seatIndex) });
+      return HAS_NATIVE_TITANIUM_LAZY_SMP
+        ? new TitaniumEngineClient(patched)
+        : new TitaniumWasmEngineClient(patched);
     }
     return new EngineClient(config);
   }
@@ -1629,18 +1659,14 @@ export class AppController {
     if (isAceFamily(playerType, this.engineConfigs)) {
       const tier = resolveAceTier(ai.strengthLevel, playerType);
       const generation = aceGenerationFromPlayerType(playerType);
-      const backend = tier.kind.endsWith('-js')
-        ? 'js'
-        : useStaticEngineBackend()
-          ? 'wasm'
-          : 'rust';
+      const backend = tier.kind.endsWith('-js') ? 'js' : 'wasm';
       return `${playerType}|${backend}|${tier.engineMode}`;
     }
     if (isTitaniumEngine(playerType, this.engineConfigs)) {
-      const backend = useStaticEngineBackend() ? 'wasm' : 'native';
+      const backend = HAS_NATIVE_TITANIUM_LAZY_SMP ? 'native' : 'wasm';
       const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
-      const threads = ai.threads ?? 1;
-      return `${playerType}|${backend}|${mode}|t${threads}`;
+      const cores = HAS_NATIVE_TITANIUM_LAZY_SMP ? `|c${resolveCores(ai)}` : '';
+      return `${playerType}|${backend}|${mode}${cores}`;
     }
     const kind = getEngineConfig(playerType, this.engineConfigs)?.kind ?? playerType;
     return `${playerType}|${kind}`;
@@ -1718,6 +1744,9 @@ export class AppController {
             pv: livePv,
             simulations: si.simulations ?? 0,
             nodes: si.nodes ?? 0,
+            selectedWorkerNodes: info.selectedWorkerNodes ?? si.selectedWorkerNodes,
+            totalNodesAcrossWorkers: info.totalNodesAcrossWorkers ?? si.totalNodesAcrossWorkers,
+            nodeSource: info.nodeSource ?? si.nodeSource,
             progress: info.progress,
             mode:
               info.mode ??
@@ -2497,6 +2526,10 @@ export class AppController {
         rootScore: si.rootScore,
         nodes: si.nodes,
         simulations: si.simulations,
+        selectedWorkerNodes: si.selectedWorkerNodes,
+        totalNodesAcrossWorkers: si.totalNodesAcrossWorkers,
+        nodeSource: si.nodeSource,
+        progress: si.progress,
         rootWinRate: si.rootWinRate,
         stoppedBy: si.stoppedBy ?? si.mode ?? '?',
         rootMoves: si.rootMoves,
@@ -3019,6 +3052,7 @@ export class AppController {
       this.engineErrors = {};
       this.replay = null;
       this.session.rebuildFromActions(actions);
+      this.handleCatPositionChanged();
       this.onChange && this.onChange();
       return null;
     } catch (err) {

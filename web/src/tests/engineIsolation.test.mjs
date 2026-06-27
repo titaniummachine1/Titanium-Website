@@ -3,9 +3,9 @@
  * Run: node src/tests/engineIsolation.test.mjs
  */
 
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import path from 'path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_SRC = path.resolve(__dirname, '..');
@@ -42,49 +42,65 @@ assert(
   'per-seat teardown',
 );
 
-console.log('\n[isolate] native dev proxy — one titanium session child per seat');
+console.log('\n[isolate] Titanium dev/native and static/WASM routing');
+const viteSrc = readSrc('../vite.config.js');
 const proxySrc = readSrc('../vite-titanium-proxy.mjs');
-assert(proxySrc.includes('const seatSessions = new Map()'), 'seatSessions map');
-assert(proxySrc.includes('getSeatSession(seatId'), 'getSeatSession by seatId');
+assert(viteSrc.includes('titaniumProxyPlugin'), 'dev server exposes native titanium proxy');
 assert(
-  proxySrc.includes('destroySeatSession(seatId)'),
-  'destroySeatSession',
+  controllerSrc.includes('HAS_NATIVE_TITANIUM_LAZY_SMP'),
+  'native Lazy SMP routing flag exists',
 );
 assert(
-  proxySrc.includes('usesLiveNetOverride'),
-  'live weights only for titanium-v15',
+  controllerSrc.includes('TitaniumEngineClient'),
+  'appController can use native titanium client in dev',
 );
 assert(
-  proxySrc.includes("mode === 'titanium-v15'"),
-  'ACE v13 must not get live net override',
+  controllerSrc.includes('TitaniumWasmEngineClient'),
+  'titanium keeps in-browser WASM fallback',
+);
+assert(
+  controllerSrc.includes('AceRustWasmEngineClient'),
+  'ACE Rust tiers use in-browser WASM client',
+);
+assert(
+  proxySrc.includes("args.push('--threads', String(this.threads))"),
+  'native Titanium session proxy passes thread count to engine',
+);
+const titaniumRustClient = readSrc('lib/titaniumRustClient.js');
+assert(
+  titaniumRustClient.includes('this.startSessionGenmove(history, searchCtx)'),
+  'native Titanium uses warm session path for threaded alpha-beta search',
+);
+assert(
+  titaniumRustClient.includes("op: 'go'") && titaniumRustClient.includes('cores: searchCtx.cores'),
+  'native Titanium session go receives configured cores',
 );
 
 console.log('\n[isolate] WASM workers — dedicated Worker per engine client');
 const tiWasmClient = readSrc('lib/titaniumWasmClient.js');
 const aceWasmClient = readSrc('lib/aceRustWasmClient.js');
-const tiRustClient = readSrc('lib/titaniumRustClient.js');
 assert(tiWasmClient.includes('new TitaniumWasmWorker()'), 'titanium: own worker');
 assert(aceWasmClient.includes('new AceRustWasmWorker()'), 'ace rust: own worker');
-assert(
-  controllerSrc.includes('{ seatId: this.engineSeatKey(seatIndex) }'),
-  'native TitaniumEngineClient gets per-seat seatId',
-);
 
 console.log('\n[isolate] ACE v13 tiers are not Titanium live NNUE in engine routing');
-const engineMod = readFileSync(
-  path.resolve(WEB_SRC, '../../../engine/src/titanium/mod.rs'),
+const engineSearch = readFileSync(
+  path.resolve(WEB_SRC, '../../../engine/src/titanium/search.rs'),
+  'utf8',
+);
+const engineWasm = readFileSync(
+  path.resolve(WEB_SRC, '../../../engine/src/wasm.rs'),
   'utf8',
 );
 assert(
-  engineMod.includes('with_ti_movegen_frozen'),
+  engineSearch.includes('with_ti_movegen_frozen'),
   'ace-v13 frozen weight builder exists',
 );
 assert(
-  engineMod.includes('"ace-v13" | "ace-v13-ti"'),
-  'ace-v13 tiers map to frozen path',
+  engineWasm.includes('"ace-v13" | "ace-v13-ti" => *TitaniumSearch::with_ti_movegen_frozen(g)'),
+  'ace-v13 WASM tiers map to frozen path',
 );
 assert(
-  engineMod.includes('TitaniumSearch::grafted(g, None)'),
+  engineWasm.includes('TitaniumSearch::grafted(g, None)'),
   'titanium-v15 still uses live grafted net',
 );
 

@@ -26,7 +26,9 @@ import {
   TITANIUM_NET_MEDIUM,
   TITANIUM_NET_HARD,
   migrateTitaniumNet,
-  threadsSliderMax,
+  coresSliderMax,
+  defaultCoreCount,
+  clampCores,
 } from '../lib/timeControl.js';
 
 const TITANIUM_NET_OPTIONS = [
@@ -53,11 +55,12 @@ const ACE_V13_TIERS = [
 const DEFAULT_WALL_CLOCK    = 5;
 const DEFAULT_TIME_TO_MOVE  = TimeToMove.Short;
 const DEFAULT_ACE_TIER      = 0;
-const DEFAULT_THREADS       = 1;
+const DEFAULT_CORES         = defaultCoreCount();
 const WALL_CLOCK_MIN        = 0.5;
 const WALL_CLOCK_MAX        = 60;
 const WALL_CLOCK_STEP       = 0.5;
-const THREADS_MIN           = 1;
+const CORES_MIN             = 1;
+const HAS_NATIVE_TITANIUM_LAZY_SMP = Boolean(import.meta.env?.DEV);
 
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -97,7 +100,15 @@ function loadPrefs(state) {
       aceStrength: saved.aceStrength ?? [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: saved.remoteStrength ?? [StrengthLevel.Alpha, StrengthLevel.Alpha],
       titaniumNet: (saved.titaniumNet ?? [TITANIUM_NET_HARD, TITANIUM_NET_HARD]).map(migrateTitaniumNet),
-      threads: saved.threads ?? [DEFAULT_THREADS, DEFAULT_THREADS],
+      cores: HAS_NATIVE_TITANIUM_LAZY_SMP
+        ? [0, 1].map((seat) =>
+            clampCores(
+              (Array.isArray(saved.cores) ? saved.cores[seat] : null) ??
+                (Array.isArray(saved.threads) ? saved.threads[seat] : null) ??
+                DEFAULT_CORES,
+            ),
+          )
+        : [1, 1],
     };
   } catch {
     return {
@@ -107,7 +118,7 @@ function loadPrefs(state) {
       aceStrength: [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: [StrengthLevel.Alpha, StrengthLevel.Alpha],
       titaniumNet: [TITANIUM_NET_HARD, TITANIUM_NET_HARD],
-      threads: [DEFAULT_THREADS, DEFAULT_THREADS],
+      cores: HAS_NATIVE_TITANIUM_LAZY_SMP ? [DEFAULT_CORES, DEFAULT_CORES] : [1, 1],
     };
   }
 }
@@ -181,7 +192,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     aceStrength: [...prefs.aceStrength],
     remoteStrength: [...prefs.remoteStrength],
     titaniumNet: [...prefs.titaniumNet],
-    threads: [...(prefs.threads ?? [DEFAULT_THREADS, DEFAULT_THREADS])],
+    cores: HAS_NATIVE_TITANIUM_LAZY_SMP ? [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])] : [1, 1],
   };
 
   const groups = getPlayerOptionGroups();
@@ -251,7 +262,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
       aceStrength: selections.aceStrength,
       remoteStrength: selections.remoteStrength,
       titaniumNet: selections.titaniumNet,
-      threads: selections.threads,
+      cores: selections.cores,
     });
     // Apply display toggles immediately via controller
     const bmHint = overlay.querySelector('[data-option="bestMoveHint"]')?.checked ?? true;
@@ -343,7 +354,7 @@ function renderEngineControls(seat, selections) {
 
   if (cat === 'titanium') {
     return renderTitaniumNetControls(seat, selections) +
-           renderThreadsSlider(seat, selections) +
+           (HAS_NATIVE_TITANIUM_LAZY_SMP ? renderCoresSlider(seat, selections) : '') +
            renderTimeSlider(seat, selections, 'Thinking time');
   }
 
@@ -421,17 +432,17 @@ function renderAceTierControls(seat, selections, playerType) {
   );
 }
 
-function renderThreadsSlider(seat, selections) {
-  const max = threadsSliderMax();
-  const t = Math.min(max, Math.max(THREADS_MIN, selections.threads[seat] ?? DEFAULT_THREADS));
-  selections.threads[seat] = t;
+function renderCoresSlider(seat, selections) {
+  const max = coresSliderMax();
+  const c = Math.min(max, Math.max(CORES_MIN, selections.cores[seat] ?? DEFAULT_CORES));
+  selections.cores[seat] = c;
   return (
     '<div class="player-dialog__field">' +
       '<label class="player-dialog__label">Search threads: ' +
-        '<span class="player-dialog__time-val" data-threads-label="' + seat + '">' + t + '</span>' +
+        '<span class="player-dialog__time-val" data-cores-label="' + seat + '">' + c + '</span>' +
       '</label>' +
-      '<input type="range" class="player-dialog__time-slider" data-threads-slider="' + seat + '"' +
-      ' min="' + THREADS_MIN + '" max="' + max + '" step="1" value="' + t + '">' +
+      '<input type="range" class="player-dialog__time-slider" data-cores-slider="' + seat + '"' +
+      ' min="' + CORES_MIN + '" max="' + max + '" step="1" value="' + c + '">' +
     '</div>'
   );
 }
@@ -514,15 +525,16 @@ function wireEngineControls(overlay, seat, selections) {
     });
   }
 
-  const threadsSlider = host.querySelector('[data-threads-slider="' + seat + '"]');
-  const threadsLabel = host.querySelector('[data-threads-label="' + seat + '"]');
-  if (threadsSlider) {
-    threadsSlider.addEventListener('input', () => {
-      const v = Number(threadsSlider.value);
-      selections.threads[seat] = v;
-      if (threadsLabel) threadsLabel.textContent = String(v);
+  const coresSlider = host.querySelector('[data-cores-slider="' + seat + '"]');
+  const coresLabel = host.querySelector('[data-cores-label="' + seat + '"]');
+  if (coresSlider) {
+    coresSlider.addEventListener('input', () => {
+      const v = Number(coresSlider.value);
+      selections.cores[seat] = v;
+      if (coresLabel) coresLabel.textContent = String(v);
     });
   }
+
 }
 
 function rebuildEngineControls(overlay, seat, selections) {
@@ -556,7 +568,9 @@ function buildAiSettings(playerType, selections, seat) {
       titaniumNet:      migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD),
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
       visitsBudget:     0,
-      threads:          selections.threads[seat] ?? DEFAULT_THREADS,
+      cores:            HAS_NATIVE_TITANIUM_LAZY_SMP
+        ? clampCores(selections.cores[seat] ?? DEFAULT_CORES)
+        : 1,
     };
   }
 

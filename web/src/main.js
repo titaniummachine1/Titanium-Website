@@ -14,6 +14,7 @@ import { renderBoard } from './ui/boardView.js';
 import { renderPlayerCard, playerCardStructureKey } from './ui/playerCard.js';
 import { openPlayerDialog, refreshOpenPlayerDialog } from './ui/playerDialog.js';
 import { renderGameControls, updateNotationBar } from './ui/gameControls.js';
+import { renderWasmDebugPanel, logBuildIdentity } from './lib/wasmBuildInfo.js';
 
 const appRoot = document.getElementById('app');
 const controller = new AppController();
@@ -33,6 +34,7 @@ appRoot.innerHTML =
       '<div class="card-slot" id="bottom-card"></div>' +
       '<div class="controls-slot" id="controls-slot"></div>' +
       '<div class="notation-slot" id="notation-slot"></div>' +
+      '<div class="wasm-debug-slot" id="wasm-debug-slot"></div>' +
     '</div>' +
   '</div>';
 
@@ -159,6 +161,8 @@ controller.onLiveUpdate = renderLiveUpdate;
 void controller.initializeLegalityOracle();
 
 renderGameControls(controlsSlot, controller.getState(), controller);
+logBuildIdentity();
+renderWasmDebugPanel(document.getElementById('wasm-debug-slot'));
 render();
 
 // Open player dialog on every load.

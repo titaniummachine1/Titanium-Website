@@ -4,15 +4,12 @@
 
 import { PlayerType } from '../lib/engineConfig.js';
 import { resolveAceTier } from '../lib/aceTier.js';
-import { EngineBackendKind, useStaticEngineBackend } from './engineBackend.js';
+import { EngineBackendKind } from './engineBackend.js';
 
 function aceBackendForTier(strengthLevel, playerType) {
   const tier = resolveAceTier(strengthLevel, playerType);
   if (tier.kind.endsWith('-js')) {
     return EngineBackendKind.LOCAL_JS;
-  }
-  if (useStaticEngineBackend()) {
-    return EngineBackendKind.LOCAL_WASM;
   }
   return EngineBackendKind.LOCAL_WASM;
 }

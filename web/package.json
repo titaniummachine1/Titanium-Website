@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "build:wasm": "node scripts/build-wasm.mjs",
+    "audit:wasm": "node scripts/audit-wasm-hashes.mjs",
+    "bench:browser": "node scripts/run-browser-bench.mjs",
     "build:pages": "npm run build:wasm && vite build --mode ghpages",
     "preview": "vite preview",
     "preview:pages": "vite preview --mode ghpages",

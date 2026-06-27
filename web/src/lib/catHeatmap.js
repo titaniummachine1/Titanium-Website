@@ -1,5 +1,21 @@
 /** CAT v3 heat → subtle board overlays (never solid black bars on walls). */
 
+let wasmCatInitPromise = null;
+
+async function fetchCatSnapshotFromWasm(algebraicMoves) {
+  if (!wasmCatInitPromise) {
+    wasmCatInitPromise = import('../wasm/titanium/titanium.js').then(async (mod) => {
+      await mod.default();
+      return mod;
+    });
+  }
+  const mod = await wasmCatInitPromise;
+  if (typeof mod.cat_snapshot !== 'function') {
+    throw new Error('WASM build missing cat_snapshot export — run npm run build:wasm');
+  }
+  return JSON.parse(mod.cat_snapshot((algebraicMoves ?? []).join(' ')));
+}
+
 /** Unreachable sealed square — only case that gets a dark skip overlay. */
 export function isSquareSkipped(reachable) {
   return reachable === false;
@@ -36,7 +52,7 @@ export function catHeatT(heat, scale = {}) {
 
 /**
  * Engine-true heat → color. Below `coldCm` (LMR fringe) there is no tint —
- * the raw cm value is still shown as a number on the square.
+ * the raw cm value is still available in the hover title / optional debug labels.
  *
  * @returns {{ fill: string, opacity: number } | null}
  */
@@ -81,21 +97,28 @@ export function catWallOutlineColor(heat, scale = {}) {
  * @param {string[]} algebraicMoves
  */
 export async function fetchCatSnapshot(algebraicMoves) {
-  const res = await fetch('/api/titanium/cat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ moves: algebraicMoves }),
-  });
-  const data = await res.json();
-  if (!res.ok || data.error) {
-    throw new Error(data.error ?? `CAT request failed (${res.status})`);
+  try {
+    return await fetchCatSnapshotFromWasm(algebraicMoves);
+  } catch (wasmErr) {
+    // Dev fallback: the Vite proxy shells out to the native binary. It is useful
+    // when wasm failed to initialize, but it is much slower than the in-process
+    // wasm call because it pays process startup on each request.
+    const res = await fetch('/api/titanium/cat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ moves: algebraicMoves }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error ?? `CAT request failed (${res.status})`);
+    }
+    return data;
   }
-  return data;
 }
 
 /**
- * @param {Array<{alg: string, heat: number, search?: boolean, skip?: boolean, pruned?: boolean}>} walls
- * @returns {Map<string, {heat: number, search: boolean, skip: boolean}>}
+ * @param {Array<{alg: string, heat: number, directHeat?: number, search?: boolean, attention?: boolean, skip?: boolean, pruned?: boolean}>} walls
+ * @returns {Map<string, {heat: number, directHeat: number, search: boolean, attention: boolean, skip: boolean}>}
  */
 export function indexCatWalls(walls) {
   const map = new Map();
@@ -107,14 +130,21 @@ export function indexCatWalls(walls) {
     const search = entry.search ?? !skip;
     map.set(entry.alg, {
       heat: entry.heat ?? 0,
+      directHeat: entry.directHeat ?? entry.heat ?? 0,
       search,
+      attention: entry.attention ?? search,
       skip,
     });
   }
   return map;
 }
 
-/** Engine row/col 0..8 → flat index in squares[81]. */
+/**
+ * Board-renderer row/col 0..8 → Rust CAT square index.
+ *
+ * The renderer stores row 0 at the top of the screen. Rust core stores row 0
+ * at White's home rank (`1`), so raw CAT square arrays need a vertical flip.
+ */
 export function catSquareIndex(engineRow, engineCol) {
-  return engineRow * 9 + engineCol;
+  return (8 - engineRow) * 9 + engineCol;
 }

@@ -32,14 +32,44 @@ export const WALL_CLOCK_RANGE = {
   defaultSeconds: 10,
 };
 
+/** @deprecated use coresSliderMax — remote cloud engines only */
 export const THREADS_HARD_MAX = 8;
 
-/** Max search threads for Titanium (capped by hardware concurrency). */
-export function threadsSliderMax() {
+/** Logical CPU count on this machine (browser WASM worker pool size). */
+export function defaultCoreCount() {
   if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0) {
-    return Math.min(THREADS_HARD_MAX, navigator.hardwareConcurrency);
+    return navigator.hardwareConcurrency;
   }
-  return Math.min(THREADS_HARD_MAX, 4);
+  return 4;
+}
+
+/** Max cores selectable in the UI — full machine count. */
+export function coresSliderMax() {
+  return defaultCoreCount();
+}
+
+/** @deprecated use coresSliderMax */
+export function threadsSliderMax() {
+  return coresSliderMax();
+}
+
+export function clampCores(cores) {
+  const n = Number(cores);
+  if (!Number.isFinite(n)) {
+    return defaultCoreCount();
+  }
+  return Math.max(1, Math.min(coresSliderMax(), Math.round(n)));
+}
+
+/** Read core count from saved settings (`cores` preferred; `threads` is legacy). */
+export function resolveCores(aiSettings) {
+  if (aiSettings?.cores != null) {
+    return clampCores(aiSettings.cores);
+  }
+  if (aiSettings?.threads != null) {
+    return clampCores(aiSettings.threads);
+  }
+  return defaultCoreCount();
 }
 
 /** Titanium difficulty tiers (NNUE weight sets). */
@@ -305,7 +335,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
       titaniumNet: TITANIUM_NET_HARD,
       wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
       visitsBudget: UNLIMITED_VISITS,
-      threads: 1,
+      cores: defaultCoreCount(),
     };
   }
   if (isQuoridorV3Engine(playerType, engineConfigs)) {
@@ -395,12 +425,9 @@ export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) 
     if (isTitaniumEngine(playerType, engineConfigs)) {
       const net = titaniumNetLabel(aiSettings);
       const budgetLabel = 'nodes';
-      const threads = Number(aiSettings.threads) || 1;
-      let text = `${config.name}: ${time} · ${cap} ${budgetLabel} · ${net} NNUE`;
-      if (threads > 1) {
-        text += ` · ${threads} threads`;
-      }
-      return text;
+      const cores = resolveCores(aiSettings);
+      const threads = cores > 1 ? ` · ${cores} threads` : '';
+      return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${net} NNUE${threads}`;
     }
     if (isQuoridorV3Engine(playerType, engineConfigs)) {
       const depthCap = formatMaxDepth(maxDepthFromVisitsBudget(aiSettings.visitsBudget));

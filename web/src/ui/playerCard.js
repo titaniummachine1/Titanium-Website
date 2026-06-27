@@ -54,12 +54,23 @@ function deepestEntry(depthLog) {
 
 function resolveNodes(snap) {
   if (!snap) return 0;
+  if (snap.nodeSource === 'bestmove_aggregate') {
+    const total = Number(snap.totalNodesAcrossWorkers) || 0;
+    if (total > 0) return total;
+  }
   const deep = deepestEntry(snap.depthLog);
   return Math.max(
+    Number(snap.selectedWorkerNodes) || 0,
     Number(snap.nodes) || 0,
     Number(snap.simulations) || 0,
     Number(deep?.nodes) || 0,
   );
+}
+
+function formatNodesLine(snap) {
+  const n = resolveNodes(snap);
+  if (n <= 0) return '';
+  return `n${formatNodes(n)}`;
 }
 
 function resolveDepth(snap) {
@@ -116,7 +127,8 @@ export function compactPlayerConfigSummary(ui) {
 
   if (ui.isTitanium) {
     const net = titaniumNetLabel({ titaniumNet: ui.titaniumNet });
-    return `${engine} · ${net} · ${formatTimeSummary(ui.wallClockSeconds)}`;
+    const threads = ui.hasNativeTitaniumLazySmp && ui.cores > 1 ? ` · ${ui.cores} threads` : '';
+    return `${engine} · ${net} · ${formatTimeSummary(ui.wallClockSeconds)}${threads}`;
   }
 
   return `${engine} · ${formatTimeSummary(ui.wallClockSeconds)}`;
@@ -211,6 +223,7 @@ function derivePlayerCardView(state, seatIndex) {
   const bestMove = snap?.move ?? (liveSnap ? null : completedSnap?.move ?? null);
   const depth = resolveDepth(snap);
   const nodes = resolveNodes(snap);
+  const nodesLine = formatNodesLine(snap);
   const score = resolvePayloadScore(snap);
   const thinkMs = liveSnap?.elapsedMs ?? snap?.thinkMs ?? null;
   const rootWinRate = snap?.rootWinRate ?? null;
@@ -280,8 +293,13 @@ function derivePlayerCardView(state, seatIndex) {
     isMate,
     depth,
     nodes,
+    nodesLine,
     thinkMs,
     showPlayNow,
+    selectedWorkerNodes: snap?.selectedWorkerNodes,
+    totalNodesAcrossWorkers: snap?.totalNodesAcrossWorkers,
+    nodeSource: snap?.nodeSource,
+    progress: snap?.progress,
   };
 }
 
@@ -350,7 +368,9 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
         `<span class="player-card__stat"><span class="player-card__stat-label">d</span>${view.depth}</span>`,
       );
     }
-    if (view.nodes > 0) {
+    if (view.nodesLine) {
+      parts.push(`<span class="player-card__stat">${escHtml(view.nodesLine)}</span>`);
+    } else if (view.nodes > 0) {
       parts.push(
         `<span class="player-card__stat"><span class="player-card__stat-label">n</span>${escHtml(formatNodes(view.nodes))}</span>`,
       );

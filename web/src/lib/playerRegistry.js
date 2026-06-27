@@ -31,7 +31,7 @@ const TITANIUM_ENGINE = {
   key: PlayerType.TitaniumMinimax,
   engineMode: 'titanium-v15',
   tooltip:
-    'Titanium v16 — Easy / Medium / Hard difficulty tiers. Native via `npm run dev`; WASM on GitHub Pages',
+    'Titanium v16 — Easy / Medium / Hard difficulty tiers (in-browser WASM, fully offline)',
 };
 
 const ZERO_INK_ENGINE = {

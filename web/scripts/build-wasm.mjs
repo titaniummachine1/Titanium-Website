@@ -1,15 +1,10 @@
 /**
  * Compile monorepo engine (Rust) → web/src/wasm/titanium for GitHub Pages.
- * Uses ../../engine (canonical v15 + net_weights.bin), not stale site/engine submodule.
- * Requires: rustup target add wasm32-unknown-unknown, cargo install wasm-pack
- *
- * Native `titanium.exe` must use RUSTFLAGS=-C target-cpu=native (BMI2/PEXT movegen).
- * Wasm is wasm32-unknown-unknown — never pass host CPU flags here; PEXT is cfg-gated
- * off on non-x86 and the browser uses the scalar O1 table path + embed-tables.
  */
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,11 +12,21 @@ const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const monorepoEngine = path.resolve(webDir, '..', '..', 'engine');
 const siteEngine = path.resolve(webDir, '..', 'engine');
 const outDir = path.join(webDir, 'src', 'wasm', 'titanium');
+const publicWasmDir = path.join(webDir, 'public', 'wasm');
 
 const engineDir = existsSync(path.join(monorepoEngine, 'src', 'wasm.rs'))
   ? monorepoEngine
   : siteEngine;
 console.log(`[build:wasm] engine dir: ${engineDir}`);
+
+function sha256File(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function gitCommit() {
+  const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: engineDir, encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : 'unknown';
+}
 
 const wasmBindgen =
   process.env.WASM_BINDGEN ||
@@ -29,9 +34,15 @@ const wasmBindgen =
     ? path.join(process.env.USERPROFILE ?? '', '.cargo', 'bin', 'wasm-bindgen.exe')
     : 'wasm-bindgen');
 
-// Strip inherited RUSTFLAGS (e.g. target-cpu=native from training guards) — invalid for wasm32.
+const buildTimestamp = new Date().toISOString();
+const commit = gitCommit();
 const { RUSTFLAGS: _dropNativeRustflags, ...hostEnv } = process.env;
-const env = { ...hostEnv, WASM_BINDGEN: wasmBindgen };
+const env = {
+  ...hostEnv,
+  WASM_BINDGEN: wasmBindgen,
+  GIT_COMMIT_HASH: commit,
+  WASM_BUILD_TIMESTAMP: buildTimestamp,
+};
 
 const result = spawnSync(
   'wasm-pack',
@@ -52,4 +63,65 @@ const result = spawnSync(
   { cwd: engineDir, stdio: 'inherit', env },
 );
 
-process.exit(result.status ?? 1);
+if (result.status !== 0) {
+  process.exit(result.status ?? 1);
+}
+
+const wasmPath = path.join(outDir, 'titanium_bg.wasm');
+const wasmSha256 = sha256File(wasmPath);
+const weightSrc = path.join(engineDir, 'src', 'titanium');
+const weightsDir = path.join(webDir, 'public', 'weights');
+mkdirSync(weightsDir, { recursive: true });
+mkdirSync(publicWasmDir, { recursive: true });
+
+const weightsLiveSha256 = sha256File(path.join(weightSrc, 'net_weights.bin'));
+const weightsFrozenSha256 = sha256File(path.join(weightSrc, 'net_weights_frozen.bin'));
+
+const NET_WEIGHT_BYTE_LEN = 42535 * 8; // must match engine `NET_WEIGHT_BYTE_LEN`
+
+let weightsMediumSha256 = null;
+const mediumSrc = path.join(weightSrc, 'net_weights_medium.bin');
+if (existsSync(mediumSrc)) {
+  const mediumBytes = readFileSync(mediumSrc);
+  if (mediumBytes.byteLength !== NET_WEIGHT_BYTE_LEN) {
+    console.error(
+      `[build:wasm] net_weights_medium.bin size ${mediumBytes.byteLength} != ${NET_WEIGHT_BYTE_LEN}`,
+    );
+    process.exit(1);
+  }
+  copyFileSync(mediumSrc, path.join(weightsDir, 'net_weights_medium.bin'));
+  weightsMediumSha256 = sha256File(mediumSrc);
+  console.log('[build:wasm] copied net_weights_medium.bin → public/weights/');
+}
+
+const buildMeta = {
+  engine_version: 'titanium-v15',
+  git_commit: commit,
+  build_timestamp: buildTimestamp,
+  wasm_sha256: wasmSha256,
+  wasm_bytes: readFileSync(wasmPath).byteLength,
+  weights_live_sha256: weightsLiveSha256,
+  weights_frozen_sha256: weightsFrozenSha256,
+  weights_medium_sha256: weightsMediumSha256,
+  features: 'wasm,embed-tables',
+  engine_dir: engineDir,
+};
+
+const metaJson = JSON.stringify(buildMeta, null, 2);
+writeFileSync(path.join(outDir, 'build-meta.json'), metaJson);
+writeFileSync(path.join(publicWasmDir, 'build-meta.json'), metaJson);
+
+// Cache-bust WASM fetch in glue (dev + unbundled paths).
+const gluePath = path.join(outDir, 'titanium.js');
+let glue = readFileSync(gluePath, 'utf8');
+const wasmBust = wasmSha256.slice(0, 16);
+glue = glue.replace(
+  "module_or_path = new URL('titanium_bg.wasm', import.meta.url);",
+  `module_or_path = new URL('titanium_bg.wasm?v=${wasmBust}', import.meta.url);`,
+);
+writeFileSync(gluePath, glue);
+
+console.log(`[build:wasm] wasm sha256: ${wasmSha256}`);
+console.log(`[build:wasm] commit: ${commit}`);
+
+process.exit(0);

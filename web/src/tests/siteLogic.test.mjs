@@ -17,6 +17,11 @@ import {
   screenColIndices,
 } from '../lib/screenTransform.js';
 import { PlayerType } from '../lib/engineConfig.js';
+import {
+  encodeFinishedGameWire,
+  finishedGamePayload,
+  finishedGameSignature,
+} from '../lib/trainingSubmit.js';
 
 let passed = 0;
 let failed = 0;
@@ -169,6 +174,27 @@ for (const token of winLine) {
 }
 assertEqual(winSession.winner, 2, 'Black wins on g1');
 assertEqual(winSession.getSnapshot().validActions.length, 0, 'no legal moves after win');
+
+console.log('\n[training] finished game payload');
+const trainingPayload = finishedGamePayload({
+  actions: winLine.map(parseAlgebraic),
+  winner: 2,
+  players: [PlayerType.Human, PlayerType.TitaniumMinimax],
+  playerAiSettings: [null, { threads: 2 }],
+  engineLabels: ['Human', 'Titanium v16 live'],
+});
+assertEqual(trainingPayload.result, -1, 'black win maps to result -1');
+assertEqual(trainingPayload.winner, 'black', 'black win text');
+assertEqual(trainingPayload.moves.at(-1), 'g1', 'moves are algebraic');
+assert(
+  finishedGameSignature(trainingPayload).startsWith('-1|e2 e8'),
+  'signature includes result and line',
+);
+const trainingWire = encodeFinishedGameWire(trainingPayload);
+assert(trainingWire.startsWith('TI-GAME-1\n'), 'wire uses text protocol header');
+assert(trainingWire.includes('result=-1\n'), 'wire includes numeric verdict');
+assert(trainingWire.includes(`moves=${winLine.join(' ')}\n`), 'wire includes move list');
+assert(!trainingWire.includes('{'), 'wire is not JSON');
 
 console.log('\n[liveBestMove] last committed move not highlighted');
 assertEqual(

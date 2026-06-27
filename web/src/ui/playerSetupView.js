@@ -6,6 +6,8 @@ import {
   formatVisitsCap,
   formatWallClock,
   maxDepthFromVisitsBudget,
+  coresSliderMax,
+  defaultCoreCount,
   visitsFromSliderPosition,
 } from '../lib/timeControl.js';
 import { playerColorLabel, playerColorName } from '../lib/playerColors.js';
@@ -90,6 +92,22 @@ function wirePlayerAiSettings(container, controller, playerNum) {
     },
     refresh,
   );
+
+  if (controller.getPlayerAiSettingsUiForSlot(playerNum).hasNativeTitaniumLazySmp) {
+    wireRangeSlider(
+      container,
+      `[data-setting="cores-${playerNum}"]`,
+      (value) => {
+        controller.setPlayerCores(playerNum, value, { silent: true });
+        const label = container.querySelector(`[data-cores-label="${playerNum}"]`);
+        if (label) {
+          label.textContent = String(value);
+        }
+      },
+      refresh,
+    );
+  }
+
 }
 
 function renderPlayerAiSettings(ui, playerNum) {
@@ -159,6 +177,23 @@ function renderPlayerAiSettings(ui, playerNum) {
           />
           <output class="time-slider-value" data-wallclock-label="${playerNum}">${formatWallClock(ui.wallClockSeconds)}</output>
         </div>
+        ${ui.hasNativeTitaniumLazySmp
+        ? `
+        <label class="control-label control-label--sub">Search threads · ${escapeHtml(engineName)}</label>
+        <div class="time-slider-row">
+          <input
+            type="range"
+            class="time-slider scraped-slider"
+            data-setting="cores-${playerNum}"
+            min="1"
+            max="${coresSliderMax()}"
+            step="1"
+            value="${ui.cores ?? defaultCoreCount()}"
+          />
+          <output class="time-slider-value" data-cores-label="${playerNum}">${ui.cores ?? defaultCoreCount()}</output>
+        </div>`
+        : ''
+      }
         ${visitsSlider}
       </div>`;
   }

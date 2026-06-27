@@ -25,7 +25,7 @@ function canonicalCandidatesFromHistory(historyTokens) {
 
 function titaniumAcceptsMove(historyTokens, move) {
   // Fresh engine per candidate — never reuse one board across make_move probes.
-  const engine = new WasmEngine(false);
+  const engine = new WasmEngine(0);
   engine.reset();
   const history = historyTokens.map(String);
   if (history.length > 0) {
@@ -46,7 +46,7 @@ function titaniumAcceptsMove(historyTokens, move) {
 }
 
 function replayHistoryPlies(history) {
-  const engine = new WasmEngine(false);
+  const engine = new WasmEngine(0);
   engine.reset();
   if (history.length === 0) {
     return { engine, plies: 0 };

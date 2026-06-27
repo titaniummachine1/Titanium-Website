@@ -28,6 +28,14 @@ export function renderGameControls(container, state, controller) {
   const canRedo = !!state.canRedo;
   const undoPaused = controller._undoPaused ?? false;
   const catActive = state.settings?.showCatVision;
+  const catVision = {
+    showSquares: true,
+    showWalls: true,
+    showNumbers: false,
+    squareOpacity: 1,
+    wallOpacity: 1,
+    ...(state.settings?.catVision ?? {}),
+  };
 
   container.innerHTML = `
     <div class="game-controls">
@@ -40,10 +48,40 @@ export function renderGameControls(container, state, controller) {
       <button type="button" class="btn btn--small game-controls__btn" data-action="change-players" title="Change players and engine settings">Settings</button>
       <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="redo" ${canRedo ? '' : 'disabled'} title="Redo next move (Right Arrow)" aria-label="Redo next move">→</button>
     </div>
+    ${catActive ? renderCatVisionControls(catVision) : ''}
     ${undoPaused ? '<div class="undo-pause-banner">Engine paused after undo — resuming shortly…</div>' : ''}
   `;
 
   wireControls(container, state, controller);
+}
+
+function renderCatVisionControls(catVision) {
+  return `
+    <div class="cat-vision-controls" aria-label="CAT vision display settings">
+      <label class="cat-vision-controls__check">
+        <input type="checkbox" data-cat-setting="showSquares" ${catVision.showSquares ? 'checked' : ''}>
+        Squares
+      </label>
+      <label class="cat-vision-controls__check">
+        <input type="checkbox" data-cat-setting="showWalls" ${catVision.showWalls ? 'checked' : ''}>
+        Walls
+      </label>
+      <label class="cat-vision-controls__check">
+        <input type="checkbox" data-cat-setting="showNumbers" ${catVision.showNumbers ? 'checked' : ''}>
+        Numbers
+      </label>
+      <div class="cat-vision-controls__stepper" aria-label="Square heat opacity">
+        <span>Squares ${Math.round(catVision.squareOpacity * 100)}%</span>
+        <button type="button" data-cat-step="squareOpacity" data-cat-delta="-0.1">-</button>
+        <button type="button" data-cat-step="squareOpacity" data-cat-delta="0.1">+</button>
+      </div>
+      <div class="cat-vision-controls__stepper" aria-label="Wall heat opacity">
+        <span>Walls ${Math.round(catVision.wallOpacity * 100)}%</span>
+        <button type="button" data-cat-step="wallOpacity" data-cat-delta="-0.1">-</button>
+        <button type="button" data-cat-step="wallOpacity" data-cat-delta="0.1">+</button>
+      </div>
+    </div>
+  `;
 }
 
 function wireControls(container, state, controller) {
@@ -77,6 +115,28 @@ function wireControls(container, state, controller) {
 
   container.querySelector('[data-action="change-players"]')?.addEventListener('click', () => {
     openPlayerDialog(controller.getState(), controller, { mode: 'settings' });
+  });
+
+  container.querySelectorAll('[data-cat-setting]').forEach((input) => {
+    const update = (event) => {
+      const target = event.currentTarget;
+      const key = target.dataset.catSetting;
+      const value = target.type === 'checkbox' ? target.checked : Number(target.value);
+      controller.updateCatVisionSettings?.({ [key]: value });
+    };
+    input.addEventListener('input', update);
+    input.addEventListener('change', update);
+  });
+
+  container.querySelectorAll('[data-cat-step]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const target = event.currentTarget;
+      const key = target.dataset.catStep;
+      const current = Number(state.settings?.catVision?.[key] ?? 1);
+      const delta = Number(target.dataset.catDelta ?? 0);
+      const value = Math.min(1.5, Math.max(0.25, Math.round((current + delta) * 10) / 10));
+      controller.updateCatVisionSettings?.({ [key]: value });
+    });
   });
 }
 

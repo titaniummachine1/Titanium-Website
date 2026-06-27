@@ -1,6 +1,6 @@
 /**
  * Titanium — Rust engine via dev-server session proxy (warm TT per seat).
- * Falls back to one-shot `genmove` for non-minimax engine modes.
+ * Falls back to one-shot `genmove` for MCTS.
  */
 
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
@@ -10,7 +10,7 @@ import {
   createAbortError,
   isAbortError,
 } from './engineAbort.js';
-import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel } from './timeControl.js';
+import { LOCAL_VISITS_RANGE, clampVisits, uctFromStrengthLevel, resolveCores } from './timeControl.js';
 
 const SESSION_URL = '/api/titanium/session';
 const GENMOVE_URL = '/api/titanium/genmove';
@@ -160,7 +160,10 @@ export class TitaniumEngineClient {
     return this._syncChain;
   }
 
-  async syncMovesToSession(algebraicMoves, { incremental = false, forceFull = false, signal } = {}) {
+  async syncMovesToSession(
+    algebraicMoves,
+    { incremental = false, forceFull = false, signal, cores = 1 } = {},
+  ) {
     if (signal?.aborted) {
       throw createAbortError();
     }
@@ -171,7 +174,7 @@ export class TitaniumEngineClient {
     }
 
     if (forceFull || !incremental || moves.length < this.appliedPlies) {
-      await this.sessionOp({ op: 'position', moves }, { signal });
+      await this.sessionOp({ op: 'position', moves, cores }, { signal });
       this.appliedPlies = moves.length;
       return;
     }
@@ -185,7 +188,7 @@ export class TitaniumEngineClient {
       if (signal?.aborted) {
         throw createAbortError();
       }
-      await this.sessionOp({ op: 'makemove', move }, { signal });
+      await this.sessionOp({ op: 'makemove', move, cores }, { signal });
     }
     this.appliedPlies = moves.length;
   }
@@ -199,7 +202,7 @@ export class TitaniumEngineClient {
     const timeSec = Math.max(0.5, Number(aiSettings?.wallClockSeconds) || 10);
     const maxBudget = clampVisits(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     const uct = uctFromStrengthLevel(aiSettings?.strengthLevel);
-    const threads = Math.max(1, Math.round(Number(aiSettings?.threads) || 1));
+    const cores = resolveCores(aiSettings);
     const configured = this.config?.engineMode;
     const engineMode =
       configured === 'minimax' ||
@@ -231,18 +234,13 @@ export class TitaniumEngineClient {
       maxBudget,
       uct,
       engineMode,
-      threads,
+      cores,
       started,
       isAlphaBeta: engineMode !== 'mcts' && isAlphaBetaEngineMode(engineMode),
     };
 
     if (engineMode !== 'mcts') {
-      // Warm session cannot pass --threads; one-shot genmove uses native LazySMP.
-      if (threads > 1) {
-        this.startOneShotGenmove(history, searchCtx);
-      } else {
-        this.startSessionGenmove(history, searchCtx);
-      }
+      this.startSessionGenmove(history, searchCtx);
     } else {
       this.startOneShotGenmove(history, searchCtx);
     }
@@ -264,13 +262,24 @@ export class TitaniumEngineClient {
       simulations: 0,
     });
 
-    this.enqueueSync(() => this.syncMovesToSession(history, { forceFull: true, signal: searchCtx.signal }))
+    this.enqueueSync(() =>
+      this.syncMovesToSession(history, {
+        forceFull: true,
+        signal: searchCtx.signal,
+        cores: searchCtx.cores,
+      }),
+    )
       .then(() => {
         if (signal.aborted || !this.isActiveSearch(searchCtx)) {
           throw createAbortError();
         }
         return this.sessionOp(
-          { op: 'go', timeSec: searchCtx.timeSec, maxNodes: searchCtx.maxBudget },
+          {
+            op: 'go',
+            timeSec: searchCtx.timeSec,
+            maxNodes: searchCtx.maxBudget,
+            cores: searchCtx.cores,
+          },
           { stream: true, signal },
         );
       })
@@ -318,7 +327,7 @@ export class TitaniumEngineClient {
         maxNodes: searchCtx.maxBudget,
         uct: searchCtx.uct,
         engine: engineMode,
-        threads: searchCtx.threads ?? 1,
+        cores: searchCtx.cores ?? 1,
         stream: true,
       }),
       signal,

@@ -116,7 +116,7 @@ async function runTests() {
     client.onBestMove = (action) => { bestMove = action; return 'stale'; };
 
     client.requestMove({
-      aiSettings: { wallClockSeconds: 3, visitsBudget: 0, strengthLevel: 4 },
+      aiSettings: { wallClockSeconds: 3, visitsBudget: 0, strengthLevel: 4, cores: 1 },
       moveHistory: REPORTED_MOVES,
       isFreshGame: false,
     });
@@ -163,7 +163,7 @@ async function runTests() {
     };
 
     client.requestMove({
-      aiSettings: { wallClockSeconds: 3, visitsBudget: 0, strengthLevel: 4 },
+      aiSettings: { wallClockSeconds: 3, visitsBudget: 0, strengthLevel: 4, cores: 1 },
       moveHistory: REPORTED_MOVES,
       isFreshGame: false,
     });
@@ -171,7 +171,7 @@ async function runTests() {
     await client.cancelSearch();
 
     client.requestMove({
-      aiSettings: { wallClockSeconds: 8, visitsBudget: 0, strengthLevel: 2 },
+      aiSettings: { wallClockSeconds: 8, visitsBudget: 0, strengthLevel: 2, cores: 1 },
       moveHistory: REPORTED_MOVES,
       isFreshGame: false,
     });
@@ -220,7 +220,7 @@ async function runTests() {
     };
 
     client.requestMove({
-      aiSettings: { wallClockSeconds: 3, visitsBudget: 0, strengthLevel: 4 },
+      aiSettings: { wallClockSeconds: 3, visitsBudget: 0, strengthLevel: 4, cores: 1 },
       moveHistory: REPORTED_MOVES,
       isFreshGame: false,
     });
@@ -252,7 +252,7 @@ async function runTests() {
     client.onBestMove = () => 'stale';
 
     client.requestMove({
-      aiSettings: { wallClockSeconds: 5, visitsBudget: 0, strengthLevel: 4 },
+      aiSettings: { wallClockSeconds: 5, visitsBudget: 0, strengthLevel: 4, cores: 4 },
       moveHistory: REPORTED_MOVES,
       isFreshGame: false,
     });
@@ -260,6 +260,7 @@ async function runTests() {
 
     assert(sessionCallCount >= 2, 'position sync + go');
     assert(goStreamBody?.timeSec === 5, 'go received configured time');
+    assert(goStreamBody?.cores === 4, 'go received configured cores');
     restoreFetch();
   }
 

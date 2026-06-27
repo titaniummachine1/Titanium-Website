@@ -1,124 +1,289 @@
 /**
  * Titanium v15 — WebAssembly build (αβ + grafted search; GitHub Pages / static hosting).
+ * Browser port runs one authoritative WASM engine. Genuine Lazy SMP requires
+ * shared WebAssembly memory, atomics, a shared TT, and helper contexts.
  */
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
-import { LOCAL_VISITS_RANGE, resolveMaxNodes } from './timeControl.js';
+import { resolveMaxNodes } from './timeControl.js';
+import { setRustIdentityFromWasm } from './wasmBuildInfo.js';
+
+const WASM_SEARCH_WORKERS = 1;
 
 export class TitaniumWasmEngineClient {
   constructor(engineConfig) {
     this.config = engineConfig;
-    this.worker = null;
+    this.cores = WASM_SEARCH_WORKERS;
+    /** @type {Worker[]} */
+    this.workers = [];
+    /** @type {Map<number, { resolve: Function, reject: Function }>} */
+    this._readyWaiters = new Map();
+    this._workerReady = new Set();
     this.algebraicMoves = [];
     this.pendingRequest = null;
     this.queuedRequest = null;
     this.workerCrashRetries = 0;
   }
 
-  ensureWorker() {
-    if (this.worker) {
+  ensureWorkers() {
+    const n = WASM_SEARCH_WORKERS;
+    while (this.workers.length < n) {
+      const workerId = this.workers.length;
+      const worker = new TitaniumWasmWorker();
+      worker.onmessage = (event) => this._onWorkerMessage(workerId, event);
+      worker.onerror = (event) => this._onWorkerError(workerId, event);
+      this.workers.push(worker);
+      this._workerReady.delete(workerId);
+    }
+    while (this.workers.length > n) {
+      const w = this.workers.pop();
+      w?.terminate();
+    }
+  }
+
+  /** Initialize WASM + weights in each worker; resolves when all post `ready`. */
+  initWorkers(engineMode = this.config?.engineMode ?? 'titanium-v15') {
+    this.ensureWorkers();
+    const need = WASM_SEARCH_WORKERS;
+    const promises = [];
+    for (let workerId = 0; workerId < need; workerId++) {
+      if (this._workerReady.has(workerId)) {
+        continue;
+      }
+      promises.push(
+        new Promise((resolve, reject) => {
+          this._readyWaiters.set(workerId, { resolve, reject });
+          this.workers[workerId].postMessage({ op: 'init', engineMode, workerSlot: workerId });
+        }),
+      );
+    }
+    return Promise.all(promises);
+  }
+
+  _resolveReady(workerId, data) {
+    this._workerReady.add(workerId);
+    const waiter = this._readyWaiters.get(workerId);
+    if (waiter) {
+      this._readyWaiters.delete(workerId);
+      waiter.resolve(data);
+    }
+  }
+
+  _onWorkerMessage(slotIndex, event) {
+    const data = event.data;
+    const workerId = data.workerId ?? slotIndex;
+
+    if (data.type === 'ready') {
+      if (data.rustIdentity) {
+        setRustIdentityFromWasm(JSON.stringify(data.rustIdentity));
+      }
+      this._resolveReady(workerId, data);
       return;
     }
-    this.worker = new TitaniumWasmWorker();
-    this.worker.onmessage = (event) => {
-      const data = event.data;
-      const pending = this.pendingRequest;
-      if (!pending) {
-        return;
-      }
-      if (data.type === 'error') {
+
+    const pending = this.pendingRequest;
+    if (!pending) {
+      return;
+    }
+
+    if (data.type === 'error') {
+      if (workerId === 0) {
         this.setStatus('error');
         pending.onError?.(new Error(data.message ?? 'WASM worker error'));
+      }
+      pending.errors ??= new Set();
+      pending.errors.add(workerId);
+      this._maybeFinishSearch(pending);
+      return;
+    }
+
+    if (data.type === 'info') {
+      if (workerId !== 0) {
         return;
       }
-      if (data.type === 'info') {
-        const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15';
-        let depthLog = data.depthLog;
-        if (
-          (!depthLog || depthLog.length === 0) &&
-          data.searchDepth != null &&
-          data.rootScore != null
-        ) {
-          depthLog = [
-            {
-              depth: data.searchDepth,
-              score: data.rootScore,
-              nodes: data.nodes ?? 0,
-              pv: data.pv ?? '',
-            },
-          ];
-        }
-        pending.finalMeta = {
-          ...(pending.finalMeta ?? {}),
-          ...data,
-          stoppedBy,
-          depthLog: depthLog ?? pending.finalMeta?.depthLog,
-          nodes: data.nodes ?? pending.finalMeta?.nodes,
-          searchDepth: data.searchDepth ?? pending.finalMeta?.searchDepth,
-          rootScore: data.rootScore ?? pending.finalMeta?.rootScore,
-          whiteDist: data.whiteDist ?? pending.finalMeta?.whiteDist,
-          blackDist: data.blackDist ?? pending.finalMeta?.blackDist,
-          pv: data.pv ?? pending.finalMeta?.pv,
-          rootMoves: data.rootMoves?.length ? data.rootMoves : (pending.finalMeta?.rootMoves),
-          rootMove: data.rootMove ?? pending.finalMeta?.rootMove,
-        };
-        const meta = pending.finalMeta;
-        pending.onInfo?.({
-          thinking: true,
-          mode: stoppedBy,
-          stoppedBy,
-          nodes: meta.nodes,
-          searchDepth: meta.searchDepth,
-          depthLog: meta.depthLog,
-          whiteDist: meta.whiteDist,
-          blackDist: meta.blackDist,
-          rootScore: meta.rootScore,
-          pv: data.pv ?? meta.pv,
-          rootMoves: data.rootMoves?.length ? data.rootMoves : meta.rootMoves,
-          rootMove: data.rootMove ?? meta.rootMove,
-          elapsedMs: data.elapsedMs ?? meta.elapsedMs,
-          progress:
-            meta.searchDepth && pending.timeMs
-              ? Math.min(0.99, (data.elapsedMs ?? 0) / pending.timeMs)
-              : undefined,
-        });
-        return;
+      pending.lastInfoNodes = data.nodes ?? pending.lastInfoNodes;
+      const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15';
+      let depthLog = data.depthLog;
+      if (
+        (!depthLog || depthLog.length === 0) &&
+        data.searchDepth != null &&
+        data.rootScore != null
+      ) {
+        depthLog = [
+          {
+            depth: data.searchDepth,
+            score: data.rootScore,
+            nodes: data.nodes ?? 0,
+            pv: data.pv ?? '',
+          },
+        ];
       }
-      if (data.type === 'bestmove') {
-        const elapsed = performance.now() - pending.started;
-        const meta = pending.finalMeta ?? {};
-        this.setStatus('idle');
-        this.workerCrashRetries = 0;
-        pending.onInfo?.({
-          time: elapsed,
-          elapsedMs: meta.elapsedMs ?? Math.round(elapsed),
-          nodes: meta.nodes ?? data.nodes ?? 0,
-          stoppedBy: meta.stoppedBy ?? data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
-          mode: meta.mode ?? data.mode ?? this.config?.engineMode ?? 'titanium-v15',
-          searchDepth: meta.searchDepth,
-          depthLog: meta.depthLog,
-          whiteDist: meta.whiteDist,
-          blackDist: meta.blackDist,
-          rootScore: meta.rootScore,
-          simulations: 0,
-          progress: 1,
-        });
-        if (!data.algebraicMove) {
-          pending.onError?.(new Error('WASM worker returned no move'));
-          return;
-        }
-        const action = parseAlgebraic(data.algebraicMove);
-        this.algebraicMoves.push(data.algebraicMove);
-        pending.onBestMove?.(action);
+      pending.finalMeta = {
+        ...(pending.finalMeta ?? {}),
+        ...data,
+        stoppedBy,
+        depthLog: depthLog ?? pending.finalMeta?.depthLog,
+        nodes: data.nodes ?? pending.finalMeta?.nodes,
+        searchDepth: data.searchDepth ?? pending.finalMeta?.searchDepth,
+        rootScore: data.rootScore ?? pending.finalMeta?.rootScore,
+        whiteDist: data.whiteDist ?? pending.finalMeta?.whiteDist,
+        blackDist: data.blackDist ?? pending.finalMeta?.blackDist,
+        pv: data.pv ?? pending.finalMeta?.pv,
+        rootMoves: data.rootMoves?.length ? data.rootMoves : pending.finalMeta?.rootMoves,
+        rootMove: data.rootMove ?? pending.finalMeta?.rootMove,
+      };
+      const meta = pending.finalMeta;
+      const aggNodes = this._aggregateNodes(pending);
+      pending.onInfo?.({
+        thinking: true,
+        mode: stoppedBy,
+        stoppedBy,
+        nodes: data.nodes ?? meta.nodes,
+        selectedWorkerNodes: data.nodes ?? meta.nodes,
+        totalNodesAcrossWorkers: aggNodes > 0 ? aggNodes : data.nodes ?? meta.nodes,
+        searchDepth: meta.searchDepth,
+        depthLog: meta.depthLog,
+        whiteDist: meta.whiteDist,
+        blackDist: meta.blackDist,
+        rootScore: meta.rootScore,
+        pv: data.pv ?? meta.pv,
+        rootMoves: data.rootMoves?.length ? data.rootMoves : meta.rootMoves,
+        rootMove: data.rootMove ?? meta.rootMove,
+        elapsedMs: data.elapsedMs ?? meta.elapsedMs,
+        progress:
+          meta.searchDepth && pending.timeMs
+            ? Math.min(0.99, (data.elapsedMs ?? 0) / pending.timeMs)
+            : undefined,
+      });
+      return;
+    }
+
+    if (data.type === 'bestmove') {
+      pending.results ??= new Map();
+      pending.results.set(workerId, data);
+      this._maybeFinishSearch(pending);
+    }
+  }
+
+  _aggregateNodes(pending) {
+    let total = 0;
+    if (pending.results) {
+      for (const r of pending.results.values()) {
+        total += Number(r.nodes ?? 0);
       }
-    };
-    this.worker.onerror = (event) => {
-      const pending = this.pendingRequest;
+    }
+    if (pending.finalMeta?.nodes != null && total === 0) {
+      return pending.finalMeta.nodes;
+    }
+    return total;
+  }
+
+  _maybeFinishSearch(pending) {
+    const need = WASM_SEARCH_WORKERS;
+    const worker0 = pending.results?.get(0);
+    const worker0Failed = pending.errors?.has(0);
+
+    if (worker0Failed && (pending.results?.size ?? 0) === 0) {
+      return;
+    }
+
+    if (!worker0 && !worker0Failed) {
+      return;
+    }
+
+    if (worker0Failed) {
+      this.setStatus('error');
+      pending.onError?.(new Error('Authoritative worker 0 failed'));
+      return;
+    }
+
+    if (!worker0) {
+      return;
+    }
+
+    const helpersExpected = need - 1;
+    const helpersSettled =
+      helpersExpected === 0 ||
+      [...pending.results.keys()].filter((id) => id !== 0).length +
+        [...(pending.errors ?? [])].filter((id) => id !== 0).length >=
+        helpersExpected;
+
+    if (!helpersSettled) {
+      return;
+    }
+
+    let searchDepth = worker0.depth ?? pending.finalMeta?.searchDepth;
+    for (const [id, r] of pending.results) {
+      if (id === 0) continue;
+      if (
+        r.algebraicMove === worker0.algebraicMove &&
+        r.depth != null &&
+        (searchDepth == null || r.depth > searchDepth)
+      ) {
+        searchDepth = r.depth;
+      }
+    }
+
+    const totalNodes = this._aggregateNodes(pending);
+    const selectedWorkerNodes = worker0.nodes ?? 0;
+    const elapsed = performance.now() - pending.started;
+    const meta = pending.finalMeta ?? {};
+
+    this.setStatus('idle');
+    this.workerCrashRetries = 0;
+
+    pending.onInfo?.({
+      time: elapsed,
+      elapsedMs: meta.elapsedMs ?? Math.round(elapsed),
+      nodes: totalNodes,
+      selectedWorkerNodes,
+      totalNodesAcrossWorkers: totalNodes,
+      workerNodes: Object.fromEntries(
+        [...pending.results.entries()].map(([id, r]) => [id, r.nodes ?? 0]),
+      ),
+      lastInfoNodes: pending.lastInfoNodes,
+      nodeSource: 'bestmove_single',
+      stoppedBy: meta.stoppedBy ?? worker0.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
+      mode: meta.mode ?? worker0.mode ?? this.config?.engineMode ?? 'titanium-v15',
+      searchDepth,
+      depthLog: meta.depthLog,
+      whiteDist: meta.whiteDist,
+      blackDist: meta.blackDist,
+      rootScore: meta.rootScore,
+      simulations: 0,
+      progress: 1,
+    });
+
+    if (!worker0.algebraicMove) {
+      pending.onError?.(new Error('WASM worker returned no move'));
+      return;
+    }
+
+    const action = parseAlgebraic(worker0.algebraicMove);
+    this.algebraicMoves.push(worker0.algebraicMove);
+    this.pendingRequest = null;
+    const result = pending.onBestMove?.(action);
+    if (result === 'stale') {
+      this.clearQueuedSearches();
+      return;
+    }
+    if (result === false) {
+      this.clearQueuedSearches();
+    } else {
+      this.drainQueuedRequest();
+    }
+  }
+
+  _onWorkerError(slotIndex, event) {
+    const pending = this.pendingRequest;
+    if (!pending) {
+      return;
+    }
+    if (slotIndex === 0) {
       this.pendingRequest = null;
-      this.worker?.terminate();
-      this.worker = null;
-      if (pending?.retryParams && this.workerCrashRetries < 1) {
+      this.terminateWorkers();
+      if (pending.retryParams && this.workerCrashRetries < 1) {
         this.workerCrashRetries += 1;
         this.setStatus('connecting');
         this.startRequest({ ...pending.retryParams, isFreshGame: false });
@@ -128,10 +293,21 @@ export class TitaniumWasmEngineClient {
       const message =
         event?.message ?? (typeof event === 'string' ? event : null) ?? 'Titanium WASM worker crashed';
       const error = new Error(message);
-      pending?.onError?.(error);
+      pending.onError?.(error);
       this.onError?.(error);
       this.drainQueuedRequest();
-    };
+    } else {
+      pending.errors ??= new Set();
+      pending.errors.add(slotIndex);
+      this._maybeFinishSearch(pending);
+    }
+  }
+
+  terminateWorkers() {
+    for (const w of this.workers) {
+      w.terminate();
+    }
+    this.workers = [];
   }
 
   ponder() {}
@@ -140,10 +316,7 @@ export class TitaniumWasmEngineClient {
   async cancelSearch() {
     this.queuedRequest = null;
     this.pendingRequest = null;
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
+    this.terminateWorkers();
     this.setStatus('idle');
   }
 
@@ -176,7 +349,7 @@ export class TitaniumWasmEngineClient {
       this.queuedRequest = params;
       return;
     }
-    this.startRequest(params);
+    void this.startRequest({ ...params, awaitReady: false });
   }
 
   drainQueuedRequest() {
@@ -188,7 +361,7 @@ export class TitaniumWasmEngineClient {
     this.startRequest(next);
   }
 
-  startRequest({ aiSettings, moveHistory, isFreshGame }) {
+  async startRequest({ aiSettings, moveHistory, isFreshGame, awaitReady = false }) {
     const retryParams = { aiSettings, moveHistory, isFreshGame };
     if (isFreshGame) {
       this.algebraicMoves = [];
@@ -196,32 +369,40 @@ export class TitaniumWasmEngineClient {
       this.algebraicMoves = moveHistory.map(toAlgebraic);
     }
 
+    this.cores = WASM_SEARCH_WORKERS;
+
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
-    const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
+    const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
     const engineMode = this.config?.engineMode ?? 'titanium-v15';
 
     this.setStatus('searching');
-    const started = performance.now();
-    this.ensureWorker();
+    this.ensureWorkers();
+    let initMs = 0;
+    if (awaitReady) {
+      const readyStart = performance.now();
+      const readyPayloads = await this.initWorkers(engineMode);
+      initMs = performance.now() - readyStart;
+      for (const p of readyPayloads) {
+        if (p?.initMs != null) {
+          initMs = Math.max(initMs, p.initMs);
+        }
+      }
+    }
 
+    const started = performance.now();
     this.pendingRequest = {
       started,
+      initMs,
       timeMs,
       finalMeta: {},
+      results: new Map(),
+      errors: new Set(),
       retryParams,
+      lastInfoNodes: null,
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => {
-        this.pendingRequest = null;
         const result = this.onBestMove?.(action);
-        if (result === 'stale') {
-          this.clearQueuedSearches();
-          return;
-        }
-        if (result === false) {
-          this.clearQueuedSearches();
-        } else {
-          this.drainQueuedRequest();
-        }
+        return result;
       },
       onError: (err) => {
         this.pendingRequest = null;
@@ -230,13 +411,18 @@ export class TitaniumWasmEngineClient {
       },
     };
 
-    this.worker.postMessage({
-      algebraicMoves: this.algebraicMoves,
-      timeMs,
-      maxNodes,
-      isFreshGame: Boolean(isFreshGame),
-      engineMode,
-    });
+    for (let workerId = 0; workerId < WASM_SEARCH_WORKERS; workerId++) {
+      this.workers[workerId].postMessage({
+        op: 'search',
+        algebraicMoves: this.algebraicMoves,
+        timeMs,
+        maxNodes,
+        isFreshGame: Boolean(isFreshGame),
+        engineMode,
+        workerSlot: workerId,
+        streamProgress: true,
+      });
+    }
   }
 
   setStatus(status) {
