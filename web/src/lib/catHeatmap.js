@@ -32,6 +32,15 @@ const DEFAULT_MAX_CM = 240;
 // (tactical / no-LMR) is always the same visual jump regardless of maxCm.
 const HOT_ANCHOR_T = 0.55;
 
+function heatColorParts(heat, scale = {}) {
+  const t = catHeatT(heat, scale);
+  const colorT = Math.pow(t, 0.92);
+  const hue = Math.round(58 * (1 - colorT));
+  const sat = Math.round(76 + 18 * colorT);
+  const light = Math.round(62 - 14 * colorT);
+  return { t, hue, sat, light };
+}
+
 /**
  * Engine-true heat → normalized 0..1 ramp position. The UI can pass `coldCm: 0`
  * to show every positive impact while still anchoring red to the engine hot/max
@@ -67,29 +76,38 @@ export function catSquareOverlay(heat, reachable, scale = {}) {
   if (heat < coldCm) {
     return null;
   }
-  const t = catHeatT(heat, scale);
+  const { t, hue, sat, light } = heatColorParts(heat, scale);
   // Yellow (55°) → orange → red (0°); alpha ramps so even the coolest warm
   // square reads against the background instead of vanishing into it.
-  const hue = Math.round(58 * (1 - t));
-  const sat = Math.round(82 + 12 * t);
-  const light = Math.round(58 - 10 * t);
-  const alpha = Math.min(0.58, 0.16 + 0.34 * t);
+  const alpha = Math.min(0.58, 0.035 + 0.5 * Math.pow(t, 1.18));
   return {
     fill: `hsla(${hue}, ${sat}%, ${light}%, ${alpha.toFixed(2)})`,
     opacity: 1,
   };
 }
 
-/** Outline color for searchable wall hints (not filled bars). */
-export function catWallOutlineColor(heat, scale = {}) {
+/** Fill/glow for wall hints. Low positive scores stay faint; hot walls pop. */
+export function catWallOverlay(heat, scale = {}) {
   if (!Number.isFinite(heat) || heat <= 0) {
-    return 'rgba(120, 115, 105, 0.55)';
+    return {
+      fill: 'rgba(120, 115, 105, 0.18)',
+      glow: 'rgba(120, 115, 105, 0.08)',
+    };
   }
-  const overlay = catSquareOverlay(heat, true, scale);
-  if (!overlay) {
-    return 'rgba(120, 115, 105, 0.55)';
+  const coldCm = scale.coldCm ?? DEFAULT_COLD_CM;
+  if (heat < coldCm) {
+    return {
+      fill: 'rgba(120, 115, 105, 0.18)',
+      glow: 'rgba(120, 115, 105, 0.08)',
+    };
   }
-  return overlay.fill.replace(/,\s*[\d.]+\)$/, ', 0.85)');
+  const { t, hue, sat, light } = heatColorParts(heat, scale);
+  const fillAlpha = Math.min(0.68, 0.035 + 0.58 * Math.pow(t, 1.4));
+  const glowAlpha = Math.min(0.42, 0.02 + 0.34 * Math.pow(t, 1.55));
+  return {
+    fill: `hsla(${hue}, ${sat}%, ${light}%, ${fillAlpha.toFixed(2)})`,
+    glow: `hsla(${hue}, ${sat}%, ${light}%, ${glowAlpha.toFixed(2)})`,
+  };
 }
 
 /**

@@ -9,7 +9,7 @@ import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import {
   catSquareIndex,
   catSquareOverlay,
-  catWallOutlineColor,
+  catWallOverlay,
 } from '../lib/catHeatmap.js';
 import {
   viewMove,
@@ -142,10 +142,12 @@ function addCatWallHeat(dom, boardEl, type, viewSlot, entry, scale, visual) {
   el.className = 'cat-move-ghost cat-move-ghost--wall ' + (type === 0 ? 'wallpiece--h' : 'wallpiece--v');
   const heat = Number(entry.heat) || 0;
   const skipped = entry.skip || !entry.search;
-  const baseAlpha = skipped ? 0.16 : 0.72;
-  const alpha = clampNumber(baseAlpha * visual.wallOpacity, 0.05, 1);
-  el.style.setProperty('--cat-alpha', String(alpha));
-  el.style.borderColor = catWallOutlineColor(heat, scale);
+  const wallStyle = catWallOverlay(heat, scale);
+  const alpha = clampNumber((skipped ? 0.35 : 1) * visual.wallOpacity, 0.05, 1.2);
+  el.style.opacity = String(alpha);
+  el.style.background = wallStyle.fill;
+  el.style.boxShadow = `0 0 10px ${wallStyle.glow}`;
+  el.style.borderColor = wallStyle.fill;
   el.textContent = visual.showNumbers && heat > 0 ? String(Math.round(heat)) : '';
   const direct = Number(entry.directHeat ?? heat) || 0;
   const counter = Math.max(0, heat - direct);
