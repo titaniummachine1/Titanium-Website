@@ -1,13 +1,13 @@
-/** ACE v8 / Quoridor v3 HTML engines (MATE = 100_000). */
+/** ACE v8 / Quoridor v3 HTML engines and Titanium WASM (MATE = 100_000). */
 export const ACE_MATE_VALUE = 100_000;
 export const ACE_MATE_THRESHOLD = ACE_MATE_VALUE - 200;
 
-/** Titanium αβ search (MATE = 20_000). */
-export const TITANIUM_MATE_VALUE = 20_000;
-export const TITANIUM_MATE_THRESHOLD = TITANIUM_MATE_VALUE - 500;
+/** Titanium race-proof forced-win scores (RACE_MATE = 32_000, within 1000 of peak). */
+export const RACE_MATE_VALUE = 32_000;
+export const RACE_MATE_THRESHOLD = RACE_MATE_VALUE - 1_000;
 
 /**
- * Convert engine mate plies to Quoridor "moves" for display (AceV13: ceil(plies / 2)).
+ * Convert engine mate plies to Quoridor "moves" for display (ceil(plies / 2)).
  * @param {number} plies
  */
 export function quoridorMovesFromMatePlies(plies) {
@@ -25,15 +25,17 @@ export function mateInfo(score) {
     return null;
   }
   const n = Number(score);
+  const abs = Math.abs(n);
 
-  if (Math.abs(n) >= ACE_MATE_THRESHOLD) {
+  // True mate (pawn reaches goal row) — engine returns MATE - ply (100_000 range).
+  if (abs >= ACE_MATE_THRESHOLD) {
     const dist = n > 0 ? Math.max(0, ACE_MATE_VALUE - n) : Math.max(0, ACE_MATE_VALUE + n);
     return { dist, sign: n > 0 ? 1 : -1 };
   }
 
-  if (Math.abs(n) >= TITANIUM_MATE_THRESHOLD) {
-    const dist =
-      n > 0 ? Math.max(0, TITANIUM_MATE_VALUE - n) : Math.max(0, TITANIUM_MATE_VALUE + n);
+  // Race-proof forced win — engine returns RACE_MATE - ply (32_000 range).
+  if (abs >= RACE_MATE_THRESHOLD && abs <= RACE_MATE_VALUE + 100) {
+    const dist = n > 0 ? Math.max(0, RACE_MATE_VALUE - n) : Math.max(0, RACE_MATE_VALUE + n);
     return { dist, sign: n > 0 ? 1 : -1 };
   }
 

@@ -22,7 +22,12 @@ export function isAbortError(err, signal) {
   if (err.code === 20) {
     return true;
   }
-  return /abort/i.test(String(err.message ?? ''));
+  const message = String(err.message ?? '');
+  if (/abort/i.test(message)) {
+    return true;
+  }
+  // Native session proxy rejects in-flight `go` with Error('stop') on cancel — not a user error.
+  return message === 'stop' || message === 'stopped' || message === 'client disconnected';
 }
 
 /**

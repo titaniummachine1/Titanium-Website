@@ -7,14 +7,13 @@
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
 import { resolveMaxNodes } from './timeControl.js';
+import { enrichNodeFields } from './searchNodes.js';
 import { setRustIdentityFromWasm } from './wasmBuildInfo.js';
-
-const WASM_SEARCH_WORKERS = 1;
 
 export class TitaniumWasmEngineClient {
   constructor(engineConfig) {
     this.config = engineConfig;
-    this.cores = WASM_SEARCH_WORKERS;
+    this.cores = 1;
     /** @type {Worker[]} */
     this.workers = [];
     /** @type {Map<number, { resolve: Function, reject: Function }>} */
@@ -27,7 +26,7 @@ export class TitaniumWasmEngineClient {
   }
 
   ensureWorkers() {
-    const n = WASM_SEARCH_WORKERS;
+    const n = this.cores;
     while (this.workers.length < n) {
       const workerId = this.workers.length;
       const worker = new TitaniumWasmWorker();
@@ -45,7 +44,7 @@ export class TitaniumWasmEngineClient {
   /** Initialize WASM + weights in each worker; resolves when all post `ready`. */
   initWorkers(engineMode = this.config?.engineMode ?? 'titanium-v15') {
     this.ensureWorkers();
-    const need = WASM_SEARCH_WORKERS;
+    const need = this.cores;
     const promises = [];
     for (let workerId = 0; workerId < need; workerId++) {
       if (this._workerReady.has(workerId)) {
@@ -135,13 +134,21 @@ export class TitaniumWasmEngineClient {
       };
       const meta = pending.finalMeta;
       const aggNodes = this._aggregateNodes(pending);
+      const nodeFields = enrichNodeFields({
+        ...meta,
+        totalNodesAcrossWorkers: aggNodes > 0 ? aggNodes : undefined,
+      });
       pending.onInfo?.({
         thinking: true,
         mode: stoppedBy,
         stoppedBy,
-        nodes: data.nodes ?? meta.nodes,
-        selectedWorkerNodes: data.nodes ?? meta.nodes,
-        totalNodesAcrossWorkers: aggNodes > 0 ? aggNodes : data.nodes ?? meta.nodes,
+        nodes: nodeFields.nodes,
+        totalNodes: nodeFields.totalNodes,
+        selectedWorkerNodes: nodeFields.selectedWorkerNodes,
+        totalNodesAcrossWorkers: nodeFields.totalNodesAcrossWorkers,
+        mainThreadNodes: nodeFields.mainThreadNodes,
+        helperNodes: nodeFields.helperNodes,
+        nodeSource: nodeFields.nodeSource,
         searchDepth: meta.searchDepth,
         depthLog: meta.depthLog,
         whiteDist: meta.whiteDist,
@@ -180,7 +187,7 @@ export class TitaniumWasmEngineClient {
   }
 
   _maybeFinishSearch(pending) {
-    const need = WASM_SEARCH_WORKERS;
+    const need = this.cores;
     const worker0 = pending.results?.get(0);
     const worker0Failed = pending.errors?.has(0);
 
@@ -226,7 +233,12 @@ export class TitaniumWasmEngineClient {
     }
 
     const totalNodes = this._aggregateNodes(pending);
-    const selectedWorkerNodes = worker0.nodes ?? 0;
+    const nodeFields = enrichNodeFields({
+      ...(pending.finalMeta ?? {}),
+      nodes: worker0.nodes,
+      totalNodesAcrossWorkers: totalNodes > 0 ? totalNodes : undefined,
+    });
+    const selectedWorkerNodes = worker0.nodes ?? nodeFields.selectedWorkerNodes ?? 0;
     const elapsed = performance.now() - pending.started;
     const meta = pending.finalMeta ?? {};
 
@@ -236,14 +248,13 @@ export class TitaniumWasmEngineClient {
     pending.onInfo?.({
       time: elapsed,
       elapsedMs: meta.elapsedMs ?? Math.round(elapsed),
-      nodes: totalNodes,
+      nodes: nodeFields.nodes,
       selectedWorkerNodes,
-      totalNodesAcrossWorkers: totalNodes,
-      workerNodes: Object.fromEntries(
-        [...pending.results.entries()].map(([id, r]) => [id, r.nodes ?? 0]),
-      ),
-      lastInfoNodes: pending.lastInfoNodes,
-      nodeSource: 'bestmove_single',
+      totalNodes: nodeFields.totalNodes,
+      totalNodesAcrossWorkers: nodeFields.totalNodesAcrossWorkers,
+      mainThreadNodes: nodeFields.mainThreadNodes,
+      helperNodes: nodeFields.helperNodes,
+      nodeSource: nodeFields.nodeSource ?? 'bestmove_aggregate',
       stoppedBy: meta.stoppedBy ?? worker0.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
       mode: meta.mode ?? worker0.mode ?? this.config?.engineMode ?? 'titanium-v15',
       searchDepth,
@@ -369,7 +380,8 @@ export class TitaniumWasmEngineClient {
       this.algebraicMoves = moveHistory.map(toAlgebraic);
     }
 
-    this.cores = WASM_SEARCH_WORKERS;
+    // One WASM engine until shared-memory Lazy SMP exists — N workers = N duplicate searches fighting for CPU.
+    this.cores = 1;
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
@@ -411,7 +423,7 @@ export class TitaniumWasmEngineClient {
       },
     };
 
-    for (let workerId = 0; workerId < WASM_SEARCH_WORKERS; workerId++) {
+    for (let workerId = 0; workerId < this.cores; workerId++) {
       this.workers[workerId].postMessage({
         op: 'search',
         algebraicMoves: this.algebraicMoves,
@@ -420,6 +432,7 @@ export class TitaniumWasmEngineClient {
         isFreshGame: Boolean(isFreshGame),
         engineMode,
         workerSlot: workerId,
+        lmrBias: workerId === 0 ? 0 : workerId * 5,
         streamProgress: true,
       });
     }

@@ -41,8 +41,10 @@ export async function validateMoveLegality({
   });
 
   if (titanium.status === TitaniumOracleStatus.UNAVAILABLE) {
+    // Oracle crashed or is unavailable — do not block a canonical-legal move.
+    // The canonical JS check already passed; oracle failure is not proof of illegality.
     return {
-      ok: false,
+      ok: true,
       reason: 'titanium-oracle-unavailable',
       titanium,
     };
