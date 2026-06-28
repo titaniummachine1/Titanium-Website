@@ -31,14 +31,11 @@ import {
   clampCores,
 } from '../lib/timeControl.js';
 
-// Medium/Hard weights are still being trained — only expose them in dev builds.
-const TITANIUM_NET_OPTIONS = import.meta.env.DEV
-  ? [
-      { label: 'Easy', id: TITANIUM_NET_EASY },
-      { label: 'Medium', id: TITANIUM_NET_MEDIUM },
-      { label: 'Hard', id: TITANIUM_NET_HARD },
-    ]
-  : [{ label: 'Easy', id: TITANIUM_NET_EASY }];
+const TITANIUM_NET_OPTIONS = [
+  { label: 'Easy', id: TITANIUM_NET_EASY },
+  { label: 'Medium', id: TITANIUM_NET_MEDIUM },
+  { label: 'Hard', id: TITANIUM_NET_HARD },
+];
 
 const PREFS_KEY = 'quoridor-player-prefs-v5';
 
