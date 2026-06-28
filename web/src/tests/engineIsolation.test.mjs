@@ -120,8 +120,16 @@ assert(
   'ace-v13 WASM tiers map to frozen path',
 );
 assert(
+  engineWasm.includes('grafted_v16'),
+  'titanium-v16 WASM tier uses CAT LMR grafted_v16',
+);
+assert(
   engineWasm.includes('TitaniumSearch::grafted(g, None)'),
   'titanium-v15 still uses live grafted net',
+);
+assert(
+  tiWasmWorker.includes('tierForEngineMode'),
+  'titanium WASM worker maps engine mode to tier',
 );
 
 console.log('\n[isolate] load notation kicks AI on side to move');

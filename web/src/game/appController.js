@@ -1,7 +1,7 @@
 import { GameSession } from './gameSession.js';
 import { naiveDistanceEval, parseAlgebraic, isWallAction, QuoridorBoard } from '../lib/gameLogic.js';
 import { decodeReplayCode, encodeReplayFromActions } from '../lib/replayCode.js';
-import { fetchCatSnapshot, indexCatWalls } from '../lib/catHeatmap.js';
+import { fetchCatSnapshot, indexCatWalls, prewarmCatSnapshot } from '../lib/catHeatmap.js';
 import { buildLmrViz, fetchLmrSnapshot } from '../lib/lmrHeatmap.js';
 import { toAlgebraic } from '../lib/gameLogic.js';
 import { EngineClient } from '../lib/engineClient.js';
@@ -179,6 +179,7 @@ import {
   normalizePlayerType,
   getEngineConfig,
   resolveTitaniumEngineMode,
+  resolveCatLmrCeiling,
   resolveCores,
   clampCores,
   defaultCoreCount,
@@ -1170,8 +1171,14 @@ export class AppController {
       this.legalityOracleState = { ready: false, error };
     }
     void this.prewarmTitaniumWasmEngines();
+    this.prewarmCatVision();
     this.onChange?.();
     return this.legalityOracleState;
+  }
+
+  prewarmCatVision() {
+    const moves = this.session.actions.map((action) => toAlgebraic(action));
+    void prewarmCatSnapshot(moves);
   }
 
   /** Cold-start WASM workers before the first AI move so info/PV telemetry is live immediately. */
@@ -1184,8 +1191,12 @@ export class AppController {
       }
       const engine = this.getEngineForSeat(seat);
       if (typeof engine?.prewarm === 'function') {
+        const ai = this.settings.playerAiSettings[seat] ?? {};
+        const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
+        const catLmrCeiling =
+          playerType === PlayerType.TitaniumV16 ? resolveCatLmrCeiling(ai) : 800;
         tasks.push(
-          engine.prewarm().catch((err) => {
+          engine.prewarm(mode, catLmrCeiling).catch((err) => {
             console.warn(`Titanium WASM prewarm failed for seat ${seat}`, err);
           }),
         );
@@ -1222,6 +1233,7 @@ export class AppController {
     this.catViz = null;
     this.catVizError = null;
     this.catVizLoading = false;
+    this.prewarmCatVision();
     this.scheduleCatRefresh();
   }
 
@@ -1690,8 +1702,12 @@ export class AppController {
     if (isTitaniumEngine(playerType, this.engineConfigs)) {
       const backend = HAS_NATIVE_TITANIUM_LAZY_SMP ? 'native' : 'wasm';
       const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
+      const cat =
+        playerType === PlayerType.TitaniumV16
+          ? `|cat${resolveCatLmrCeiling(ai)}`
+          : '';
       const cores = `|c${resolveCores(ai)}`;
-      return `${playerType}|${backend}|${mode}${cores}`;
+      return `${playerType}|${backend}|${mode}${cat}${cores}`;
     }
     const kind = getEngineConfig(playerType, this.engineConfigs)?.kind ?? playerType;
     return `${playerType}|${kind}`;
@@ -1768,6 +1784,7 @@ export class AppController {
             selectedWorkerNodes: info.selectedWorkerNodes ?? si.selectedWorkerNodes,
             totalNodesAcrossWorkers: info.totalNodesAcrossWorkers ?? si.totalNodesAcrossWorkers,
             nodeSource: info.nodeSource ?? si.nodeSource,
+            estimatedTotalNodes: info.estimatedTotalNodes ?? si.estimatedTotalNodes,
             progress: info.progress,
             mode:
               info.mode ??
@@ -2557,6 +2574,7 @@ export class AppController {
         selectedWorkerNodes: si.selectedWorkerNodes,
         totalNodesAcrossWorkers: si.totalNodesAcrossWorkers,
         nodeSource: si.nodeSource,
+        estimatedTotalNodes: false,
         progress: si.progress,
         rootWinRate: si.rootWinRate,
         stoppedBy: si.stoppedBy ?? si.mode ?? '?',

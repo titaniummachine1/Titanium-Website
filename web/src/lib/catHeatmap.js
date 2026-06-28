@@ -1,6 +1,117 @@
 /** CAT v3 heat → subtle board overlays (never solid black bars on walls). */
 
+import CatVisionWorker from '../workers/catVisionWorker.js?worker';
+
 let wasmCatInitPromise = null;
+let catWorker = null;
+let catWorkerRequestId = 1;
+let catWorkerReadyPromise = null;
+let catWorkerFailed = false;
+const catWorkerPending = new Map();
+const catSnapshotCache = new Map();
+const CAT_SNAPSHOT_CACHE_LIMIT = 16;
+
+function catMovesKey(algebraicMoves) {
+  return (algebraicMoves ?? []).join('|');
+}
+
+function rememberCatSnapshot(key, promise) {
+  const entry = { promise, data: null, failed: false };
+  catSnapshotCache.set(key, entry);
+  promise
+    .then((data) => {
+      entry.data = data;
+      entry.promise = Promise.resolve(data);
+      while (catSnapshotCache.size > CAT_SNAPSHOT_CACHE_LIMIT) {
+        const oldest = catSnapshotCache.keys().next().value;
+        catSnapshotCache.delete(oldest);
+      }
+      return data;
+    })
+    .catch(() => {
+      entry.failed = true;
+      if (catSnapshotCache.get(key) === entry) {
+        catSnapshotCache.delete(key);
+      }
+    });
+  return promise;
+}
+
+function cachedCatSnapshot(key) {
+  const entry = catSnapshotCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.failed) {
+    return null;
+  }
+  return entry.data ?? entry.promise;
+}
+
+function ensureCatWorker() {
+  if (catWorkerFailed) {
+    throw new Error('CAT vision worker unavailable');
+  }
+  if (!catWorker) {
+    catWorker = new CatVisionWorker();
+    catWorker.onmessage = (event) => {
+      const data = event.data ?? {};
+      const pending = catWorkerPending.get(data.id);
+      if (!pending) {
+        return;
+      }
+      catWorkerPending.delete(data.id);
+      clearTimeout(pending.timeout);
+      if (data.type === 'error') {
+        pending.reject(new Error(data.message ?? 'CAT vision worker error'));
+      } else {
+        pending.resolve(data);
+      }
+    };
+    catWorker.onerror = (event) => {
+      catWorkerFailed = true;
+      const message = event?.message ?? 'CAT vision worker crashed';
+      for (const pending of catWorkerPending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error(message));
+      }
+      catWorkerPending.clear();
+      catWorker?.terminate();
+      catWorker = null;
+      catWorkerReadyPromise = null;
+    };
+  }
+  return catWorker;
+}
+
+function postCatWorkerMessage(op, payload = {}, timeoutMs = 30_000) {
+  const worker = ensureCatWorker();
+  const id = catWorkerRequestId++;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      catWorkerPending.delete(id);
+      reject(new Error(`CAT vision worker ${op} timed out`));
+    }, timeoutMs);
+    catWorkerPending.set(id, { resolve, reject, timeout });
+    worker.postMessage({ id, op, ...payload });
+  });
+}
+
+async function ensureCatWorkerReady() {
+  if (!catWorkerReadyPromise) {
+    catWorkerReadyPromise = postCatWorkerMessage('init', {}, 60_000).catch((err) => {
+      catWorkerReadyPromise = null;
+      throw err;
+    });
+  }
+  return catWorkerReadyPromise;
+}
+
+async function fetchCatSnapshotFromWorker(algebraicMoves) {
+  await ensureCatWorkerReady();
+  const result = await postCatWorkerMessage('snapshot', { moves: algebraicMoves ?? [] }, 30_000);
+  return result.data;
+}
 
 async function fetchCatSnapshotFromWasm(algebraicMoves) {
   if (!wasmCatInitPromise) {
@@ -109,22 +220,53 @@ export function catWallOverlay(heat, scale = {}) {
  * @param {string[]} algebraicMoves
  */
 export async function fetchCatSnapshot(algebraicMoves) {
+  const key = catMovesKey(algebraicMoves);
+  const cached = cachedCatSnapshot(key);
+  if (cached) {
+    return cached;
+  }
+
   try {
-    return await fetchCatSnapshotFromWasm(algebraicMoves);
-  } catch (wasmErr) {
+    return await rememberCatSnapshot(key, fetchCatSnapshotFromWorker(algebraicMoves));
+  } catch (workerErr) {
+    try {
+      return await rememberCatSnapshot(key, fetchCatSnapshotFromWasm(algebraicMoves));
+    } catch (wasmErr) {
     // Dev fallback: the Vite proxy shells out to the native binary. It is useful
     // when wasm failed to initialize, but it is much slower than the in-process
     // wasm call because it pays process startup on each request.
-    const res = await fetch('/api/titanium/cat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ moves: algebraicMoves }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) {
-      throw new Error(data.error ?? `CAT request failed (${res.status})`);
+      const res = await fetch('/api/titanium/cat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ moves: algebraicMoves }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error ?? `CAT request failed (${res.status})`);
+      }
+      catSnapshotCache.set(key, { data, promise: Promise.resolve(data) });
+      return data;
     }
-    return data;
+  }
+}
+
+/**
+ * Warm the dedicated CAT vision worker and optionally precompute this position.
+ * Fire-and-forget callers should catch/log; foreground callers use fetchCatSnapshot.
+ *
+ * @param {string[]} algebraicMoves
+ */
+export async function prewarmCatSnapshot(algebraicMoves = []) {
+  const key = catMovesKey(algebraicMoves);
+  const cached = cachedCatSnapshot(key);
+  if (cached) {
+    await cached;
+    return;
+  }
+  try {
+    await rememberCatSnapshot(key, fetchCatSnapshotFromWorker(algebraicMoves));
+  } catch (err) {
+    console.warn('CAT vision worker prewarm failed; foreground request will retry/fallback', err);
   }
 }
 

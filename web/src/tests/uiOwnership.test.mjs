@@ -75,9 +75,32 @@ const tiSummary = compactPlayerConfigSummary({
   titaniumNet: 'hard',
   wallClockSeconds: 3,
 });
-assert(tiSummary.includes('Titanium') && tiSummary.includes('Hard') && tiSummary.includes('3'), tiSummary);
+assert(
+  tiSummary.includes('Titanium v15') && tiSummary.includes('Hard') && tiSummary.includes('3'),
+  tiSummary,
+);
+
+const ti16Summary = compactPlayerConfigSummary({
+  isHuman: false,
+  isTitanium: true,
+  isLocalMcts: true,
+  playerType: PlayerType.TitaniumV16,
+  titaniumNet: 'hard',
+  wallClockSeconds: 5,
+});
+assert(
+  ti16Summary.includes('Titanium v16') &&
+    ti16Summary.includes('CAT 1000') &&
+    ti16Summary.includes('5'),
+  ti16Summary,
+);
 
 assert(compactPlayerConfigSummary({ isHuman: true }) === 'Human', 'human summary');
+
+console.log('\n[ui] live node estimates are marked');
+assert(playerCardSrc.includes("'n~'"), 'estimated live node totals use n~ prefix');
+assert(playerCardSrc.includes('estimatedTotalNodes'), 'card consumes estimatedTotalNodes flag');
+assert(controllerSrc.includes('estimatedTotalNodes: false'), 'completed searches clear estimate flag');
 
 console.log('\n[ui] thinking status markup stays inside player card template');
 assert(

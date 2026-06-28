@@ -43,6 +43,8 @@ const PlayerType = {
   QuoridorV3: 'quoridor-v3',
   Titanium: 'titanium',
   TitaniumMinimax: 'titanium-minimax',
+  /** v16 — v15 weights + CAT attention LMR (ceiling from difficulty). */
+  TitaniumV16: 'titanium-v16',
   /** Same search as v15; pinned pre-train NNUE (A/B vs live weights). */
   TitaniumV15Frozen: 'titanium-v15-frozen',
   /** Unified ACE v10 — strength slider picks JS / Rust / MoveGen+ / PMC tier */

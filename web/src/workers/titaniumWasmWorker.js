@@ -1,6 +1,6 @@
 /**
- * Titanium v15 in a Web Worker — Rust engine compiled to WebAssembly.
- * Easy, Medium, and Hard NNUE tiers are embedded in WASM.
+ * Titanium v15/v16 in a Web Worker — Rust engine compiled to WebAssembly.
+ * Tiers 0–2 = v15 NNUE (easy/medium/hard); tiers 3–5 = v16 CAT LMR ceilings.
  */
 
 import init, { WasmEngine } from '../wasm/titanium/titanium.js';
@@ -11,8 +11,30 @@ let initPromise = null;
 /** @type {Map<string, import('../wasm/titanium/titanium.js').WasmEngine>} */
 const engines = new Map();
 
-function frozenForEngineMode(engineMode) {
-  return engineMode === 'titanium-v15-frozen';
+function tierForEngineMode(engineMode, catLmrCeiling) {
+  if (engineMode === 'titanium-v15-frozen') {
+    return 0;
+  }
+  if (engineMode === 'titanium-v15-medium') {
+    return 1;
+  }
+  if (engineMode === 'titanium-v16') {
+    if (catLmrCeiling === 500) {
+      return 3;
+    }
+    if (catLmrCeiling === 1000) {
+      return 5;
+    }
+    return 4;
+  }
+  return 2;
+}
+
+function engineCacheKey(engineMode, catLmrCeiling) {
+  if (engineMode === 'titanium-v16') {
+    return `${engineMode}@${catLmrCeiling ?? 800}`;
+  }
+  return engineMode;
 }
 
 async function ensureInit() {
@@ -22,13 +44,14 @@ async function ensureInit() {
   await initPromise;
 }
 
-async function ensureEngine(engineMode = 'titanium-v15') {
+async function ensureEngine(engineMode = 'titanium-v15', catLmrCeiling = 800) {
   await ensureInit();
-  const frozen = frozenForEngineMode(engineMode);
-  if (!engines.has(engineMode)) {
-    engines.set(engineMode, new WasmEngine(frozen));
+  const key = engineCacheKey(engineMode, catLmrCeiling);
+  if (!engines.has(key)) {
+    const tier = tierForEngineMode(engineMode, catLmrCeiling);
+    engines.set(key, new WasmEngine(tier));
   }
-  return engines.get(engineMode);
+  return engines.get(key);
 }
 
 function parseProgressJson(jsonStr) {
@@ -39,14 +62,15 @@ function parseProgressJson(jsonStr) {
   }
 }
 
-async function handleInit(engineMode, workerSlot) {
+async function handleInit(engineMode, workerSlot, catLmrCeiling) {
   const t0 = performance.now();
-  await ensureEngine(engineMode);
+  await ensureEngine(engineMode, catLmrCeiling);
   const initMs = performance.now() - t0;
   const rustIdentity = buildMeta;
   console.log('[titanium-wasm-worker] ready', {
     workerSlot,
     engineMode,
+    catLmrCeiling,
     initMs,
     buildMeta,
     rustIdentity: rustIdentity,
@@ -57,6 +81,7 @@ async function handleInit(engineMode, workerSlot) {
     initMs,
     weightsInInit: engineMode === 'titanium-v15-medium',
     engineMode,
+    catLmrCeiling,
     buildMeta,
     rustIdentity,
   });
@@ -69,11 +94,11 @@ async function handleSearch(eventData) {
     maxNodes,
     isFreshGame,
     engineMode = 'titanium-v15',
+    catLmrCeiling = 800,
     workerSlot = 0,
-    lmrBias = 0,
     streamProgress = true,
   } = eventData;
-  const wasm = await ensureEngine(engineMode);
+  const wasm = await ensureEngine(engineMode, catLmrCeiling);
   if (isFreshGame) {
     wasm.reset();
   }
@@ -107,11 +132,11 @@ async function handleSearch(eventData) {
   const cap = maxNodes ?? 0;
 
   function runSearch(engine) {
-    if (workerSlot === 0 && lmrBias === 0) {
+    if (workerSlot === 0) {
       return engine.go(movetime, cap, onProgress);
     }
     if (typeof engine.go_with_profile === 'function') {
-      return engine.go_with_profile(movetime, cap, workerSlot, 0, lmrBias, onProgress);
+      return engine.go_with_profile(movetime, cap, workerSlot, 0, 0, onProgress);
     }
     return engine.go(movetime, cap, onProgress);
   }
@@ -165,6 +190,7 @@ async function handleSearch(eventData) {
     searchWallMs,
     stoppedBy: engineMode,
     mode: engineMode,
+    catLmrCeiling: engineMode === 'titanium-v16' ? catLmrCeiling : undefined,
     nodeSource: 'bestmove_final',
     searchDepth: lastProgress?.searchDepth,
     rootScore: lastProgress?.rootScore,
@@ -182,9 +208,10 @@ self.onmessage = async (event) => {
   const data = event.data ?? {};
   const workerSlot = data.workerSlot ?? data.workerId ?? 0;
   const engineMode = data.engineMode ?? 'titanium-v15';
+  const catLmrCeiling = data.catLmrCeiling ?? 800;
   try {
     if (data.op === 'init') {
-      await handleInit(engineMode, workerSlot);
+      await handleInit(engineMode, workerSlot, catLmrCeiling);
       return;
     }
     await handleSearch(data);

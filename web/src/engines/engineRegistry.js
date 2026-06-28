@@ -64,6 +64,21 @@ export const ENGINE_REGISTRY = new Map([
     PlayerType.TitaniumMinimax,
     {
       id: PlayerType.TitaniumMinimax,
+      displayName: 'Titanium v15',
+      backend: EngineBackendKind.LOCAL_WASM,
+      capabilities: {
+        remoteSync: false,
+        livePv: true,
+        playNow: true,
+        abort: true,
+      },
+      controls: { timeSlider: true, nodes: true, strength: true },
+    },
+  ],
+  [
+    PlayerType.TitaniumV16,
+    {
+      id: PlayerType.TitaniumV16,
       displayName: 'Titanium v16',
       backend: EngineBackendKind.LOCAL_WASM,
       capabilities: {
@@ -79,7 +94,7 @@ export const ENGINE_REGISTRY = new Map([
     PlayerType.TitaniumV15Frozen,
     {
       id: PlayerType.TitaniumV15Frozen,
-      displayName: 'Titanium v16 (Frozen)',
+      displayName: 'Titanium v15 (Frozen)',
       backend: EngineBackendKind.LOCAL_WASM,
       capabilities: {
         remoteSync: false,

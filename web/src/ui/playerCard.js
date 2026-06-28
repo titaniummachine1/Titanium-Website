@@ -7,18 +7,19 @@
  * Interactive engine settings live only in the unified player dialog.
  */
 
+import {
+  STRENGTH_LEVEL_PRESETS,
+  TIME_TO_MOVE_PRESETS,
+  formatWallClock,
+  titaniumNetLabel,
+  catLmrCeilingLabel,
+} from '../lib/timeControl.js';
 import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { formatScoreForCard, isMateScore, mateInfo } from '../lib/engineScore.js';
 import { resolveDisplayNodes } from '../lib/searchNodes.js';
 import { canPlayNow, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
-import {
-  STRENGTH_LEVEL_PRESETS,
-  TIME_TO_MOVE_PRESETS,
-  formatWallClock,
-  titaniumNetLabel,
-} from '../lib/timeControl.js';
 
 function escHtml(s) {
   return String(s)
@@ -84,7 +85,7 @@ function resolveNodes(snap) {
 function formatNodesLine(snap) {
   const n = resolveNodes(snap);
   if (n <= 0) return '';
-  return `n${formatNodes(n)}`;
+  return `${snap?.estimatedTotalNodes ? 'n~' : 'n'}${formatNodes(n)}`;
 }
 
 function resolveDepth(snap) {
@@ -140,17 +141,23 @@ export function compactPlayerConfigSummary(ui) {
   }
 
   if (ui.isTitanium) {
-    const net = titaniumNetLabel({ titaniumNet: ui.titaniumNet });
+    const tierLabel =
+      ui.playerType === PlayerType.TitaniumV16
+        ? catLmrCeilingLabel({ titaniumNet: ui.titaniumNet })
+        : titaniumNetLabel({ titaniumNet: ui.titaniumNet });
     const threads = ui.isTitanium && ui.cores > 1 ? ` · ${ui.cores} threads` : '';
-    return `${engine} · ${net} · ${formatTimeSummary(ui.wallClockSeconds)}${threads}`;
+    return `${engine} · ${tierLabel} · ${formatTimeSummary(ui.wallClockSeconds)}${threads}`;
   }
 
   return `${engine} · ${formatTimeSummary(ui.wallClockSeconds)}`;
 }
 
 function shortEngineName(playerType) {
+  if (playerType === PlayerType.TitaniumV16) {
+    return 'Titanium v16';
+  }
   if (playerType === PlayerType.TitaniumMinimax || playerType === PlayerType.TitaniumV15Frozen) {
-    return 'Titanium';
+    return 'Titanium v15';
   }
   if (playerType === PlayerType.GorisansonMCTS) return 'Gorisanson';
   if (playerType === PlayerType.KaAI) return 'Ka';

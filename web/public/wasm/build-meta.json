@@ -1,13 +1,13 @@
 {
   "engine_version": "titanium-v15",
-  "git_commit": "c5f81d5c58d216ed4ab921da25104e41c74a3682",
-  "build_timestamp": "2026-06-28T00:07:55.284Z",
-  "wasm_sha256": "08ed1ba6a177f089030dc97ee1cb6feaf7cfd77d7083259fba8ef9e024729361",
-  "wasm_bytes": 1656807,
-  "weights_live_sha256": "15b338446bfcb509ac5d5f036e467a828e8d00eb2fd308b3c5c66d4749b5988f",
-  "weights_frozen_sha256": "15b338446bfcb509ac5d5f036e467a828e8d00eb2fd308b3c5c66d4749b5988f",
-  "weights_medium_sha256": null,
-  "weights_medium_bytes": null,
+  "git_commit": "60d7328300aa41619ad13b86933f41f39f3f37f8",
+  "build_timestamp": "2026-06-28T08:44:54.350Z",
+  "wasm_sha256": "ae1dbbaf5ff0a9406a9d57a929b5ca02b76fbd7bc9aa454e6f306715359341f3",
+  "wasm_bytes": 2025055,
+  "weights_live_sha256": "f34300f5b5ba2be03320a53407607589c61ae05edaa38a68d23ddc5f0169c303",
+  "weights_frozen_sha256": "f34300f5b5ba2be03320a53407607589c61ae05edaa38a68d23ddc5f0169c303",
+  "weights_medium_sha256": "4ab6c2df263e8963e1b2eda6987b6f07cbfb1fb2ad30f0941e5d4e81e14548c4",
+  "weights_medium_bytes": 340296,
   "features": "wasm,embed-tables",
-  "engine_dir": "C:\\gitProjects\\Quoridor best AI\\site\\engine"
+  "engine_dir": "C:\\gitProjects\\Quoridor best AI\\engine"
 }

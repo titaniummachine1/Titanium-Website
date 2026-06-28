@@ -14,9 +14,9 @@ const siteEngine = path.resolve(webDir, '..', 'engine');
 const outDir = path.join(webDir, 'src', 'wasm', 'titanium');
 const publicWasmDir = path.join(webDir, 'public', 'wasm');
 
-const engineDir = existsSync(path.join(siteEngine, 'src', 'wasm.rs'))
-  ? siteEngine
-  : monorepoEngine;
+const engineDir = existsSync(path.join(monorepoEngine, 'Cargo.toml'))
+  ? monorepoEngine
+  : siteEngine;
 console.log(`[build:wasm] engine dir: ${engineDir}`);
 
 function sha256File(filePath) {

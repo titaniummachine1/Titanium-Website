@@ -25,13 +25,22 @@ const GORISANSON_ENGINE = {
   uctConst: 0.2,
 };
 
-const TITANIUM_ENGINE = {
+const TITANIUM_V15_ENGINE = {
   kind: 'titanium',
-  name: 'Titanium v16',
+  name: 'Titanium v15',
   key: PlayerType.TitaniumMinimax,
   engineMode: 'titanium-v15',
   tooltip:
-    'Titanium v16 — Easy / Medium / Hard difficulty tiers (in-browser WASM, fully offline)',
+    'Titanium v15 — Easy / Medium / Hard NNUE tiers (in-browser WASM, fully offline)',
+};
+
+const TITANIUM_V16_ENGINE = {
+  kind: 'titanium',
+  name: 'Titanium v16',
+  key: PlayerType.TitaniumV16,
+  engineMode: 'titanium-v16',
+  tooltip:
+    'Titanium v16 — v15 Hard weights + CAT LMR. Easy/Medium/Hard sets attention ceiling (500/800/1000 cm); cold walls search at depth 1.',
 };
 
 const ZERO_INK_ENGINE = {
@@ -66,7 +75,8 @@ export function getAllEngineConfigs() {
   }));
   return [
     GORISANSON_ENGINE,
-    TITANIUM_ENGINE,
+    TITANIUM_V15_ENGINE,
+    TITANIUM_V16_ENGINE,
     ACE_V13_ENGINE,
     ZERO_INK_ENGINE,
     ...remote,
@@ -90,9 +100,15 @@ export function getPlayerOptionGroups() {
         },
         {
           value: PlayerType.TitaniumMinimax,
-          label: TITANIUM_ENGINE.name,
+          label: TITANIUM_V15_ENGINE.name,
           disabled: false,
-          tooltip: TITANIUM_ENGINE.tooltip,
+          tooltip: TITANIUM_V15_ENGINE.tooltip,
+        },
+        {
+          value: PlayerType.TitaniumV16,
+          label: TITANIUM_V16_ENGINE.name,
+          disabled: false,
+          tooltip: TITANIUM_V16_ENGINE.tooltip,
         },
         {
           value: PlayerType.AceV13,
@@ -178,9 +194,10 @@ const SEARCH_STOP_LABELS = {
   'ace-v13-js': 'ACE v13 JS',
   'ace-v13': 'ACE v13 Rust',
   'ace-v13-ti': 'ACE v13 MoveGen+',
-  'titanium-v15': 'Titanium v16 hard',
-  'titanium-v15-medium': 'Titanium v16 medium',
-  'titanium-v15-frozen': 'Titanium v16 easy',
+  'titanium-v15': 'Titanium v15 hard',
+  'titanium-v15-medium': 'Titanium v15 medium',
+  'titanium-v15-frozen': 'Titanium v15 easy',
+  'titanium-v16': 'Titanium v16',
   zeroink: 'zero.ink',
   mcts: 'MCTS',
   hybrid: 'hybrid',
@@ -238,6 +255,8 @@ function buildSearchDepthHeader(header, { live }) {
     header.mode === 'titanium-v15-medium' ||
     header.stoppedBy === 'titanium-v15-frozen' ||
     header.mode === 'titanium-v15-frozen' ||
+    header.stoppedBy === 'titanium-v16' ||
+    header.mode === 'titanium-v16' ||
     header.playerLabel?.includes('Titanium') ||
     header.playerLabel?.includes('Quoridor v3') ||
     header.playerLabel?.includes('ACE v8') ||

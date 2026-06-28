@@ -105,6 +105,9 @@ export function migrateTitaniumNet(net) {
 }
 
 export function resolveTitaniumEngineMode(aiSettings, playerType, engineConfigs) {
+  if (playerType === PlayerType.TitaniumV16) {
+    return 'titanium-v16';
+  }
   if (playerType === PlayerType.TitaniumV15Frozen) {
     return 'titanium-v15-frozen';
   }
@@ -117,6 +120,18 @@ export function resolveTitaniumEngineMode(aiSettings, playerType, engineConfigs)
     return 'titanium-v15-medium';
   }
   return config?.engineMode ?? 'titanium-v15';
+}
+
+/** v16 CAT LMR ceiling (cm) from Easy/Medium/Hard difficulty. */
+export function resolveCatLmrCeiling(aiSettings) {
+  const net = migrateTitaniumNet(aiSettings?.titaniumNet ?? TITANIUM_NET_HARD);
+  if (net === TITANIUM_NET_EASY) return 500;
+  if (net === TITANIUM_NET_MEDIUM) return 800;
+  return 1000;
+}
+
+export function catLmrCeilingLabel(aiSettings) {
+  return `CAT ${resolveCatLmrCeiling(aiSettings)}`;
 }
 
 export function titaniumNetLabel(aiSettings) {
@@ -288,6 +303,7 @@ export function isTitaniumEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.Titanium ||
     playerType === PlayerType.TitaniumMinimax ||
+    playerType === PlayerType.TitaniumV16 ||
     playerType === PlayerType.TitaniumV15Frozen ||
     getEngineConfig(playerType, engineConfigs)?.kind === 'titanium'
   );
@@ -439,11 +455,14 @@ export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) 
     const time = formatWallClock(aiSettings.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds);
     const cap = formatVisitsCap(aiSettings.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     if (isTitaniumEngine(playerType, engineConfigs)) {
-      const net = titaniumNetLabel(aiSettings);
+      const tier =
+        playerType === PlayerType.TitaniumV16
+          ? catLmrCeilingLabel(aiSettings)
+          : `${titaniumNetLabel(aiSettings)} NNUE`;
       const budgetLabel = 'nodes';
       const cores = resolveCores(aiSettings);
       const threads = cores > 1 ? ` · ${cores} threads` : '';
-      return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${net} NNUE${threads}`;
+      return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${tier}${threads}`;
     }
     if (isQuoridorV3Engine(playerType, engineConfigs)) {
       const depthCap = formatMaxDepth(maxDepthFromVisitsBudget(aiSettings.visitsBudget));

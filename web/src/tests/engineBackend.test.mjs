@@ -37,7 +37,18 @@ function assertEqual(actual, expected, label) {
 console.log('\n[backend] registry entries');
 assert(getEngineEntry(PlayerType.Human), 'human');
 assert(getEngineEntry(PlayerType.TitaniumMinimax), 'titanium live');
+assert(getEngineEntry(PlayerType.TitaniumV16), 'titanium v16');
 assert(getEngineEntry(PlayerType.KaAI), 'ka');
+assertEqual(
+  getEngineEntry(PlayerType.TitaniumMinimax).displayName,
+  'Titanium v15',
+  'titanium v15 registry label',
+);
+assertEqual(
+  getEngineEntry(PlayerType.TitaniumV16).displayName,
+  'Titanium v16',
+  'titanium v16 registry label',
+);
 assertEqual(
   getEngineEntry(PlayerType.KaAI).backend,
   EngineBackendKind.REMOTE_WS,
@@ -47,6 +58,11 @@ assertEqual(
   getEngineEntry(PlayerType.TitaniumMinimax).backend,
   EngineBackendKind.LOCAL_WASM,
   'titanium wasm',
+);
+assertEqual(
+  getEngineEntry(PlayerType.TitaniumV16).backend,
+  EngineBackendKind.LOCAL_WASM,
+  'titanium v16 wasm',
 );
 assert(isLocalEngineBackend(EngineBackendKind.LOCAL_JS));
 assert(isRemoteEngineBackend(EngineBackendKind.REMOTE_WS));
@@ -59,6 +75,8 @@ assertEqual(
 console.log('\n[backend] local titanium is not remote');
 const tiEntry = getEngineEntryForPlayer(PlayerType.TitaniumMinimax, {});
 assertEqual(tiEntry.backend, EngineBackendKind.LOCAL_WASM, 'ti local wasm');
+const ti16Entry = getEngineEntryForPlayer(PlayerType.TitaniumV16, {});
+assertEqual(ti16Entry.backend, EngineBackendKind.LOCAL_WASM, 'ti16 local wasm');
 const identity = validateEngineResultIdentity({
   engineEntry: tiEntry,
   resultContext: {

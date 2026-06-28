@@ -5,7 +5,7 @@
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
-import { resolveMaxNodes } from './timeControl.js';
+import { resolveMaxNodes, resolveCatLmrCeiling } from './timeControl.js';
 import { resolveTitaniumSearchCores } from './titaniumRuntime.js';
 import { enrichNodeFields } from './searchNodes.js';
 import { setRustIdentityFromWasm } from './wasmBuildInfo.js';
@@ -39,6 +39,7 @@ export class TitaniumWasmEngineClient {
     /** @type {Map<number, { resolve: Function, reject: Function }>} */
     this._readyWaiters = new Map();
     this._workerReady = new Set();
+    this._workerReadyKeys = new Map();
     this.algebraicMoves = [];
     this.pendingRequest = null;
     this.queuedRequest = null;
@@ -47,8 +48,21 @@ export class TitaniumWasmEngineClient {
     this._initInFlight = null;
   }
 
-  workersReady() {
-    return this.cores > 0 && this._workerReady.size >= this.cores;
+  _workerProfileKey(engineMode = this.config?.engineMode ?? 'titanium-v15', catLmrCeiling = 800) {
+    return `${engineMode}@${catLmrCeiling ?? 800}`;
+  }
+
+  workersReady(engineMode = this.config?.engineMode ?? 'titanium-v15', catLmrCeiling = 800) {
+    const profileKey = this._workerProfileKey(engineMode, catLmrCeiling);
+    if (this.cores <= 0 || this._workerReady.size < this.cores) {
+      return false;
+    }
+    for (let workerId = 0; workerId < this.cores; workerId++) {
+      if (this._workerReadyKeys.get(workerId) !== profileKey) {
+        return false;
+      }
+    }
+    return true;
   }
 
   ensureWorkers() {
@@ -60,35 +74,48 @@ export class TitaniumWasmEngineClient {
       worker.onerror = (event) => this._onWorkerError(workerId, event);
       this.workers.push(worker);
       this._workerReady.delete(workerId);
+      this._workerReadyKeys.delete(workerId);
     }
     while (this.workers.length > n) {
+      const workerId = this.workers.length - 1;
       const w = this.workers.pop();
       w?.terminate();
+      this._workerReady.delete(workerId);
+      this._workerReadyKeys.delete(workerId);
     }
   }
 
   /** Initialize WASM in each worker sequentially (avoids parallel cold-start traps on Pages). */
-  async initWorkers(engineMode = this.config?.engineMode ?? 'titanium-v15', { timeoutMs = 60_000 } = {}) {
+  async initWorkers(
+    engineMode = this.config?.engineMode ?? 'titanium-v15',
+    { timeoutMs = 60_000, catLmrCeiling = 800 } = {},
+  ) {
     if (this._initInFlight) {
       return this._initInFlight;
     }
-    this._initInFlight = this._initWorkersOnce(engineMode, timeoutMs).finally(() => {
+    this._initInFlight = this._initWorkersOnce(engineMode, timeoutMs, catLmrCeiling).finally(() => {
       this._initInFlight = null;
     });
     return this._initInFlight;
   }
 
-  async _initWorkersOnce(engineMode, timeoutMs) {
+  async _initWorkersOnce(engineMode, timeoutMs, catLmrCeiling) {
     this.ensureWorkers();
+    const profileKey = this._workerProfileKey(engineMode, catLmrCeiling);
     const payloads = [];
     for (let workerId = 0; workerId < this.cores; workerId++) {
-      if (this._workerReady.has(workerId)) {
+      if (this._workerReady.has(workerId) && this._workerReadyKeys.get(workerId) === profileKey) {
         continue;
       }
       const data = await Promise.race([
         new Promise((resolve, reject) => {
           this._readyWaiters.set(workerId, { resolve, reject });
-          this.workers[workerId].postMessage({ op: 'init', engineMode, workerSlot: workerId });
+          this.workers[workerId].postMessage({
+            op: 'init',
+            engineMode,
+            catLmrCeiling,
+            workerSlot: workerId,
+          });
         }),
         new Promise((_, reject) => {
           setTimeout(
@@ -103,12 +130,12 @@ export class TitaniumWasmEngineClient {
   }
 
   /** Load WASM in workers before the first move (avoids empty info cards during cold init). */
-  async prewarm(engineMode = this.config?.engineMode ?? 'titanium-v15') {
-    if (this.workersReady()) {
+  async prewarm(engineMode = this.config?.engineMode ?? 'titanium-v15', catLmrCeiling = 800) {
+    if (this.workersReady(engineMode, catLmrCeiling)) {
       return;
     }
     try {
-      await this.initWorkers(engineMode);
+      await this.initWorkers(engineMode, { catLmrCeiling });
     } catch (err) {
       console.warn('Titanium WASM prewarm failed; will retry on first move', err);
     }
@@ -116,6 +143,10 @@ export class TitaniumWasmEngineClient {
 
   _resolveReady(workerId, data) {
     this._workerReady.add(workerId);
+    this._workerReadyKeys.set(
+      workerId,
+      this._workerProfileKey(data.engineMode ?? this.config?.engineMode, data.catLmrCeiling ?? 800),
+    );
     const waiter = this._readyWaiters.get(workerId);
     if (waiter) {
       this._readyWaiters.delete(workerId);
@@ -125,6 +156,7 @@ export class TitaniumWasmEngineClient {
 
   _rejectReady(workerId, err) {
     this._workerReady.delete(workerId);
+    this._workerReadyKeys.delete(workerId);
     const waiter = this._readyWaiters.get(workerId);
     if (waiter) {
       this._readyWaiters.delete(workerId);
@@ -206,7 +238,9 @@ export class TitaniumWasmEngineClient {
         rootMove: data.rootMove ?? pending.finalMeta?.rootMove,
       };
       const meta = pending.finalMeta;
-      const aggNodes = this._aggregateNodes(pending);
+      const settledNodes = this._aggregateNodes(pending);
+      const aggNodes = settledNodes > 0 ? settledNodes : this._liveAggregateNodes(pending, data.nodes);
+      const estimatedTotalNodes = settledNodes <= 0 && aggNodes > 0 && this.cores > 1;
       const nodeFields = enrichNodeFields({
         ...meta,
         totalNodesAcrossWorkers: aggNodes > 0 ? aggNodes : undefined,
@@ -221,7 +255,8 @@ export class TitaniumWasmEngineClient {
         totalNodesAcrossWorkers: nodeFields.totalNodesAcrossWorkers,
         mainThreadNodes: nodeFields.mainThreadNodes,
         helperNodes: nodeFields.helperNodes,
-        nodeSource: nodeFields.nodeSource,
+        nodeSource: estimatedTotalNodes ? 'live_worker_estimate' : nodeFields.nodeSource,
+        estimatedTotalNodes,
         searchDepth: meta.searchDepth,
         depthLog: meta.depthLog,
         whiteDist: meta.whiteDist,
@@ -270,6 +305,18 @@ export class TitaniumWasmEngineClient {
       return pending.finalMeta.nodes;
     }
     return total;
+  }
+
+  _liveAggregateNodes(pending, authoritativeNodes) {
+    const settled = this._aggregateNodes(pending);
+    if (settled > 0) {
+      return settled;
+    }
+    const nodes = Number(authoritativeNodes ?? pending.finalMeta?.nodes) || 0;
+    if (nodes <= 0) {
+      return 0;
+    }
+    return nodes * Math.max(1, this.cores);
   }
 
   _maybeFinishSearch(pending) {
@@ -348,6 +395,7 @@ export class TitaniumWasmEngineClient {
       mainThreadNodes: nodeFields.mainThreadNodes,
       helperNodes: nodeFields.helperNodes,
       nodeSource: nodeFields.nodeSource ?? 'bestmove_aggregate',
+      estimatedTotalNodes: false,
       stoppedBy: meta.stoppedBy ?? worker0.stoppedBy ?? this.config?.engineMode ?? 'titanium-v15',
       mode: meta.mode ?? worker0.mode ?? this.config?.engineMode ?? 'titanium-v15',
       searchDepth,
@@ -421,6 +469,7 @@ export class TitaniumWasmEngineClient {
     }
     this.workers = [];
     this._workerReady.clear();
+    this._workerReadyKeys.clear();
     this._initInFlight = null;
     for (const [, waiter] of this._readyWaiters) {
       waiter.reject(new Error('Worker terminated'));
@@ -498,13 +547,15 @@ export class TitaniumWasmEngineClient {
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
     const engineMode = this.config?.engineMode ?? 'titanium-v15';
+    const catLmrCeiling =
+      engineMode === 'titanium-v16' ? resolveCatLmrCeiling(aiSettings) : 800;
 
     if (this.pendingRequest) {
       throw new Error('Titanium WASM search already in flight');
     }
 
     this.ensureWorkers();
-    const needsInit = !this.workersReady();
+    const needsInit = !this.workersReady(engineMode, catLmrCeiling);
     if (needsInit) {
       this.setStatus('connecting');
     }
@@ -534,7 +585,7 @@ export class TitaniumWasmEngineClient {
 
     const readyStart = performance.now();
     try {
-      await this.initWorkers(engineMode);
+      await this.initWorkers(engineMode, { catLmrCeiling });
     } catch (err) {
       this.pendingRequest = null;
       this.setStatus('error');
@@ -551,8 +602,8 @@ export class TitaniumWasmEngineClient {
         maxNodes,
         isFreshGame: Boolean(isFreshGame),
         engineMode,
+        catLmrCeiling,
         workerSlot: workerId,
-        lmrBias: workerId === 0 ? 0 : workerId * 5,
         streamProgress: true,
       });
     }
