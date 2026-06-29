@@ -50,6 +50,10 @@ jobs:
           VITE_BUILD_SHA: ${{ github.sha }}
           # wasm32 cross-compile — do not use target-cpu=native (native titanium.exe only).
           RUSTFLAGS: ""
+          # GitHub Pages cannot send COOP/COEP, so crossOriginIsolated is false and
+          # WASM threads never run there — build single-thread (features wasm,embed-tables).
+          # The pinned engine (sane v16 net) ships the `wasm` feature, not `wasm-threads`.
+          TITANIUM_WASM_THREADS: "0"
         run: |
           npm ci
           npm run build:pages
