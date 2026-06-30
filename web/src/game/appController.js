@@ -1,7 +1,7 @@
 import { GameSession } from './gameSession.js';
 import { naiveDistanceEval, parseAlgebraic, isWallAction, QuoridorBoard } from '../lib/gameLogic.js';
 import { decodeReplayCode, encodeReplayFromActions } from '../lib/replayCode.js';
-import { fetchCatSnapshot, indexCatWalls, prewarmCatSnapshot } from '../lib/catHeatmap.js';
+import { fetchCatSnapshot, indexCatWalls, prewarmCatSnapshot, applyVisionTuning, getVisionTuning } from '../lib/catHeatmap.js';
 import { buildLmrViz, fetchLmrSnapshot } from '../lib/lmrHeatmap.js';
 import { toAlgebraic } from '../lib/gameLogic.js';
 import { EngineClient } from '../lib/engineClient.js';
@@ -60,7 +60,6 @@ import {
 const DEFAULT_CAT_VISION_SETTINGS = Object.freeze({
   showSquares: true,
   showWalls: true,
-  showNumbers: false,
   squareOpacity: 1,
   wallOpacity: 1,
 });
@@ -259,6 +258,7 @@ export class AppController {
           playerAiSettingsMemory: persisted.playerAiSettingsMemory ?? [{}, {}],
         }
       : playDefaults;
+    const visionTuning = getVisionTuning();
     this.settings = {
       ...restored,
       rotateBoard: false,
@@ -268,8 +268,9 @@ export class AppController {
       showCatVision: false,
       catVision: { ...DEFAULT_CAT_VISION_SETTINGS },
       showLmrVision: false,
-      lmrVisionShallow: false,
-      lmrAggressiveness: 0.5,
+      lmrVisionShallow: true,
+      pathBiasPercent: visionTuning.pathBiasPercent,
+      lmrAggressionPercent: visionTuning.lmrAggressionPercent,
       showBestMoveHint: true,
       uiMode: 'play',
     };
@@ -296,6 +297,7 @@ export class AppController {
     this._lmrFetchSeq = 0;
     this._lmrShallowKey = null;
     this._lmrShallowDepth = 0;
+    this._lmrDisplayViz = null;
     this.lmrHintDismissed = false;
     this.showLmrHint = false;
 
@@ -321,8 +323,7 @@ export class AppController {
     /** Skip onSessionChange → onChange while applyEngineMove is mid-apply (snapshot not ready). */
     this._suppressSessionNotify = false;
     this._activeSearchSeq = 0;
-    this._undoPaused = false;
-    this._undoPauseTimer = null;
+    this.enginesPaused = false;
     this._playNowLock = false;
     /** Serialize engine commits — concurrent applyEngineMove must not double-apply. */
     this._engineApplyChain = Promise.resolve();
@@ -406,6 +407,7 @@ export class AppController {
       lmrVizError: this.lmrVizError,
       showLmrHint: this.showLmrHint && this.settings.showLmrVision,
       canRedo: snapshot.canRedo,
+      enginesPaused: this.enginesPaused,
       replay: this.replay
         ? {
           index: this.replay.index,
@@ -572,7 +574,7 @@ export class AppController {
     }
     this.handleCatPositionChanged();
     this.onChange?.();
-    if (requestAi && !this.isFreePlayMode()) {
+    if (requestAi && !this.isFreePlayMode() && !this.enginesPaused) {
       this.maybeRequestAiMove();
     }
   }
@@ -899,6 +901,21 @@ export class AppController {
     this.onChange?.();
   }
 
+  toggleEnginesPaused(force) {
+    const next = typeof force === 'boolean' ? force : !this.enginesPaused;
+    if (next === this.enginesPaused) {
+      return;
+    }
+    this.enginesPaused = next;
+    if (this.enginesPaused && this.aiThinking) {
+      this._cancelActiveAiSearch();
+    }
+    this.onChange?.();
+    if (!this.enginesPaused) {
+      this.maybeRequestAiMove();
+    }
+  }
+
   toggleDisplayCoordinates() {
     this.settings.displayCoordinates = !this.settings.displayCoordinates;
     this.onChange?.();
@@ -1033,11 +1050,25 @@ export class AppController {
     }
   }
 
-  /** CAT-LMR aggression ∈ [0,1]: 0 = no reduction, 1 = everything maximally reduced. */
-  setLmrAggressiveness(value) {
-    const v = Math.max(0, Math.min(1, Number(value) || 0));
-    this.settings.lmrAggressiveness = Math.round(v * 20) / 20; // 0.05 steps
-    this.lmrShallowByPosition.clear();
+  /** Disabled legacy CAT path tilt hook. Kept so old settings do not break callers. */
+  setPathBiasPercent(value) {
+    const tuning = applyVisionTuning({ pathBiasPercent: value });
+    this.settings.pathBiasPercent = tuning.pathBiasPercent;
+    this._catMovesKey = null;
+    this._catFetchSeq += 1;
+    if (this.settings.showCatVision) {
+      this.scheduleCatRefresh();
+    }
+    if (this.settings.showLmrVision) {
+      this.scheduleLmrRefresh();
+    }
+    this.onChange?.();
+  }
+
+  /** LMR tuning -500..150% (100 = default CAT/index LMR). Visualization worker only. */
+  setLmrAggressionPercent(value) {
+    const tuning = applyVisionTuning({ lmrAggressionPercent: value });
+    this.settings.lmrAggressionPercent = tuning.lmrAggressionPercent;
     this._lmrShallowKey = null;
     if (this.settings.showLmrVision) {
       this.scheduleLmrRefresh();
@@ -1045,17 +1076,16 @@ export class AppController {
     this.onChange?.();
   }
 
+  /** @deprecated use setLmrAggressionPercent */
+  setLmrAggressiveness(value) {
+    const frac = Math.max(0, Math.min(1, Number(value) || 0));
+    this.setLmrAggressionPercent(Math.round(frac * 100));
+  }
+
   lmrPlanDepthHint() {
-    const posKey = this.lmrPositionKey();
-    const fromSearch =
-      this.liveSearch?.searchDepth ??
-      this.lmrSearchByPosition.get(posKey)?.searchDepth ??
-      this.lmrVizLive?.searchDepth;
-    if (fromSearch != null && fromSearch > 0) {
-      return fromSearch;
-    }
-    const timeSec = this.lmrTimeSecForPosition();
-    return Math.min(12, Math.max(6, Math.round(Math.log2(timeSec) * 2 + 4)));
+    // Fixed visualization budget: idDepth 11 gives a 10-ply child search, so
+    // the LMR tuning slider has one stable meaning independent of live search.
+    return 11;
   }
 
   dismissLmrHint() {
@@ -1145,18 +1175,30 @@ export class AppController {
       return null;
     }
     const posKey = this.lmrPositionKey();
+    let viz = null;
     if (this.settings.lmrVisionShallow) {
-      return this.lmrShallowByPosition.get(posKey) ?? null;
-    }
-    if (
+      viz = this.lmrShallowByPosition.get(posKey) ?? null;
+    } else if (
       this.aiThinking &&
       this.lmrVizLive &&
       this.thinkingPlayerType &&
       isTitaniumEngine(this.thinkingPlayerType, this.engineConfigs)
     ) {
-      return this.lmrVizLive;
+      viz = this.lmrVizLive;
+    } else {
+      viz =
+        this.lmrSearchByPosition.get(posKey) ??
+        this.lmrShallowByPosition.get(posKey) ??
+        null;
     }
-    return this.lmrSearchByPosition.get(posKey) ?? this.lmrShallowByPosition.get(posKey) ?? null;
+    if (viz) {
+      this._lmrDisplayViz = viz;
+      return viz;
+    }
+    if (this.lmrVizLoading && this._lmrDisplayViz) {
+      return this._lmrDisplayViz;
+    }
+    return null;
   }
 
   scheduleLmrRefresh() {
@@ -1170,8 +1212,9 @@ export class AppController {
     const posKey = this.lmrPositionKey();
     const timeSec = this.lmrTimeSecForPosition();
     const idDepth = this.lmrPlanDepthHint();
-    const maxReduction = this.settings.lmrAggressiveness ?? 0.5;
-    const fetchKey = `${posKey}|${timeSec}|d${idDepth}|r${maxReduction}`;
+    const lmrAggressionPercent = this.settings.lmrAggressionPercent ?? -150;
+    const pathBiasPercent = this.settings.pathBiasPercent ?? 0;
+    const fetchKey = `${posKey}|${timeSec}|d${idDepth}|pb${pathBiasPercent}|la${lmrAggressionPercent}`;
     if (fetchKey === this._lmrShallowKey && this.lmrShallowByPosition.has(posKey)) {
       return;
     }
@@ -1184,7 +1227,7 @@ export class AppController {
 
     const moves = this.session.actions.map((action) => toAlgebraic(action));
     try {
-      const data = await fetchLmrSnapshot(moves, timeSec, idDepth, maxReduction);
+      const data = await fetchLmrSnapshot(moves, timeSec, idDepth);
       if (seq !== this._lmrFetchSeq) {
         return;
       }
@@ -1299,12 +1342,14 @@ export class AppController {
     this._catMovesKey = null;
   }
 
-  handleCatPositionChanged() {
+  handleCatPositionChanged({ clearViz = false } = {}) {
     this._catFetchSeq += 1;
     this._catMovesKey = null;
-    this.catViz = null;
+    if (clearViz) {
+      this.catViz = null;
+      this._lmrDisplayViz = null;
+    }
     this.catVizError = null;
-    this.catVizLoading = false;
     this.prewarmCatVision();
     this.scheduleCatRefresh();
     this.scheduleLmrRefresh();
@@ -1354,6 +1399,7 @@ export class AppController {
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
+    this.enginesPaused = false;
     this.liveSearch = null;
     this.destroyAllEngines();
     this.maybeRandomizeTitaniumAdversarySeats();
@@ -1378,6 +1424,8 @@ export class AppController {
     this.eval = { score: 0.5, p1: 0.5, pv: [] };
     this._terminalOverlayDismissed = false;
     this.session.reset();
+    this.catViz = null;
+    this._lmrDisplayViz = null;
     this.handleCatPositionChanged();
     this.onChange?.();
     this.maybeRequestAiMove();
@@ -1468,7 +1516,6 @@ export class AppController {
       if (seq !== this._catFetchSeq) {
         return;
       }
-      this.catViz = null;
       this.catVizError = err.message ?? String(err);
     } finally {
       if (seq === this._catFetchSeq) {
@@ -1594,7 +1641,8 @@ export class AppController {
     }
 
     const freePlay = this.isFreePlayMode();
-    if (!freePlay && !this.session.isHumanTurn(this.settings.players)) {
+    const manualWhilePaused = this.enginesPaused;
+    if (!freePlay && !manualWhilePaused && !this.session.isHumanTurn(this.settings.players)) {
       return;
     }
 
@@ -1606,7 +1654,7 @@ export class AppController {
     this.handleCatPositionChanged();
     this.maybeSubmitFinishedGame();
     this.onChange?.();
-    if (freePlay) {
+    if (freePlay || manualWhilePaused) {
       return;
     }
     this.continueAiAfterEngineSync(action);
@@ -1680,8 +1728,10 @@ export class AppController {
         if (gameGeneration !== this._gameGeneration) {
           return;
         }
-        this.maybeRequestAiMove();
-        this.maybePonderInactiveEngines();
+        if (!this.enginesPaused) {
+          this.maybeRequestAiMove();
+          this.maybePonderInactiveEngines();
+        }
       });
   }
 
@@ -2733,8 +2783,8 @@ export class AppController {
     if (!this.startupConfirmed) {
       return;
     }
-    if (this._undoPaused) {
-      return; // Waiting for undo pause to expire
+    if (this.enginesPaused) {
+      return;
     }
     if (this.replay || this.isFreePlayMode()) {
       this.aiThinking = false;
@@ -3001,42 +3051,10 @@ export class AppController {
   }
 
   /**
-   * Undo the last move(s) and pause AI for 5 seconds.
+   * @deprecated use undo() — kept for callers that expected the old name.
    */
   undoWithPause() {
-    if (this.replay) return;
-    if (this.aiThinking) {
-      this._cancelActiveAiSearch();
-    }
-    if (this._undoPauseTimer) {
-      clearTimeout(this._undoPauseTimer);
-      this._undoPauseTimer = null;
-    }
-    this._undoPaused = true;
-    this._moveRequestSeq += 1;
-    const plies = this._undoPlyCount();
-    let undone = 0;
-    for (let i = 0; i < plies; i++) {
-      if (!this.session.undo()) break;
-      undone++;
-    }
-    if (undone === 0) {
-      this._undoPaused = false;
-      return;
-    }
-    this.liveSearch = null;
-    this.engineErrors = {};
-    for (const engine of this.engines.values()) {
-      engine.resetConnection();
-    }
-    this.onChange && this.onChange();
-    const self = this;
-    this._undoPauseTimer = setTimeout(function() {
-      self._undoPaused = false;
-      self._undoPauseTimer = null;
-      self.onChange && self.onChange();
-      self.maybeRequestAiMove();
-    }, 5000);
+    this.undo();
   }
 
   /**

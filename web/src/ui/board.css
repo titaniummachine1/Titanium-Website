@@ -71,34 +71,94 @@
   overflow: hidden;
 }
 
+.board-flip-btn {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  margin: 6px auto;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #2a2118;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+  z-index: 2;
+}
+
+.board-flip-btn:hover {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.board-flip-btn__icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.quoridor-board.board-vision--refreshing .cat-move-ghost,
+.quoridor-board.board-vision--refreshing .lmr-move-ghost,
+.quoridor-board.board-vision--refreshing .lmr-wall-label-anchor {
+  opacity: 0.72;
+  transition: opacity 0.2s ease;
+}
+
 .board-wall-rack {
   flex-shrink: 0;
   width: 36px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  display: grid;
+  grid-template-rows: 1fr auto 1fr;
+  align-items: center;
   padding: 7% 8px 7% 4px;
   pointer-events: none;
+}
+
+.board-wall-rack__section {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 0;
+  width: 100%;
+}
+
+.board-wall-rack__section--top {
+  justify-content: flex-end;
+  padding-bottom: 2px;
+}
+
+.board-wall-rack__section--bottom {
+  justify-content: flex-start;
+  padding-top: 2px;
 }
 
 .wall-marks {
   display: flex;
   flex-direction: column;
-  justify-content: space-around;
   align-items: center;
-  height: 42%;
+  justify-content: center;
+  gap: 5px;
   width: 100%;
+  height: auto;
   pointer-events: auto;
   cursor: pointer;
 }
 
+.board-wall-rack__section .wall-marks {
+  flex: 0 0 auto;
+}
+
 .wall-marks__slot {
-  height: 5px;
-  width: 70%;
+  height: 4px;
+  width: 72%;
+  flex-shrink: 0;
   border-radius: 3px;
   opacity: 0;
   transition: opacity 0.5s ease;
-  box-shadow: 2px 3px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 1px 2px 2px rgba(0, 0, 0, 0.28);
 }
 
 .wall-marks__slot--available {
@@ -153,6 +213,11 @@
   --ghost-wall-dash: 2 1.5;
   --ghost-wall-ring-p1: #8b5e34;
   --ghost-wall-ring-p2: var(--ghost-ring-p2, #603808);
+  /* Vision 2–20, pawns +4, interaction +4, board overlay +8 (set from JS too). */
+  --vision-z-top: 20;
+  --pawn-z: 24;
+  --pawn-ui-z: 28;
+  --board-overlay-z: 32;
   padding: var(--groove);
   background: transparent;
   grid-template-columns: repeat(8, var(--cell) var(--groove)) var(--cell);
@@ -174,6 +239,11 @@
   border-radius: 3px;
   box-shadow: 1px 2px 2px #9c6644;
   position: relative;
+  z-index: 0;
+}
+
+.quoridor-board .cell.pawn-cell {
+  z-index: var(--pawn-z);
 }
 
 .quoridor-board .cat-path-cell {
@@ -207,12 +277,11 @@
   font-weight: 800;
   line-height: 1;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
-  z-index: 4;
 }
 
 .quoridor-board .cell.hl {
   cursor: pointer;
-  z-index: 3;
+  z-index: var(--pawn-z);
   outline-offset: -2px;
 }
 
@@ -229,8 +298,9 @@
 }
 
 /* Human hover — pawn destination ghost (your move preview). */
-.quoridor-board .cell.human-hover-pawn {
-  z-index: 5;
+.quoridor-board .cell.human-hover-pawn,
+.quoridor-board .cell.ghost-pawn {
+  z-index: var(--pawn-z);
 }
 
 .quoridor-board .cell.human-hover-pawn::before {
@@ -239,7 +309,7 @@
   inset: 10%;
   border-radius: 50%;
   pointer-events: none;
-  z-index: 5;
+  z-index: 1;
   box-shadow: 0 0 10px rgba(0, 0, 0, 0.22);
 }
 
@@ -259,7 +329,7 @@
   inset: 6%;
   border-radius: 50%;
   pointer-events: none;
-  z-index: 6;
+  z-index: 2;
   border: var(--ghost-ring-width) dashed transparent;
   animation: ghost-pawn-ring-spin var(--ghost-pawn-spin-period) linear infinite;
 }
@@ -323,7 +393,7 @@
   inset: var(--ghost-pawn-ring-inset);
   border-radius: 50%;
   pointer-events: none;
-  z-index: 4;
+  z-index: 2;
   border: var(--ghost-ring-width) dashed transparent;
   background: transparent;
   animation: ghost-pawn-ring-spin var(--ghost-pawn-spin-period) linear infinite;
@@ -368,7 +438,7 @@
   position: absolute;
   inset: 4%;
   border-radius: 50%;
-  z-index: 2;
+  z-index: var(--pawn-z);
   box-shadow: 1px 2px 2px #9c6644;
   pointer-events: none;
 }
@@ -383,7 +453,7 @@
 
 .quoridor-board .groove {
   position: relative;
-  z-index: 3;
+  z-index: 2;
 }
 
 .quoridor-board .groove.active {
@@ -411,7 +481,86 @@
   border-radius: 999px;
   background: rgba(210, 28, 28, var(--cat-alpha, 0.4));
   box-shadow: 0 0 10px rgba(210, 28, 28, calc(var(--cat-alpha, 0.4) * 0.7));
+}
+
+.quoridor-board .lmr-move-ghost {
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.quoridor-board .lmr-move-ghost--pawn {
+  font-size: clamp(0.62rem, 2.05cqw, 0.86rem);
+  font-weight: 900;
+  letter-spacing: 0;
+  color: rgba(255, 255, 255, 0.98);
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.82),
+    0 0 3px rgba(0, 0, 0, 0.55);
+}
+
+.quoridor-board .lmr-move-ghost--wall {
+  position: relative;
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);
+}
+
+.quoridor-board .lmr-move-ghost--dead-tail {
+  box-shadow: 0 0 0 2px rgba(220, 38, 72, 0.95), 0 0 12px rgba(220, 38, 72, 0.55);
+}
+
+.quoridor-board .lmr-wall-label-anchor.lmr-move-ghost--dead-tail .lmr-wall-label {
+  background: rgba(127, 18, 42, 0.92);
+  border: 1px solid rgba(255, 200, 210, 0.55);
+}
+
+/* Transparent grid slot matching wall bar geometry — labels only, painted last. */
+.quoridor-board .lmr-wall-label-anchor {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  align-self: stretch;
+  justify-self: stretch;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  pointer-events: none;
+  position: relative;
+}
+
+.quoridor-board .lmr-wall-label {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  min-width: 1.65em;
+  min-height: 1.2em;
+  padding: 0 0.2em;
+  border-radius: 999px;
+  background: rgba(38, 26, 14, 0.72);
+  color: rgba(255, 255, 255, 0.99);
+  font-size: clamp(0.58rem, 1.8cqw, 0.78rem);
+  font-weight: 900;
+  line-height: 1;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.86),
+    0 0 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
   z-index: 1;
+}
+
+.quoridor-board .lmr-wall-label--h {
+  left: 25%;
+  top: 50%;
+  transform: translate(-50%, -50%) scaleY(1.5625);
+}
+
+.quoridor-board .lmr-wall-label--v {
+  left: 50%;
+  top: 25%;
+  transform: translate(-50%, -50%) scaleX(1.5625);
+}
+
+.quoridor-board .lmr-move-ghost--light-text {
+  color: rgba(255, 255, 255, 0.96);
 }
 
 /* Slim the cross-axis so walls read as clean rounded bars, not chunky blocks. */
@@ -438,7 +587,7 @@
 .quoridor-board .wallpiece.preview {
   opacity: 0.92;
   box-sizing: border-box;
-  z-index: 5;
+  z-index: var(--pawn-z);
   pointer-events: none;
 }
 
@@ -475,7 +624,7 @@
   background: transparent;
   overflow: visible;
   transform: none;
-  z-index: 6;
+  z-index: var(--pawn-z);
   pointer-events: none;
 }
 
@@ -528,7 +677,7 @@
   font-size: 1.5rem;
   font-weight: 700;
   border-radius: 12px;
-  z-index: 10;
+  z-index: var(--board-overlay-z);
   pointer-events: auto;
 }
 

@@ -1022,115 +1022,6 @@ body {
   line-height: 1.25;
 }
 
-/* LMR effort dispersion (sidebar) */
-.lmr-dispersion {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.18);
-  max-height: 280px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-height: 0;
-}
-
-.lmr-dispersion__head {
-  flex-shrink: 0;
-}
-
-.lmr-dispersion__title {
-  margin: 0;
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-
-.lmr-dispersion__meta {
-  margin: 2px 0 0;
-  font-size: 0.72rem;
-  color: var(--muted);
-}
-
-.lmr-dispersion__legend,
-.lmr-dispersion__row {
-  display: grid;
-  grid-template-columns: 2.6rem 1fr 2.2rem 1.6rem 1.6rem;
-  gap: 4px;
-  align-items: center;
-  font-family: 'Roboto Mono', monospace;
-  font-size: 0.68rem;
-}
-
-.lmr-dispersion__legend {
-  color: var(--muted);
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border);
-}
-
-.lmr-dispersion__list {
-  overflow-y: auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.lmr-dispersion__move {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.lmr-dispersion__move--wall {
-  color: #c9a227;
-}
-
-.lmr-dispersion__bar-wrap {
-  height: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.lmr-dispersion__bar {
-  height: 100%;
-  background: linear-gradient(90deg, #4a6fa5, #7b6cff);
-  border-radius: 3px;
-  min-width: 2px;
-}
-
-.lmr-dispersion__pct {
-  text-align: right;
-  color: #a8c4ff;
-}
-
-.lmr-dispersion__depth {
-  text-align: center;
-  color: var(--muted);
-}
-
-.lmr-dispersion__depth--cold {
-  color: #6ec9b8;
-}
-
-.lmr-dispersion__depth--hot {
-  color: #ffb347;
-}
-
-.lmr-dispersion__cut {
-  text-align: center;
-  color: #e88a8a;
-}
-
-.lmr-dispersion__hint {
-  margin: 0;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
 .play-panel {
   display: flex;
   flex-direction: column;
@@ -1799,6 +1690,32 @@ body {
   font-weight: 700;
 }
 
+.game-controls__btn--pause {
+  flex: 0 0 44px;
+  min-width: 44px;
+  max-width: 44px;
+  padding: 5px 0;
+  font-size: 0.95rem;
+}
+
+.game-controls__btn--pause-active {
+  border-color: #c9a227;
+  background: rgba(201, 162, 39, 0.18);
+}
+
+.engines-pause-banner,
+.undo-pause-banner {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  text-align: center;
+  color: var(--text-muted, #aaa);
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px solid rgba(201, 162, 39, 0.35);
+}
+
 .cat-vision-controls {
   display: flex;
   flex-wrap: wrap;
@@ -2041,6 +1958,10 @@ body {
   gap: 5px;
 }
 
+.player-dialog__field--compact {
+  gap: 4px;
+}
+
 .player-dialog__field--hidden {
   display: none;
 }
@@ -2086,6 +2007,21 @@ body {
 .player-dialog__preset-group--strength .btn {
   flex: 1 1 3.4rem;
   min-width: 3.4rem;
+}
+
+.player-dialog__preset-group--vision .btn {
+  flex: 1 1 4rem;
+}
+
+.player-dialog__vision-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .player-dialog__options {
@@ -2203,5 +2139,62 @@ body {
   gap: 8px;
   padding: 8px 16px 14px;
   border-top: 1px solid var(--border);
+}
+
+/* Live vision tuning strip (CAT/LMR overlays — local only) */
+.vision-tuning {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.vision-tuning__title {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.vision-tuning__badge {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vision-tuning__hint {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.vision-tuning__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.vision-tuning__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+}
+
+.vision-tuning__slider {
+  width: 100%;
+}
+
+.vision-tuning__warn {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  color: #e08080;
+}
+
+.vision-tuning--refreshing {
+  opacity: 0.88;
+  transition: opacity 0.2s ease;
 }
 

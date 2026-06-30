@@ -1,10 +1,10 @@
 {
   "engine_version": "titanium-v16",
-  "git_commit": "60d7328300aa41619ad13b86933f41f39f3f37f8",
-  "build_timestamp": "2026-06-29T07:25:07.815Z",
-  "wasm_sha256": "c42991ed95fc49993d60ac1658a1dc3a83daaaf5eece0bc85ae9c64a31f6d097",
-  "wasm_bytes": 2918674,
-  "weights_live_sha256": "9fa251571ae5c69d2af9a2959ec3d0dfe19773e6b25835e4ff0a054a3c70b178",
+  "git_commit": "9cd0133f48903fc5be8cba942cd7e8baa64f2f67",
+  "build_timestamp": "2026-06-30T13:31:38.755Z",
+  "wasm_sha256": "59f05a1b99218ebb509cd2951a15c84ae39f2a18ea0b83baa61999df09f05e85",
+  "wasm_bytes": 2951668,
+  "weights_live_sha256": "5da3d457b400ecde52a8cf961002dc80db908f170278f8fa376aa5f37aedbbcd",
   "features": "wasm-threads,embed-tables",
   "wasm_threads": true,
   "engine_dir": "C:\\gitProjects\\Quoridor best AI\\engine"

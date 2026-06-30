@@ -2,6 +2,8 @@
 
 import CatVisionWorker from '../workers/catVisionWorker.js?worker';
 
+const VISION_TUNING_KEY = 'quoridor-vision-tuning-v1';
+
 let wasmCatInitPromise = null;
 let catWorker = null;
 let catWorkerRequestId = 1;
@@ -12,8 +14,117 @@ const catSnapshotCache = new Map();
 const CAT_SNAPSHOT_CACHE_LIMIT = 16;
 const WASM_THREAD_STACK_SIZE = 4 << 20;
 
+export const LMR_AGGRESSION_DEFAULT = -150;
+
+const visionTuning = {
+  pathBiasPercent: 0,
+  lmrAggressionPercent: LMR_AGGRESSION_DEFAULT,
+  generation: 0,
+};
+
+function clampPathBiasPercent(value) {
+  return 0;
+}
+
+function clampLmrAggressionPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return LMR_AGGRESSION_DEFAULT;
+  }
+  return Math.min(150, Math.max(-500, Math.trunc(n)));
+}
+
+function migrateLegacyLmrPercent(saved, fallback = 100) {
+  if (saved?.lmrAggressionPercent != null) {
+    return clampLmrAggressionPercent(saved.lmrAggressionPercent);
+  }
+  if (saved?.lmrAggressiveness != null) {
+    return clampLmrAggressionPercent(fallback);
+  }
+  return clampLmrAggressionPercent(fallback);
+}
+
+export function getVisionTuning() {
+  return { ...visionTuning };
+}
+
+export function loadVisionTuningFromStorage() {
+  try {
+    const raw = localStorage.getItem(VISION_TUNING_KEY);
+    if (!raw) {
+      return visionTuning;
+    }
+    const saved = JSON.parse(raw);
+    visionTuning.pathBiasPercent = clampPathBiasPercent(saved.pathBiasPercent);
+    visionTuning.lmrAggressionPercent = migrateLegacyLmrPercent(saved, LMR_AGGRESSION_DEFAULT);
+  } catch {
+    // keep defaults
+  }
+  return visionTuning;
+}
+
+export function saveVisionTuningToStorage() {
+  try {
+    localStorage.setItem(
+      VISION_TUNING_KEY,
+      JSON.stringify({
+        pathBiasPercent: visionTuning.pathBiasPercent,
+        lmrAggressionPercent: visionTuning.lmrAggressionPercent,
+      }),
+    );
+  } catch {
+    // ignore quota errors
+  }
+}
+
+/** Apply visualization tuning for the CAT vision worker. Path tilt is currently disabled. */
+export function applyVisionTuning(patch = {}, { bumpGeneration = true } = {}) {
+  if (patch.pathBiasPercent != null) {
+    visionTuning.pathBiasPercent = clampPathBiasPercent(patch.pathBiasPercent);
+  }
+  if (patch.lmrAggressionPercent != null) {
+    visionTuning.lmrAggressionPercent = clampLmrAggressionPercent(patch.lmrAggressionPercent);
+  }
+  if (bumpGeneration) {
+    visionTuning.generation += 1;
+  }
+  catSnapshotCache.clear();
+  saveVisionTuningToStorage();
+  void pushVisionConfigToWorker();
+  return { ...visionTuning };
+}
+
 function catMovesKey(algebraicMoves) {
-  return (algebraicMoves ?? []).join('|');
+  return [
+    (algebraicMoves ?? []).join('|'),
+    `pb${visionTuning.pathBiasPercent}`,
+    `la${visionTuning.lmrAggressionPercent}`,
+    `g${visionTuning.generation}`,
+  ].join('|');
+}
+
+async function pushVisionConfigToWorker() {
+  if (!catWorker || catWorkerFailed) {
+    return;
+  }
+  try {
+    await ensureCatWorkerReady();
+    await postCatWorkerMessage(
+      'setConfig',
+      {
+        pathBiasPercent: visionTuning.pathBiasPercent,
+        lmrAggressionPercent: visionTuning.lmrAggressionPercent,
+        generation: visionTuning.generation,
+      },
+      10_000,
+    );
+  } catch {
+    // worker will pick up config on next init
+  }
+}
+
+function isStaleWorkerResponse(data, requestGeneration) {
+  return data?.generation != null && data.generation !== requestGeneration;
 }
 
 function rememberCatSnapshot(key, promise) {
@@ -88,19 +199,45 @@ function ensureCatWorker() {
 function postCatWorkerMessage(op, payload = {}, timeoutMs = 30_000) {
   const worker = ensureCatWorker();
   const id = catWorkerRequestId++;
+  const requestGeneration = visionTuning.generation;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       catWorkerPending.delete(id);
       reject(new Error(`CAT vision worker ${op} timed out`));
     }, timeoutMs);
-    catWorkerPending.set(id, { resolve, reject, timeout });
-    worker.postMessage({ id, op, ...payload });
+    catWorkerPending.set(id, {
+      resolve: (data) => {
+        if (isStaleWorkerResponse(data, requestGeneration)) {
+          reject(new Error('CAT vision worker response stale (config changed)'));
+          return;
+        }
+        resolve(data);
+      },
+      reject,
+      timeout,
+    });
+    worker.postMessage({
+      id,
+      op,
+      pathBiasPercent: visionTuning.pathBiasPercent,
+      lmrAggressionPercent: visionTuning.lmrAggressionPercent,
+      generation: visionTuning.generation,
+      ...payload,
+    });
   });
 }
 
 async function ensureCatWorkerReady() {
   if (!catWorkerReadyPromise) {
-    catWorkerReadyPromise = postCatWorkerMessage('init', {}, 60_000).catch((err) => {
+    catWorkerReadyPromise = postCatWorkerMessage(
+      'init',
+      {
+        pathBiasPercent: visionTuning.pathBiasPercent,
+        lmrAggressionPercent: visionTuning.lmrAggressionPercent,
+        generation: visionTuning.generation,
+      },
+      60_000,
+    ).catch((err) => {
       catWorkerReadyPromise = null;
       throw err;
     });
@@ -115,11 +252,15 @@ async function fetchCatSnapshotFromWorker(algebraicMoves) {
 }
 
 /** LMR plan via the same warm CAT engine (no server needed — works on Pages). */
-export async function fetchLmrFromWorker(algebraicMoves, timeSec = 10, idDepth = 8, maxReduction = 0.5) {
+export async function fetchLmrFromWorker(algebraicMoves, timeSec = 10, idDepth = 8) {
   await ensureCatWorkerReady();
   const result = await postCatWorkerMessage(
     'lmr',
-    { moves: algebraicMoves ?? [], timeMs: Math.round(timeSec * 1000), idDepth, maxExtra: maxReduction },
+    {
+      moves: algebraicMoves ?? [],
+      timeMs: Math.round(timeSec * 1000),
+      idDepth,
+    },
     30_000,
   );
   return result.data;
@@ -314,3 +455,5 @@ export function indexCatWalls(walls) {
 export function catSquareIndex(engineRow, engineCol) {
   return (8 - engineRow) * 9 + engineCol;
 }
+
+loadVisionTuningFromStorage();

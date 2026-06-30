@@ -371,6 +371,10 @@ export class TitaniumWasmEngineClient {
     this.terminateWorkers();
     if (pending.retryParams && this.workerCrashRetries < 1) {
       this.workerCrashRetries += 1;
+      // The threaded search crashed (rayon/SharedArrayBuffer OOM on weaker
+      // devices). Degrade to single-thread for the rest of the session and
+      // retry — multithreading stays "if possible", never a hard crash.
+      this._degradeToSingleThread = true;
       this.setStatus('connecting');
       this.startRequest({ ...pending.retryParams, isFreshGame: false });
       return;
@@ -461,7 +465,9 @@ export class TitaniumWasmEngineClient {
       this.algebraicMoves = moveHistory.map(toAlgebraic);
     }
 
-    this.threads = resolveTitaniumSearchCores(aiSettings);
+    // Multithreading if possible: a prior threaded crash (weaker device /
+    // SharedArrayBuffer limits) sticks the session to single-thread.
+    this.threads = this._degradeToSingleThread ? 1 : resolveTitaniumSearchCores(aiSettings);
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);

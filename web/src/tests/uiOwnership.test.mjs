@@ -41,6 +41,8 @@ console.log('\n[ui] controls bar has no engine settings');
 const controlsSrc = readSrc('ui/gameControls.js');
 assert(!controlsSrc.includes('type="range"'), 'no sliders in controls');
 assert(!controlsSrc.includes('Engine settings'), 'no engine settings label');
+assert(!controlsSrc.includes('data-cat-setting'), 'CAT display settings not in controls');
+assert(!controlsSrc.includes('data-lmr-step'), 'LMR aggressiveness not in controls');
 assert(controlsSrc.includes('Settings'), 'Settings button present');
 
 console.log('\n[ui] unified dialog owns engine-specific controls');
@@ -51,6 +53,10 @@ assert(dialogSrc.includes('renderAceTierControls'), 'ACE tier in dialog');
 assert(dialogSrc.includes('renderRemoteStrengthControls'), 'remote strength in dialog');
 assert(dialogSrc.includes('renderTitaniumNetControls'), 'titanium net in dialog');
 assert(dialogSrc.includes('changePlayers'), 'settings apply via changePlayers');
+assert(dialogSrc.includes('Vision overlay'), 'vision mode in dialog');
+assert(dialogSrc.includes('data-vision-mode'), 'Off/CAT/LMR mode switch in dialog');
+assert(dialogSrc.includes('lmrAggressionPercent'), 'LMR tuning slider in dialog');
+assert(!dialogSrc.includes('CAT path tilt'), 'CAT path tilt slider removed from dialog');
 
 console.log('\n[ui] live setting restart preserved in controller');
 const controllerSrc = readSrc('game/appController.js');

@@ -152,7 +152,7 @@ export class GameSession {
 
     const removed = this.actions[this.actions.length - 1];
     this.futureActions.push(structuredClone(removed));
-    this.rebuildFromActions(this.actions.slice(0, -1));
+    this.rebuildFromActions(this.actions.slice(0, -1), { preserveFuture: true });
     this.notify();
     return true;
   }
@@ -172,7 +172,10 @@ export class GameSession {
     return ok;
   }
 
-  rebuildFromActions(actions) {
+  rebuildFromActions(actions, { preserveFuture = false } = {}) {
+    const savedFuture = preserveFuture
+      ? this.futureActions.map((action) => structuredClone(action))
+      : null;
     this.board = new QuoridorBoard();
     this.actions = [];
     this.wallsByPlayer = [];
@@ -180,7 +183,7 @@ export class GameSession {
     this.isDraw = false;
     this.positionKeys = [this.board.positionKey()];
     this.lastAction = null;
-    this.futureActions = [];
+    this.futureActions = preserveFuture ? savedFuture : [];
 
     for (const action of actions) {
       if (!this.board.isValid(action)) {

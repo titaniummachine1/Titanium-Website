@@ -15,6 +15,7 @@
  */
 
 import { PlayerType, TimeToMove, StrengthLevel } from '../lib/engineConfig.js';
+import { LMR_AGGRESSION_DEFAULT } from '../lib/catHeatmap.js';
 import { getPlayerOptionGroups, getAllEngineConfigs } from '../lib/playerRegistry.js';
 import { playerColorName } from '../lib/playerColors.js';
 import {
@@ -60,16 +61,16 @@ const WALL_CLOCK_MIN        = 0.5;
 const WALL_CLOCK_MAX        = 60;
 const WALL_CLOCK_STEP       = 0.5;
 const CORES_MIN             = 1;
-// CAT-LMR aggression shown as a percent (0 = no reduction, 100 = max). The
-// controller setting is the 0..1 fraction; the dialog works in percent.
-const LMR_AGGRESSIVENESS_MIN = 0;
-const LMR_AGGRESSIVENESS_MAX = 100;
-const LMR_AGGRESSIVENESS_STEP = 5;
+const PATH_BIAS_MIN         = -30;
+const PATH_BIAS_MAX         = 30;
+const PATH_BIAS_STEP        = 1;
+const LMR_AGGRESSION_MIN    = -500;
+const LMR_AGGRESSION_MAX    = 150;
+const LMR_AGGRESSION_STEP   = 1;
 
 const DEFAULT_CAT_VISION = Object.freeze({
   showSquares: true,
   showWalls: true,
-  showNumbers: false,
   squareOpacity: 1,
   wallOpacity: 1,
 });
@@ -241,10 +242,18 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
       ...DEFAULT_CAT_VISION,
       ...(state.settings?.catVision ?? {}),
     },
-    lmrAggressiveness: Math.round(clampNumber(
-      (state.settings?.lmrAggressiveness ?? 0.5) * 100,
-      LMR_AGGRESSIVENESS_MIN,
-      LMR_AGGRESSIVENESS_MAX,
+    pathBiasPercent: Math.trunc(clampNumber(
+      state.settings?.pathBiasPercent ?? 0,
+      PATH_BIAS_MIN,
+      PATH_BIAS_MAX,
+    )),
+    lmrAggressionPercent: Math.trunc(clampNumber(
+      state.settings?.lmrAggressionPercent
+        ?? (state.settings?.lmrAggressiveness != null
+          ? LMR_AGGRESSION_DEFAULT
+          : LMR_AGGRESSION_DEFAULT),
+      LMR_AGGRESSION_MIN,
+      LMR_AGGRESSION_MAX,
     )),
   };
 
@@ -376,6 +385,26 @@ function renderVisionSettings(selections) {
   );
 }
 
+function renderVisionTuningSliders(selections) {
+  const lmrAgg = Math.trunc(clampNumber(
+    selections.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT,
+    LMR_AGGRESSION_MIN,
+    LMR_AGGRESSION_MAX,
+  ));
+  return (
+    renderVisionSlider(
+      'lmrAggressionPercent',
+      'LMR tuning (100% = default)',
+      lmrAgg,
+      LMR_AGGRESSION_MIN,
+      LMR_AGGRESSION_MAX,
+      LMR_AGGRESSION_STEP,
+      `${lmrAgg}%`,
+    ) +
+    '<p class="player-dialog__hint">Visualization only. -500% = absolute max cut, 0% = CAT-shaped max cut, 100% = default CAT/index LMR, 150% = full 10-ply depth.</p>'
+  );
+}
+
 function renderVisionDetail(selections) {
   if (selections.visionMode === 'cat') {
     const catVision = {
@@ -384,6 +413,7 @@ function renderVisionDetail(selections) {
     };
     return (
       '<div class="player-dialog__vision-detail">' +
+        renderVisionTuningSliders(selections) +
         '<label class="player-dialog__option-row">' +
           '<input type="checkbox" data-cat-setting="showSquares"' + (catVision.showSquares ? ' checked' : '') + '>' +
           ' Squares' +
@@ -392,10 +422,6 @@ function renderVisionDetail(selections) {
           '<input type="checkbox" data-cat-setting="showWalls"' + (catVision.showWalls ? ' checked' : '') + '>' +
           ' Walls' +
         '</label>' +
-        '<label class="player-dialog__option-row">' +
-          '<input type="checkbox" data-cat-setting="showNumbers"' + (catVision.showNumbers ? ' checked' : '') + '>' +
-          ' Numbers' +
-        '</label>' +
         renderVisionSlider('squareOpacity', 'Square opacity', catVision.squareOpacity, 0.25, 1.5, 0.05, formatPercent(catVision.squareOpacity)) +
         renderVisionSlider('wallOpacity', 'Wall opacity', catVision.wallOpacity, 0.25, 1.5, 0.05, formatPercent(catVision.wallOpacity)) +
       '</div>'
@@ -403,22 +429,9 @@ function renderVisionDetail(selections) {
   }
 
   if (selections.visionMode === 'lmr') {
-    const aggr = clampNumber(
-      selections.lmrAggressiveness ?? 50,
-      LMR_AGGRESSIVENESS_MIN,
-      LMR_AGGRESSIVENESS_MAX,
-    );
     return (
       '<div class="player-dialog__vision-detail">' +
-        renderVisionSlider(
-          'lmrAggressiveness',
-          'LMR aggression (0 = full depth, 100 = max reduction)',
-          aggr,
-          LMR_AGGRESSIVENESS_MIN,
-          LMR_AGGRESSIVENESS_MAX,
-          LMR_AGGRESSIVENESS_STEP,
-          `${Math.round(aggr)}%`,
-        ) +
+        renderVisionTuningSliders(selections) +
       '</div>'
     );
   }
@@ -644,14 +657,26 @@ function wireVisionDetail(overlay, selections, controller) {
     slider.addEventListener('input', () => {
       const key = slider.dataset.visionSlider;
       const value = Number(slider.value);
-      if (key === 'lmrAggressiveness') {
-        selections.lmrAggressiveness = Math.round(clampNumber(
+      if (key === 'pathBiasPercent') {
+        selections.pathBiasPercent = Math.trunc(clampNumber(
           value,
-          LMR_AGGRESSIVENESS_MIN,
-          LMR_AGGRESSIVENESS_MAX,
+          PATH_BIAS_MIN,
+          PATH_BIAS_MAX,
         ));
+        controller.setPathBiasPercent?.(selections.pathBiasPercent);
+        if (selections.visionMode === 'cat') {
+          controller.setVisionMode?.('cat');
+        } else if (selections.visionMode === 'lmr') {
+          controller.setVisionMode?.('lmr');
+        }
+      } else if (key === 'lmrAggressionPercent') {
+        selections.lmrAggressionPercent = Math.trunc(clampNumber(
+          value,
+          LMR_AGGRESSION_MIN,
+          LMR_AGGRESSION_MAX,
+        ));
+        controller.setLmrAggressionPercent?.(selections.lmrAggressionPercent);
         if (selections.visionMode === 'lmr') {
-          controller.setLmrAggressiveness?.(selections.lmrAggressiveness / 100);
           controller.setVisionMode?.('lmr');
         }
       } else if (key === 'squareOpacity' || key === 'wallOpacity') {
@@ -667,8 +692,14 @@ function wireVisionDetail(overlay, selections, controller) {
       }
       const label = overlay.querySelector('[data-vision-slider-label="' + key + '"]');
       if (label) {
-        label.textContent =
-          key === 'lmrAggressiveness' ? `${Math.round(value)}%` : formatPercent(value);
+        if (key === 'pathBiasPercent') {
+          const v = Math.trunc(clampNumber(value, PATH_BIAS_MIN, PATH_BIAS_MAX));
+          label.textContent = `${v > 0 ? '+' : ''}${v}%`;
+        } else if (key === 'lmrAggressionPercent') {
+          label.textContent = `${Math.trunc(clampNumber(value, LMR_AGGRESSION_MIN, LMR_AGGRESSION_MAX))}%`;
+        } else {
+          label.textContent = formatPercent(value);
+        }
       }
     });
   });
@@ -804,7 +835,8 @@ function applyVisionSettings(selections, controller) {
     ...DEFAULT_CAT_VISION,
     ...(selections.catVision ?? {}),
   });
-  controller.setLmrAggressiveness?.((selections.lmrAggressiveness ?? 50) / 100);
+  controller.setPathBiasPercent?.(selections.pathBiasPercent ?? 0);
+  controller.setLmrAggressionPercent?.(selections.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT);
   controller.setVisionMode?.(mode);
 }
 

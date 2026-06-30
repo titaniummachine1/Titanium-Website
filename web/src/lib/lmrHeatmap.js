@@ -4,20 +4,33 @@ import { fetchLmrFromWorker } from './catHeatmap.js';
 
 /**
  * Pre-search LMR plan via the warm WASM engine (works on static Pages — no
- * server). `maxReduction` caps total visible LMR reduction plies; 0 means none.
+ * server). `lmrAggressionPercent` is LMR tuning: -500 = absolute max cut,
+ * 0 = CAT-shaped max cut, 100 = default, 150 = full depth.
  * @param {string[]} algebraicMoves
  * @param {number} [timeSec]
  * @param {number} [idDepth]
- * @param {number} [maxReduction]
  */
-export async function fetchLmrSnapshot(algebraicMoves, timeSec = 10, idDepth = 8, maxReduction = 0.5) {
-  return fetchLmrFromWorker(algebraicMoves, timeSec, idDepth, maxReduction);
+export async function fetchLmrSnapshot(algebraicMoves, timeSec = 10, idDepth = 8) {
+  return fetchLmrFromWorker(algebraicMoves, timeSec, idDepth);
+}
+
+function num(entry, camel, snake, fallback = 0) {
+  const v = entry[camel] ?? entry[snake];
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function normalizeLmrEntry(entry) {
-  const reduction = Number(entry.reduction ?? 0);
-  const childFull = Number(entry.childDepthFull ?? entry.child_depth_full ?? 0);
-  const childUsed = Number(entry.childDepthUsed ?? entry.child_depth_used ?? childFull);
+  const reduction = num(entry, 'reduction', 'reduction', 0);
+  const childFull = num(entry, 'childDepthFull', 'child_depth_full', 0);
+  const childUsed = num(entry, 'childDepthUsed', 'child_depth_used', childFull);
+  const baselineReduction = num(entry, 'baselineReduction', 'baseline_reduction', 0);
+  const baselineChildUsed = num(
+    entry,
+    'baselineChildDepthUsed',
+    'baseline_child_depth_used',
+    childFull,
+  );
   return {
     move: entry.move ?? entry.mv,
     kind: entry.kind ?? (entry.is_pawn || entry.isPawn ? 'pawn' : 'wall'),
@@ -25,12 +38,21 @@ function normalizeLmrEntry(entry) {
     catCm: entry.catCm ?? entry.cat_cm ?? 0,
     tactical: Boolean(entry.tactical),
     hot: Boolean(entry.hot),
+    cold: Boolean(entry.cold),
+    protected: Boolean(entry.protected),
     pruned: Boolean(entry.pruned),
+    baselineReductionFp: num(entry, 'baselineReductionFp', 'baseline_reduction_fp', 0),
+    baselineReduction,
+    baselineChildDepthFull: num(entry, 'baselineChildDepthFull', 'baseline_child_depth_full', childFull),
+    baselineChildDepthUsed: baselineChildUsed,
+    requestedReductionFp: num(entry, 'requestedReductionFp', 'requested_reduction_fp', 0),
     reduction,
     childDepthFull: childFull,
     childDepthUsed: childUsed,
-    reSearched: Boolean(entry.reSearched ?? entry.re_searched),
+    reductionClamped: Boolean(entry.reductionClamped ?? entry.reduction_clamped),
     inFullWindow: Boolean(entry.inFullWindow ?? entry.in_full_window),
+    attentionRatio: num(entry, 'attentionRatio', 'attention_ratio', 0),
+    deadTail: Boolean(entry.deadTail ?? entry.dead_tail),
     score: entry.score ?? null,
     nodes: Number(entry.nodes ?? 0),
     sharePct: 0,
@@ -59,29 +81,21 @@ export function catHeatFraction(catCm, catMax, coldCm = 60) {
   return Math.min(1, Math.max(0, (h - cold) / (max - cold)));
 }
 
-/** Wall vs pawn CAT ceiling — walls compare to wall hotspots only. */
+/** Max legal-move impact at this node — single denominator for attention. */
 function catHeatRefs(moves) {
   let all = 0;
-  let walls = 0;
-  let pawns = 0;
   for (const m of moves) {
-    const cm = Number(m.catCm) || 0;
-    all = Math.max(all, cm);
-    if (m.kind === 'wall') {
-      walls = Math.max(walls, cm);
-    } else {
-      pawns = Math.max(pawns, cm);
-    }
+    all = Math.max(all, Number(m.catCm) || 0);
   }
-  return { all, walls: Math.max(walls, all), pawns };
+  return { all, walls: all, pawns: all };
 }
 
-function catRefMax(entry, refs) {
-  return entry.kind === 'wall' ? refs.walls : refs.all;
+function catRefMax(_entry, refs) {
+  return refs.all;
 }
 
 /**
- * Effort shares for overlays + dispersion panel.
+ * Effort shares for board overlay coloring.
  * Search: linear node % (truth) + log-scaled bar width (spread).
  * Shallow plan: CAT-shaped planned attention.
  */
@@ -207,9 +221,34 @@ function fmtDepth(used) {
   return d > 0 ? `d${d}` : '';
 }
 
-/** Minimum ply reduction before we paint a slot in live search (shallow is sparser). */
+function formatFp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return '0';
+  }
+  return n < 10 ? n.toFixed(2) : n.toFixed(1);
+}
+
+/** Minimum ply reduction before we paint a slot in live search. */
 function minCutToShow(viz) {
-  return viz?.shallow ? 1 : 2;
+  return viz?.shallow ? 0 : 2;
+}
+
+function requestedCutFp(entry) {
+  return Number(entry?.requestedReductionFp ?? entry?.reduction ?? 0) || 0;
+}
+
+function maxSafeReduction(entry) {
+  const childFull = Number(entry?.childDepthFull ?? entry?.baselineChildDepthFull ?? 0) || 0;
+  return Math.max(1, childFull - 1);
+}
+
+export function lmrCutIntensity(entry) {
+  const requested = requestedCutFp(entry);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, requested / maxSafeReduction(entry)));
 }
 
 /**
@@ -220,13 +259,13 @@ export function lmrEntryWorthShowing(entry, viz) {
   if (!entry) {
     return false;
   }
-  // Engine marks CAT-top moves — always paint in shallow plan.
-  if (viz?.shallow && entry.hot) {
+  if (viz?.shallow) {
     return true;
   }
+  // Engine marks CAT-top moves — always paint in shallow plan.
   // Pierce cap dropout — still paint in shallow when CAT says the wall matters.
   if (entry.pruned) {
-    return Boolean(viz?.shallow && entry.catCm > 0);
+    return false;
   }
   const cold = coldCmThreshold(viz);
   const minCut = minCutToShow(viz);
@@ -236,7 +275,6 @@ export function lmrEntryWorthShowing(entry, viz) {
   }
 
   const displayShare = Number(entry.displaySharePct ?? entry.sharePct) || 0;
-
   // Actually searched at root — always interesting.
   if (!viz?.shallow && entry.searched && (entry.nodes > 0 || displayShare > 0)) {
     return true;
@@ -268,13 +306,7 @@ export function lmrEntryWorthShowing(entry, viz) {
 
   // Pre-search plan slots.
   if (viz?.shallow) {
-    if (entry.reduction >= minCut) {
-      return true;
-    }
-    if (entry.inFullWindow || entry.tactical) {
-      return true;
-    }
-    if (entry.catCm > 0) {
+    if (requestedCutFp(entry) > 0.01 || entry.reduction >= minCut) {
       return true;
     }
     return false;
@@ -329,7 +361,15 @@ function corridorFill(t, alpha = 0.8) {
   };
 }
 
-/** Ply reduction — teal → amber → crimson, scaled to visible max cut. */
+/** Dead CAT tail (≤10% of max legal impact) — maximum reduction zone. */
+function deadTailFill(alpha = 0.9) {
+  return {
+    fill: `hsla(348, 88%, 42%, ${alpha})`,
+    textLight: true,
+  };
+}
+
+/** Ply reduction — teal → amber → crimson, scaled to visible requested cut. */
 function cutFill(t, alpha = 0.82) {
   const hue = Math.round(168 * (1 - t));
   const sat = Math.round(62 + 30 * t);
@@ -383,19 +423,17 @@ export function buildLmrViz(payload) {
   const coldCm = Number(profile.coldCm ?? 60);
   moves = attachEffortShares(moves, coldCm, { shallow });
   const vizDraft = { shallow, searchDepth, lmrProfile: profile };
-  let visibleMoves = shallow ? moves : pickLmrBoardMoves(moves, vizDraft);
-  if (shallow && visibleMoves.length === 0 && moves.length > 0) {
-    visibleMoves = moves.filter((m) => !m.pruned).slice(0, 48);
-  }
-  const dispersion = buildLmrDispersionRows(moves, { shallow, searchDepth });
+  let visibleMoves = pickLmrBoardMoves(moves, vizDraft);
   const moveIndex = indexLmrMoves(visibleMoves);
   const ranges = computeLmrRanges(visibleMoves);
   const catRefs = catHeatRefs(moves);
+  const summary = payload.summary ?? null;
   return {
     source: payload.source ?? 'search',
     shallow,
     idDepth: searchDepth,
     searchDepth,
+    lmrAggressionPercent: payload.lmrTuningPercent ?? payload.lmrAggressionPercent ?? null,
     catRefs,
     coldCm,
     ranges,
@@ -403,11 +441,11 @@ export function buildLmrViz(payload) {
     maxSharePct: ranges.sharePct.max,
     maxReduction: ranges.reduction.max,
     lmrProfile: profile,
+    summary,
     lmrReSearches: payload.lmrReSearches ?? null,
     totalNodes: moves.reduce((s, m) => s + m.nodes, 0),
     searchedCount: moves.filter((m) => m.searched).length,
     visibleCount: visibleMoves.length,
-    dispersion,
     moveIndex,
     moves,
     visibleMoves,
@@ -415,10 +453,12 @@ export function buildLmrViz(payload) {
   };
 }
 
-/** Board slots — searched moves + cold shallow leaves so dispersion is visible on-grid. */
+/** Board slots — shallow LMR renders the full legal plan; search mode stays selective. */
 function pickLmrBoardMoves(moves, viz) {
   if (viz.shallow) {
-    return moves.filter((m) => lmrEntryWorthShowing(m, viz));
+    return moves
+      .filter((m) => lmrEntryWorthShowing(m, viz))
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }
   const searched = moves.filter((m) => m.nodes > 0 || lmrEntryWorthShowing(m, viz));
   const byNodes = [...searched].sort((a, b) => (b.nodes ?? 0) - (a.nodes ?? 0));
@@ -439,44 +479,6 @@ function pickLmrBoardMoves(moves, viz) {
 }
 
 /**
- * Ranked rows for the dispersion panel — full move list, not board-filtered.
- * @returns {Array<{move:string,kind:string,sharePct:number,effortBarPct:number,nodes:number,childDepthUsed:number,reduction:number,catCm:number,searched:boolean}>}
- */
-export function buildLmrDispersionRows(moves, { shallow = false, searchDepth = 1 } = {}) {
-  const sortKey = (m) => {
-    if (!shallow && m.nodes > 0) {
-      return m.nodes;
-    }
-    return (m.effortBarPct ?? m.displaySharePct ?? 0) * 1000 + (m.catCm ?? 0);
-  };
-  return [...(moves ?? [])]
-    .sort((a, b) => sortKey(b) - sortKey(a))
-    .map((m) => ({
-      move: m.move,
-      kind: m.kind,
-      sharePct: m.sharePct ?? m.displaySharePct ?? 0,
-      effortBarPct: m.effortBarPct ?? m.displaySharePct ?? 0,
-      nodes: m.nodes ?? 0,
-      childDepthUsed: m.childDepthUsed ?? 0,
-      childDepthFull: m.childDepthFull ?? 0,
-      reduction: m.reduction ?? 0,
-      catCm: m.catCm ?? 0,
-      searched: m.searched !== false && !m.unsearched,
-      order: m.order ?? 0,
-      reSearched: Boolean(m.reSearched),
-    }))
-    .filter(
-      (m) =>
-        shallow ||
-        m.nodes > 0 ||
-        m.sharePct > 0 ||
-        m.reduction >= 1 ||
-        m.catCm > 0,
-    )
-    .slice(0, shallow ? 40 : 36);
-}
-
-/**
  * @returns {{ fill: string, label: string, mode: string, textLight: boolean }}
  */
 export function lmrDepthStyle(entry, viz) {
@@ -488,24 +490,21 @@ export function lmrDepthStyle(entry, viz) {
   const ranges = viz?.ranges ?? computeLmrRanges([entry]);
   let painted;
   let mode;
-  if (!viz?.shallow && entry.searched && entry.nodes > 0) {
+  if (entry.deadTail) {
+    painted = deadTailFill(alpha);
+    mode = 'dead-tail';
+  } else if (!viz?.shallow && entry.searched && entry.nodes > 0) {
     const share = entry.effortBarPct ?? displayShareOf(entry);
     painted = shareFill(
       proportionalT(share, ranges.sharePct.min, ranges.sharePct.max),
       alpha,
     );
     mode = 'share';
-  } else if (entry.reduction > 0) {
-    painted = cutFill(
-      proportionalT(entry.reduction, ranges.reduction.min, ranges.reduction.max),
-      alpha,
-    );
+  } else if (lmrCutIntensity(entry) > 0) {
+    painted = cutFill(lmrCutIntensity(entry), alpha);
     mode = 'cut';
-  } else if (entry.catCm > 0) {
-    const refMax =
-      entry.kind === 'wall'
-        ? (viz?.catRefs?.walls ?? ranges.catCm.max)
-        : (viz?.catRefs?.all ?? ranges.catCm.max);
+  } else if (!viz?.shallow && entry.catCm > 0) {
+    const refMax = viz?.catRefs?.all ?? ranges.catCm.max;
     const frac =
       entry.heatFraction ?? catHeatFraction(entry.catCm, refMax, viz?.coldCm ?? 60);
     painted = corridorFill(frac, alpha);
@@ -514,10 +513,12 @@ export function lmrDepthStyle(entry, viz) {
     painted = cutFill(0, alpha * 0.75);
     mode = 'full';
   }
-  const label = entry.unsearched
-    ? `plan only · −${entry.reduction} ply${used > 0 ? ` · child d${used}` : ''}`
+  const label = entry.deadTail
+    ? `dead tail ≤10% · leaf (d0)`
+    : entry.unsearched
+    ? `plan only · req ${formatFp(entry.requestedReductionFp)} → −${entry.reduction} ply${used > 0 ? ` · child d${used}` : ''}`
     : entry.reduction > 0
-      ? `LMR cut −${entry.reduction} ply${used > 0 ? ` · searched d${used}` : ''}`
+      ? `LMR cut req ${formatFp(entry.requestedReductionFp)} → −${entry.reduction} ply${used > 0 ? ` · searched d${used}` : ''}`
       : mode === 'share'
         ? `${displayShareOf(entry)}% nodes (log)`
         : entry.catCm > 0
@@ -537,22 +538,21 @@ export function lmrDisplayText(entry, viz) {
   if (!entry || !lmrEntryWorthShowing(entry, viz)) {
     return '';
   }
+  if (entry.deadTail) {
+    return '0';
+  }
+  // Board badges always show planned/searched child depth (0..childDepthFull).
+  const used = Number(entry.childDepthUsed);
+  if (Number.isFinite(used) && (used > 0 || entry.deadTail)) {
+    return String(used);
+  }
+  // Live search overlay: node share when we have no depth label yet.
   if (!viz?.shallow && entry.nodes > 0) {
     const pct = entry.sharePct ?? displayShareOf(entry);
     return pct < 1 ? '<1%' : `${Math.round(pct)}%`;
   }
-  if (!viz?.shallow && entry.planAttentionPct > 0) {
-    return `${entry.planAttentionPct}%`;
-  }
   if (entry.reduction >= 2) {
     return `−${entry.reduction}`;
-  }
-  if (entry.catCm > 0 && viz?.shallow) {
-    return String(entry.catCm);
-  }
-  const depth = fmtDepth(entry.childDepthUsed);
-  if (depth) {
-    return depth;
   }
   if (entry.reduction === 1) {
     return '−1';
@@ -566,11 +566,12 @@ export function lmrSubLabel(entry, viz) {
   }
   const parts = [];
   const depth = fmtDepth(entry.childDepthUsed);
+  if (entry.deadTail) {
+    parts.push('≤10%');
+  }
   if (!viz?.shallow && entry.nodes > 0 && depth) {
     parts.push(depth);
-  } else if (entry.reduction > 0 && entry.catCm > 0) {
-    parts.push(String(entry.catCm));
-  } else if (depth && entry.reduction > 0) {
+  } else if (entry.reduction > 0 && depth) {
     parts.push(depth);
   }
   if (entry.reduction > 0 && !viz?.shallow && entry.nodes > 0) {
@@ -580,15 +581,4 @@ export function lmrSubLabel(entry, viz) {
     parts.push('↺');
   }
   return parts.join(' ');
-}
-
-/** 0–100 for bottom effort bar on board cells. */
-export function lmrEffortBarPct(entry, viz) {
-  if (!entry) {
-    return 0;
-  }
-  if (!viz?.shallow && entry.nodes > 0) {
-    return entry.effortBarPct ?? entry.displaySharePct ?? 0;
-  }
-  return entry.effortBarPct ?? entry.displaySharePct ?? 0;
 }

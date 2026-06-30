@@ -2,7 +2,7 @@
  * Compact controls bar and notation bar beneath the board.
  *
  * Controls:
- *   New game | Undo | Flip board | Copy notation | Load notation | Change players
+ *   ← Undo | New game | ⏸ Pause | Logs | Load | Settings | Redo →
  *
  * Notation bar:
  *   Scrollable move list + error display.
@@ -23,80 +23,28 @@ function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const PAUSE_ICON = '⏸';
+const PLAY_ICON = '▶';
+
 export function renderGameControls(container, state, controller) {
   const canUndo = state.actions.length > 0;
   const canRedo = !!state.canRedo;
-  const undoPaused = controller._undoPaused ?? false;
-  const catActive = state.settings?.showCatVision;
-  const lmrActive = state.settings?.showLmrVision;
-  const lmrAggr = Number(state.settings?.lmrAggressiveness ?? 3.0);
-  const catVision = {
-    showSquares: true,
-    showWalls: true,
-    showNumbers: false,
-    squareOpacity: 1,
-    wallOpacity: 1,
-    ...(state.settings?.catVision ?? {}),
-  };
+  const paused = !!state.enginesPaused;
 
   container.innerHTML = `
     <div class="game-controls">
       <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="undo" ${canUndo ? '' : 'disabled'} title="Undo last move (Left Arrow)" aria-label="Undo last move">←</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="new-game" title="Start a new game">New game</button>
-      <button type="button" class="btn btn--small game-controls__btn" data-action="flip" title="Flip board orientation">Flip</button>
-      <button type="button" class="btn btn--small game-controls__btn${catActive ? ' is-active' : ''}" data-action="cat-vision" title="Show legal move-order relevance ghosts">CAT vision</button>
+      <button type="button" class="btn btn--small game-controls__btn game-controls__btn--pause${paused ? ' game-controls__btn--pause-active' : ''}" data-action="pause" title="${paused ? 'Resume engines (Space)' : 'Pause engines (Space)'}" aria-label="${paused ? 'Resume engines' : 'Pause engines'}" aria-pressed="${paused ? 'true' : 'false'}">${paused ? PLAY_ICON : PAUSE_ICON}</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="logs" title="Show AI thinking log for last move">Logs</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="load-notation" title="Load game from notation">Load</button>
       <button type="button" class="btn btn--small game-controls__btn" data-action="change-players" title="Change players and engine settings">Settings</button>
       <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="redo" ${canRedo ? '' : 'disabled'} title="Redo next move (Right Arrow)" aria-label="Redo next move">→</button>
     </div>
-    ${catActive ? renderCatVisionControls(catVision) : ''}
-    ${lmrActive ? renderLmrControls(lmrAggr) : ''}
-    ${undoPaused ? '<div class="undo-pause-banner">Engine paused after undo — resuming shortly…</div>' : ''}
+    ${paused ? '<div class="engines-pause-banner">Engines paused — make moves manually, or press Space / ▶ to resume</div>' : ''}
   `;
 
   wireControls(container, state, controller);
-}
-
-function renderCatVisionControls(catVision) {
-  return `
-    <div class="cat-vision-controls" aria-label="CAT vision display settings">
-      <label class="cat-vision-controls__check">
-        <input type="checkbox" data-cat-setting="showSquares" ${catVision.showSquares ? 'checked' : ''}>
-        Squares
-      </label>
-      <label class="cat-vision-controls__check">
-        <input type="checkbox" data-cat-setting="showWalls" ${catVision.showWalls ? 'checked' : ''}>
-        Walls
-      </label>
-      <label class="cat-vision-controls__check">
-        <input type="checkbox" data-cat-setting="showNumbers" ${catVision.showNumbers ? 'checked' : ''}>
-        Numbers
-      </label>
-      <div class="cat-vision-controls__stepper" aria-label="Square heat opacity">
-        <span>Squares ${Math.round(catVision.squareOpacity * 100)}%</span>
-        <button type="button" data-cat-step="squareOpacity" data-cat-delta="-0.1">-</button>
-        <button type="button" data-cat-step="squareOpacity" data-cat-delta="0.1">+</button>
-      </div>
-      <div class="cat-vision-controls__stepper" aria-label="Wall heat opacity">
-        <span>Walls ${Math.round(catVision.wallOpacity * 100)}%</span>
-        <button type="button" data-cat-step="wallOpacity" data-cat-delta="-0.1">-</button>
-        <button type="button" data-cat-step="wallOpacity" data-cat-delta="0.1">+</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderLmrControls(aggr) {
-  return `
-    <div class="cat-vision-controls" aria-label="LMR vision settings">
-      <div class="cat-vision-controls__stepper" aria-label="CAT-LMR aggressiveness">
-        <span>LMR aggressiveness ${Number(aggr).toFixed(1)}</span>
-        <button type="button" data-lmr-step data-lmr-delta="-0.5" title="Less pruning">-</button>
-        <button type="button" data-lmr-step data-lmr-delta="0.5" title="More pruning">+</button>
-      </div>
-    </div>
-  `;
 }
 
 function wireControls(container, state, controller) {
@@ -105,19 +53,15 @@ function wireControls(container, state, controller) {
   });
 
   container.querySelector('[data-action="undo"]')?.addEventListener('click', () => {
-    controller.undoWithPause?.();
+    controller.undo?.();
   });
 
   container.querySelector('[data-action="redo"]')?.addEventListener('click', () => {
     controller.redo?.();
   });
 
-  container.querySelector('[data-action="flip"]')?.addEventListener('click', () => {
-    controller.toggleRotateBoard?.();
-  });
-
-  container.querySelector('[data-action="cat-vision"]')?.addEventListener('click', () => {
-    controller.toggleCatVision?.();
+  container.querySelector('[data-action="pause"]')?.addEventListener('click', () => {
+    controller.toggleEnginesPaused?.();
   });
 
   container.querySelector('[data-action="logs"]')?.addEventListener('click', () => {
@@ -132,35 +76,6 @@ function wireControls(container, state, controller) {
     openPlayerDialog(controller.getState(), controller, { mode: 'settings' });
   });
 
-  container.querySelectorAll('[data-cat-setting]').forEach((input) => {
-    const update = (event) => {
-      const target = event.currentTarget;
-      const key = target.dataset.catSetting;
-      const value = target.type === 'checkbox' ? target.checked : Number(target.value);
-      controller.updateCatVisionSettings?.({ [key]: value });
-    };
-    input.addEventListener('input', update);
-    input.addEventListener('change', update);
-  });
-
-  container.querySelectorAll('[data-cat-step]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      const target = event.currentTarget;
-      const key = target.dataset.catStep;
-      const current = Number(state.settings?.catVision?.[key] ?? 1);
-      const delta = Number(target.dataset.catDelta ?? 0);
-      const value = Math.min(1.5, Math.max(0.25, Math.round((current + delta) * 10) / 10));
-      controller.updateCatVisionSettings?.({ [key]: value });
-    });
-  });
-
-  container.querySelectorAll('[data-lmr-step]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      const delta = Number(event.currentTarget.dataset.lmrDelta ?? 0);
-      const current = Number(state.settings?.lmrAggressiveness ?? 3.0);
-      controller.setLmrAggressiveness?.(current + delta);
-    });
-  });
 }
 
 function formatGameLogHeader(state) {

@@ -12,6 +12,11 @@ import {
   catWallOverlay,
 } from '../lib/catHeatmap.js';
 import {
+  lmrCutIntensity,
+  lmrDepthStyle,
+  lmrDisplayText,
+} from '../lib/lmrHeatmap.js';
+import {
   viewMove,
   wallSlotsFromBoard,
   engineMoveToAlgebraic,
@@ -22,7 +27,6 @@ import {
   applyGridPos,
   cellIndexFromGrid,
   wallGridFromSlot,
-  gridFromCellIndex,
 } from '../lib/aceBoardGrid.js';
 import './board.css';
 
@@ -128,12 +132,13 @@ function humanSideClass(playerToMove) {
 
 function canHumanInteract(state, controller) {
   const freePlay = state.uiMode === 'analysis';
+  const manualWhilePaused = !!state.enginesPaused;
   return (
     !state.winner &&
     !state.isDraw &&
     !state.aiThinking &&
     state.uiMode !== 'replay' &&
-    (freePlay || controller.session.isHumanTurn(state.settings.players))
+    (freePlay || manualWhilePaused || controller.session.isHumanTurn(state.settings.players))
   );
 }
 
@@ -150,6 +155,14 @@ function clearHumanHover(dom) {
   dom.previewEl = null;
 }
 
+function elevatePreviewCell(cell, dom) {
+  if (!cell) {
+    return;
+  }
+  cell.style.zIndex = String(dom.pawnZ ?? PAWN_Z);
+  dom._visionZCells?.delete(cell);
+}
+
 function setHumanPawnHover(dom, cell, playerToMove) {
   if (dom._hoverPawnCell === cell) {
     return;
@@ -157,6 +170,7 @@ function setHumanPawnHover(dom, cell, playerToMove) {
   clearHumanHover(dom);
   const side = humanSideClass(playerToMove);
   cell.classList.add('human-hover-pawn', `human-hover-pawn--${side}`);
+  elevatePreviewCell(cell, dom);
   dom._hoverPawnCell = cell;
 }
 
@@ -212,17 +226,130 @@ function updateHumanMoveHover(ev, state, dom, controller) {
 function clearCatVision(dom) {
   dom.catEls?.forEach((el) => el.remove());
   dom.catEls = [];
+  resetVisionCellZIndex(dom);
+}
+
+function catVizFingerprint(viz) {
+  if (!viz) {
+    return '';
+  }
+  const wallKeys = [...(viz.wallIndex?.keys?.() ?? [])].sort().join(',');
+  const squareSum = (viz.squares ?? []).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  return `${viz.hotCm}|${viz.coldCm}|${squareSum}|${wallKeys}`;
+}
+
+function lmrVizFingerprint(viz) {
+  if (!viz) {
+    return '';
+  }
+  return (viz.moves ?? [])
+    .map((m) => `${m.move}:${m.catCm}:${m.reduction}:${m.childDepthUsed}`)
+    .join('|');
 }
 
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, Number(value) || 0));
 }
 
+const VISION_Z_MIN = 2;
+const VISION_Z_MAX = 19;
+const VISION_Z_LABEL_BOOST = 1;
+const VISION_Z_TOP = VISION_Z_MAX + VISION_Z_LABEL_BOOST;
+const PAWN_Z_ABOVE_VISION = 4;
+const PAWN_Z = VISION_Z_TOP + PAWN_Z_ABOVE_VISION;
+const PAWN_UI_Z = PAWN_Z + 4;
+const BOARD_OVERLAY_Z = PAWN_Z + 8;
+
+function applyBoardStackOrder(boardEl) {
+  if (!boardEl) {
+    return;
+  }
+  boardEl.style.setProperty('--vision-z-top', String(VISION_Z_TOP));
+  boardEl.style.setProperty('--pawn-z', String(PAWN_Z));
+  boardEl.style.setProperty('--pawn-ui-z', String(PAWN_UI_Z));
+  boardEl.style.setProperty('--board-overlay-z', String(BOARD_OVERLAY_Z));
+}
+
+/** Map priority (depth / heat) into a stacking band so larger values paint on top. */
+function visionStackZ(priority, maxPriority) {
+  const max = Math.max(1, Number(maxPriority) || 1);
+  const p = Math.max(0, Number(priority) || 0);
+  if (p <= 0) {
+    return VISION_Z_MIN;
+  }
+  const t = Math.min(1, p / max);
+  return Math.round(VISION_Z_MIN + t * (VISION_Z_MAX - VISION_Z_MIN));
+}
+
+function trackVisionCellZ(dom, cell, priority, maxPriority) {
+  if (!cell) {
+    return;
+  }
+  cell.style.zIndex = String(visionStackZ(priority, maxPriority));
+  if (!dom._visionZCells) {
+    dom._visionZCells = new Set();
+  }
+  dom._visionZCells.add(cell);
+}
+
+function resetVisionCellZIndex(dom) {
+  for (const cell of dom._visionZCells ?? []) {
+    if (cell.classList.contains('pawn-cell')) {
+      continue;
+    }
+    cell.style.zIndex = '';
+  }
+  dom._visionZCells = new Set();
+}
+
+function applyPieceLayerStacking(dom, pawnViewCells) {
+  const pawnSet = new Set(pawnViewCells);
+  const pawnZ = String(dom.pawnZ ?? PAWN_Z);
+  for (let i = 0; i < (dom.cellEls?.length ?? 0); i++) {
+    const cell = dom.cellEls[i];
+    if (!cell) {
+      continue;
+    }
+    const isPawnHome = pawnSet.has(i);
+    cell.classList.toggle('pawn-cell', isPawnHome);
+    const elevate =
+      isPawnHome ||
+      cell.classList.contains('hl') ||
+      cell.classList.contains('ghost-pawn') ||
+      cell.classList.contains('human-hover-pawn');
+    if (elevate) {
+      cell.style.zIndex = pawnZ;
+      dom._visionZCells?.delete(cell);
+    }
+  }
+  for (const pawnEl of dom.pawnEls ?? []) {
+    pawnEl.style.zIndex = pawnZ;
+  }
+  if (dom._ghostWallEl) {
+    dom._ghostWallEl.style.zIndex = pawnZ;
+  }
+  if (dom.previewEl) {
+    dom.previewEl.style.zIndex = pawnZ;
+  }
+}
+
+function lmrEntryDepth(entry) {
+  const used = Number(entry?.childDepthUsed);
+  if (Number.isFinite(used) && (used > 0 || entry?.deadTail)) {
+    return used;
+  }
+  return Number(entry?.childDepthFull ?? 0) || 0;
+}
+
+function catHeatLabel(heat) {
+  const n = Number(heat) || 0;
+  return n > 0 ? String(Math.round(n)) : '';
+}
+
 function resolveCatVisualSettings(state) {
   return {
     showSquares: true,
     showWalls: true,
-    showNumbers: false,
     squareOpacity: 1,
     wallOpacity: 1,
     ...(state.settings?.catVision ?? {}),
@@ -251,7 +378,7 @@ function catPaintScale(values, fallback = {}) {
   };
 }
 
-function addCatWallHeat(dom, boardEl, type, viewSlot, entry, scale, visual) {
+function addCatWallBar(dom, boardEl, type, viewSlot, entry, scale, visual, maxHeat) {
   const el = document.createElement('div');
   el.className = 'cat-move-ghost cat-move-ghost--wall ' + (type === 0 ? 'wallpiece--h' : 'wallpiece--v');
   const heat = Number(entry.heat) || 0;
@@ -262,7 +389,7 @@ function addCatWallHeat(dom, boardEl, type, viewSlot, entry, scale, visual) {
   el.style.background = wallStyle.fill;
   el.style.boxShadow = `0 0 10px ${wallStyle.glow}`;
   el.style.borderColor = wallStyle.fill;
-  el.textContent = visual.showNumbers && heat > 0 ? String(Math.round(heat)) : '';
+  el.style.zIndex = String(visionStackZ(heat, maxHeat));
   const direct = Number(entry.directHeat ?? heat) || 0;
   const counter = Math.max(0, heat - direct);
   const detail = counter > 0 ? ` · counter +${Math.round(counter)}cm` : '';
@@ -273,11 +400,72 @@ function addCatWallHeat(dom, boardEl, type, viewSlot, entry, scale, visual) {
   dom.catEls.push(el);
 }
 
-function renderCatVision(dom, state) {
-  clearCatVision(dom);
-  if (!state.settings?.showCatVision || state.winner || state.isDraw || !state.catViz) {
+function addCatSquareHeat(dom, engineCell, heat, overlay, squareOpacity, isFlipped, maxHeat) {
+  const viewCell = viewMove(engineCell, isFlipped);
+  const cell = dom.cellEls[viewCell];
+  if (!cell) {
     return;
   }
+  const label = catHeatLabel(heat);
+  const el = document.createElement('div');
+  el.className =
+    'cat-move-ghost cat-move-ghost--pawn lmr-move-ghost lmr-move-ghost--pawn cat-vision-ghost cat-vision-ghost--pawn';
+  el.style.background = overlay.fill;
+  el.style.opacity = String(clampNumber(overlay.opacity * squareOpacity, 0.05, 1));
+  el.style.zIndex = String(visionStackZ(heat, maxHeat));
+  el.textContent = label;
+  el.title = `${heat}cm`;
+  cell.appendChild(el);
+  dom.catEls.push(el);
+  trackVisionCellZ(dom, cell, heat, maxHeat);
+}
+
+/** Same second-pass label anchors as LMR wall depth badges. */
+function addVisionWallLabel(dom, boardEl, type, viewSlot, text, priority, maxPriority) {
+  if (!text) {
+    return;
+  }
+  const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
+  const anchor = document.createElement('div');
+  anchor.className =
+    'lmr-wall-label-anchor ' + (type === 0 ? 'wallpiece--h' : 'wallpiece--v');
+  anchor.style.zIndex = String(visionStackZ(priority, maxPriority) + VISION_Z_LABEL_BOOST);
+  const label = document.createElement('span');
+  label.className = 'lmr-wall-label ' + (type === 0 ? 'lmr-wall-label--h' : 'lmr-wall-label--v');
+  label.textContent = text;
+  anchor.appendChild(label);
+  applyGridPos(anchor, gr, gc, rowSpan, colSpan);
+  boardEl.appendChild(anchor);
+  dom.catEls.push(anchor);
+}
+
+function renderCatVision(dom, state) {
+  const fp = catVizFingerprint(state.catViz);
+  const loading = !!state.catVizLoading;
+  dom.root?.classList.toggle('board-vision--refreshing', loading && !!dom._catVizFp);
+  if (!state.settings?.showCatVision || state.winner || state.isDraw) {
+    if (dom._catVizFp) {
+      clearCatVision(dom);
+      dom._catVizFp = '';
+    }
+    dom.root?.classList.remove('board-vision--refreshing');
+    return;
+  }
+  if (!state.catViz) {
+    if (loading && dom._catVizFp) {
+      return;
+    }
+    if (dom._catVizFp) {
+      clearCatVision(dom);
+      dom._catVizFp = '';
+    }
+    return;
+  }
+  if (dom._catVizFp === fp) {
+    return;
+  }
+  dom._catVizFp = fp;
+  clearCatVision(dom);
   const viz = state.catViz;
   const visual = resolveCatVisualSettings(state);
   const squareScale = catPaintScale(viz.squares, viz);
@@ -288,8 +476,9 @@ function renderCatVision(dom, state) {
   const isFlipped = state.settings.rotateBoard;
   const boardEl = dom.root;
 
+  let maxSquareHeat = 0;
+  const squareEntries = [];
   if (visual.showSquares) {
-    const squareOpacity = clampNumber(visual.squareOpacity, 0.05, 1.5);
     for (let engineCell = 0; engineCell < 81; engineCell++) {
       const row = (engineCell / 9) | 0;
       const col = engineCell % 9;
@@ -300,20 +489,18 @@ function renderCatVision(dom, state) {
       if (!overlay) {
         continue;
       }
-      const viewCell = viewMove(engineCell, isFlipped);
-      const cell = dom.cellEls[viewCell];
-      if (!cell) continue;
-      const el = document.createElement('div');
-      el.className = 'cat-path-cell';
-      el.style.background = overlay.fill;
-      el.style.opacity = String(clampNumber(overlay.opacity * squareOpacity, 0.05, 1));
-      el.title = `${heat}cm`;
-      cell.appendChild(el);
-      dom.catEls.push(el);
+      maxSquareHeat = Math.max(maxSquareHeat, heat);
+      squareEntries.push({ engineCell, heat, overlay });
+    }
+    squareEntries.sort((a, b) => a.heat - b.heat);
+    const squareOpacity = clampNumber(visual.squareOpacity, 0.05, 1.5);
+    for (const { engineCell, heat, overlay } of squareEntries) {
+      addCatSquareHeat(dom, engineCell, heat, overlay, squareOpacity, isFlipped, maxSquareHeat);
     }
   }
 
   if (visual.showWalls) {
+    const wallEntries = [];
     for (const [alg, entry] of viz.wallIndex ?? []) {
       const heat = Number(entry.heat) || 0;
       if (heat <= 0) {
@@ -325,8 +512,172 @@ function renderCatVision(dom, state) {
       }
       const type = move < 200 ? 0 : 1;
       const viewSlot = viewMove(move, isFlipped) % 100;
-      addCatWallHeat(dom, boardEl, type, viewSlot, entry, wallScale, visual);
+      wallEntries.push({ type, viewSlot, entry, heat });
     }
+    const maxWallHeat = wallEntries.reduce((max, w) => Math.max(max, w.heat), 0);
+    wallEntries.sort((a, b) => a.heat - b.heat);
+    for (const { type, viewSlot, entry, heat } of wallEntries) {
+      addCatWallBar(dom, boardEl, type, viewSlot, entry, wallScale, visual, maxWallHeat);
+    }
+    for (const { type, viewSlot, heat } of wallEntries) {
+      addVisionWallLabel(dom, boardEl, type, viewSlot, catHeatLabel(heat), heat, maxWallHeat);
+    }
+  }
+}
+
+function lmrDepthLabel(entry) {
+  const used = Number(entry?.childDepthUsed);
+  if (!Number.isFinite(used)) {
+    return '';
+  }
+  if (used === 0 && (entry?.deadTail || entry?.reduction > 0)) {
+    return '0';
+  }
+  return used > 0 ? String(used) : '';
+}
+
+function addLmrPawnHeat(dom, engineMove, entry, isFlipped, viz, maxDepth) {
+  const viewCell = viewMove(engineMove, isFlipped);
+  const cell = dom.cellEls[viewCell];
+  if (!cell) {
+    return;
+  }
+  const depth = lmrEntryDepth(entry);
+  const style = lmrDepthStyle(entry, viz);
+  const depthLabel = lmrDepthLabel(entry) || lmrDisplayText(entry, viz);
+  const el = document.createElement('div');
+  el.className = 'cat-move-ghost cat-move-ghost--pawn lmr-move-ghost lmr-move-ghost--pawn';
+  el.style.background = style.fill;
+  el.classList.toggle('lmr-move-ghost--light-text', style.textLight);
+  el.classList.toggle('lmr-move-ghost--dead-tail', style.mode === 'dead-tail');
+  el.style.zIndex = String(visionStackZ(depth, maxDepth));
+  el.textContent = depthLabel;
+  el.title = `${entry.move}: child d${depthLabel} (req cut ${Number(entry.requestedReductionFp ?? 0).toFixed(2)} ply, effective −${entry.reduction}, full ${entry.childDepthFull})`;
+  cell.appendChild(el);
+  dom.catEls.push(el);
+  trackVisionCellZ(dom, cell, depth, maxDepth);
+}
+
+function addLmrWallBar(dom, boardEl, type, viewSlot, entry, viz, maxDepth) {
+  const depth = lmrEntryDepth(entry);
+  const style = lmrDepthStyle(entry, viz);
+  const depthLabel = lmrDepthLabel(entry) || lmrDisplayText(entry, viz);
+  const el = document.createElement('div');
+  el.className = 'cat-move-ghost cat-move-ghost--wall lmr-move-ghost lmr-move-ghost--wall ' + (type === 0 ? 'wallpiece--h' : 'wallpiece--v');
+  el.style.background = style.fill;
+  el.style.borderColor = style.fill;
+  el.classList.toggle('lmr-move-ghost--dead-tail', style.mode === 'dead-tail');
+  el.style.zIndex = String(visionStackZ(depth, maxDepth));
+  el.title = `${entry.move}: child d${depthLabel} (req cut ${Number(entry.requestedReductionFp ?? 0).toFixed(2)} ply, effective −${entry.reduction}, full ${entry.childDepthFull})`;
+  const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
+  applyGridPos(el, gr, gc, rowSpan, colSpan);
+  boardEl.appendChild(el);
+  dom.catEls.push(el);
+}
+
+/** Second pass: same slot/offset as wall bar, labels only — z above same-depth bar. */
+function addLmrWallLabel(dom, boardEl, type, viewSlot, entry, viz, maxDepth) {
+  const depthLabel = lmrDepthLabel(entry) || lmrDisplayText(entry, viz);
+  if (!depthLabel) {
+    return;
+  }
+  const style = lmrDepthStyle(entry, viz);
+  const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
+  const anchor = document.createElement('div');
+  anchor.className =
+    'lmr-wall-label-anchor ' +
+    (type === 0 ? 'wallpiece--h' : 'wallpiece--v') +
+    (style.mode === 'dead-tail' ? ' lmr-move-ghost--dead-tail' : '');
+  anchor.style.zIndex = String(visionStackZ(lmrEntryDepth(entry), maxDepth) + VISION_Z_LABEL_BOOST);
+  const label = document.createElement('span');
+  label.className = 'lmr-wall-label ' + (type === 0 ? 'lmr-wall-label--h' : 'lmr-wall-label--v');
+  label.textContent = depthLabel;
+  anchor.appendChild(label);
+  applyGridPos(anchor, gr, gc, rowSpan, colSpan);
+  boardEl.appendChild(anchor);
+  dom.catEls.push(anchor);
+}
+
+function clearLmrVision(dom) {
+  dom.catEls?.forEach((el) => {
+    if (
+      el.classList.contains('lmr-move-ghost') ||
+      el.classList.contains('lmr-wall-label-anchor')
+    ) {
+      el.remove();
+    }
+  });
+  dom.catEls = (dom.catEls ?? []).filter(
+    (el) =>
+      !el.classList.contains('lmr-move-ghost') &&
+      !el.classList.contains('lmr-wall-label-anchor'),
+  );
+  resetVisionCellZIndex(dom);
+}
+
+function renderLmrVision(dom, state) {
+  const fp = lmrVizFingerprint(state.lmrViz);
+  const loading = !!state.lmrVizLoading;
+  if (state.settings?.showLmrVision) {
+    dom.root?.classList.toggle('board-vision--refreshing', loading && !!dom._lmrVizFp);
+  }
+  if (!state.settings?.showLmrVision || state.winner || state.isDraw) {
+    if (dom._lmrVizFp) {
+      clearLmrVision(dom);
+      dom._lmrVizFp = '';
+    }
+    dom.root?.classList.remove('board-vision--refreshing');
+    return;
+  }
+  if (!state.lmrViz) {
+    if (loading && dom._lmrVizFp) {
+      return;
+    }
+    if (dom._lmrVizFp) {
+      clearLmrVision(dom);
+      dom._lmrVizFp = '';
+    }
+    return;
+  }
+  if (dom._lmrVizFp === fp) {
+    return;
+  }
+  dom._lmrVizFp = fp;
+  clearLmrVision(dom);
+  const viz = state.lmrViz;
+  const isFlipped = state.settings.rotateBoard;
+  const boardEl = dom.root;
+  const sourceMoves = viz.visibleMoves?.length ? viz.visibleMoves : [];
+  const pawnEntries = [];
+  const wallEntries = [];
+  for (const entry of sourceMoves ?? []) {
+    if (!entry?.move) {
+      continue;
+    }
+    const move = algebraicToEngineMove(entry.move);
+    if (move < 100) {
+      pawnEntries.push({ entry, move });
+      continue;
+    }
+    const type = move < 200 ? 0 : 1;
+    const viewSlot = viewMove(move, isFlipped) % 100;
+    wallEntries.push({ entry, type, viewSlot });
+  }
+  const maxDepth = Math.max(
+    1,
+    ...pawnEntries.map(({ entry }) => lmrEntryDepth(entry)),
+    ...wallEntries.map(({ entry }) => lmrEntryDepth(entry)),
+  );
+  pawnEntries.sort((a, b) => lmrEntryDepth(a.entry) - lmrEntryDepth(b.entry));
+  wallEntries.sort((a, b) => lmrEntryDepth(a.entry) - lmrEntryDepth(b.entry));
+  for (const { entry, move } of pawnEntries) {
+    addLmrPawnHeat(dom, move, entry, isFlipped, viz, maxDepth);
+  }
+  for (const { entry, type, viewSlot } of wallEntries) {
+    addLmrWallBar(dom, boardEl, type, viewSlot, entry, viz, maxDepth);
+  }
+  for (const { entry, type, viewSlot } of wallEntries) {
+    addLmrWallLabel(dom, boardEl, type, viewSlot, entry, viz, maxDepth);
   }
 }
 
@@ -345,6 +696,9 @@ function addWallElement(boardEl, type, viewSlot, { preview, bad, ghost, owner })
     inner.className = 'ghost-pv-inner';
     inner.appendChild(createGhostWallRing(type === 0));
     el.appendChild(inner);
+  }
+  if (preview || ghost) {
+    el.style.zIndex = String(PAWN_Z);
   }
   boardEl.appendChild(el);
   return el;
@@ -397,6 +751,7 @@ function pickWallSlot(gtype, r, c, ev, el, board, isFlipped) {
 }
 
 function buildBoardDom(boardEl) {
+  applyBoardStackOrder(boardEl);
   const cellEls = [];
   const grooves = [];
   for (let gr = 1; gr <= 17; gr++) {
@@ -472,12 +827,15 @@ function syncWallRack(dom, state, controller) {
   }
   const { wallsRemaining, settings } = state;
   const visible = settings.displayRemainingWalls;
-  const isFlipped = settings.rotateBoard;
 
-  rack.replaceChildren();
-  const top = renderWallMarks(isFlipped ? 1 : 2, wallsRemaining[isFlipped ? 0 : 1], visible, controller);
-  const bottom = renderWallMarks(isFlipped ? 2 : 1, wallsRemaining[isFlipped ? 1 : 0], visible, controller);
-  rack.append(top, bottom);
+  // Screen-stable rack: top = Black (seat 2), bottom = White (seat 1) — never swap on flip.
+  const topSection = dom.wallRackTop;
+  const bottomSection = dom.wallRackBottom;
+  if (!topSection || !bottomSection) {
+    return;
+  }
+  topSection.replaceChildren(renderWallMarks(2, wallsRemaining[1], visible, controller));
+  bottomSection.replaceChildren(renderWallMarks(1, wallsRemaining[0], visible, controller));
 }
 
 function renderTerminalOverlay(message, controller) {
@@ -636,6 +994,12 @@ function syncBoardDom(dom, state, controller) {
   }
 
   renderCatVision(dom, state);
+  renderLmrVision(dom, state);
+
+  applyPieceLayerStacking(dom, [
+    viewMove(whiteCell, isFlipped),
+    viewMove(blackCell, isFlipped),
+  ]);
 
   syncWallRack(dom, state, controller);
 
@@ -736,11 +1100,31 @@ export function renderBoard(container, state, controller) {
   wallRack.className = 'board-wall-rack';
   wallRack.setAttribute('aria-hidden', 'true');
 
+  const wallRackTop = document.createElement('div');
+  wallRackTop.className = 'board-wall-rack__section board-wall-rack__section--top';
+
+  const flipBtn = document.createElement('button');
+  flipBtn.type = 'button';
+  flipBtn.className = 'board-flip-btn';
+  flipBtn.title = 'Flip board orientation';
+  flipBtn.setAttribute('aria-label', 'Flip board orientation');
+  flipBtn.innerHTML = '<span class="board-flip-btn__icon" aria-hidden="true">⇅</span>';
+  flipBtn.addEventListener('click', () => controller.toggleRotateBoard?.());
+
+  const wallRackBottom = document.createElement('div');
+  wallRackBottom.className = 'board-wall-rack__section board-wall-rack__section--bottom';
+
+  wallRack.append(wallRackTop, flipBtn, wallRackBottom);
+
   const dom = buildBoardDom(boardEl);
   dom.root = boardEl;
+  dom.pawnZ = PAWN_Z;
   dom.previewEl = null;
   dom.overlay = null;
   dom.wallRack = wallRack;
+  dom.wallRackTop = wallRackTop;
+  dom.wallRackBottom = wallRackBottom;
+  dom.flipBtn = flipBtn;
   dom.catEls = [];
 
   gridWrap.appendChild(boardEl);

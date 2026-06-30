@@ -14,6 +14,7 @@ import { renderBoard } from './ui/boardView.js';
 import { renderPlayerCard, playerCardStructureKey } from './ui/playerCard.js';
 import { openPlayerDialog, refreshOpenPlayerDialog } from './ui/playerDialog.js';
 import { renderGameControls, updateNotationBar } from './ui/gameControls.js';
+import { updateVisionTuningPanel } from './ui/visionTuningPanel.js';
 import { renderWasmDebugPanel, logBuildIdentity } from './lib/wasmBuildInfo.js';
 
 const appRoot = document.getElementById('app');
@@ -75,9 +76,7 @@ function controlsKey(state) {
     canRedo: state.canRedo,
     winner: state.winner,
     isDraw: state.isDraw,
-    rotated: state.settings.rotateBoard,
-    cat: state.settings.showCatVision,
-    undoPaused: controller._undoPaused,
+    enginesPaused: state.enginesPaused,
   });
 }
 
@@ -95,6 +94,7 @@ function render() {
   }
 
   updateNotationBar(notationSlot, state, controller);
+  updateVisionTuningPanel(document.getElementById('game-layout'), state, controller);
 
   var isTerminal = !!(state.winner != null || state.isDraw);
   if (isTerminal && !lastTerminal && !state.terminalOverlayDismissed) {
@@ -109,6 +109,7 @@ function renderLiveUpdate() {
   var state = controller.getState();
   renderBoard(boardSlot, state, controller);
   renderPlayerCards(state);
+  updateVisionTuningPanel(document.getElementById('game-layout'), state, controller);
 }
 
 function renderAndRefreshDialog() {
@@ -141,7 +142,7 @@ document.addEventListener('keydown', function(event) {
     const state = controller.getState();
     if (state.actions.length > 0) {
       event.preventDefault();
-      controller.undoWithPause?.();
+      controller.undo?.();
     }
     return;
   }
@@ -152,6 +153,12 @@ document.addEventListener('keydown', function(event) {
       event.preventDefault();
       controller.redo?.();
     }
+    return;
+  }
+
+  if (event.key === ' ' || event.code === 'Space') {
+    event.preventDefault();
+    controller.toggleEnginesPaused?.();
   }
 });
 
