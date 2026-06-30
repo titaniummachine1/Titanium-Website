@@ -5,7 +5,7 @@ import { fetchLmrFromWorker } from './catHeatmap.js';
 /**
  * Pre-search LMR plan via the warm WASM engine (works on static Pages — no
  * server). `lmrAggressionPercent` is LMR tuning: -500 = absolute max cut,
- * 0 = CAT-shaped max cut, 100 = default, 150 = full depth.
+ * 0 = CAT-shaped max cut, -177 = current engine default, 150 = full depth.
  * @param {string[]} algebraicMoves
  * @param {number} [timeSec]
  * @param {number} [idDepth]
@@ -539,23 +539,16 @@ export function lmrDisplayText(entry, viz) {
     return '';
   }
   if (entry.deadTail) {
-    return '0';
+    return String(Math.max(0, Number(entry.reduction) || 0));
   }
-  // Board badges always show planned/searched child depth (0..childDepthFull).
-  const used = Number(entry.childDepthUsed);
-  if (Number.isFinite(used) && (used > 0 || entry.deadTail)) {
-    return String(used);
+  const reduction = Number(entry.reduction);
+  if (Number.isFinite(reduction)) {
+    return String(Math.max(0, reduction));
   }
   // Live search overlay: node share when we have no depth label yet.
   if (!viz?.shallow && entry.nodes > 0) {
     const pct = entry.sharePct ?? displayShareOf(entry);
     return pct < 1 ? '<1%' : `${Math.round(pct)}%`;
-  }
-  if (entry.reduction >= 2) {
-    return `−${entry.reduction}`;
-  }
-  if (entry.reduction === 1) {
-    return '−1';
   }
   return '';
 }

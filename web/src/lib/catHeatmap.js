@@ -14,7 +14,7 @@ const catSnapshotCache = new Map();
 const CAT_SNAPSHOT_CACHE_LIMIT = 16;
 const WASM_THREAD_STACK_SIZE = 4 << 20;
 
-export const LMR_AGGRESSION_DEFAULT = -150;
+export const LMR_AGGRESSION_DEFAULT = -177;
 
 const visionTuning = {
   pathBiasPercent: 0,

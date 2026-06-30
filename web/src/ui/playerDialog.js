@@ -401,7 +401,7 @@ function renderVisionTuningSliders(selections) {
       LMR_AGGRESSION_STEP,
       `${lmrAgg}%`,
     ) +
-    '<p class="player-dialog__hint">Visualization only. -500% = absolute max cut, 0% = CAT-shaped max cut, 100% = default CAT/index LMR, 150% = full 10-ply depth.</p>'
+    '<p class="player-dialog__hint">Visualization only. -500% = absolute max cut, 0% = CAT-shaped max cut, -177% = engine default, 150% = full 10-ply depth.</p>'
   );
 }
 

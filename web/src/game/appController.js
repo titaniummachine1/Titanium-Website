@@ -1,7 +1,14 @@
 import { GameSession } from './gameSession.js';
 import { naiveDistanceEval, parseAlgebraic, isWallAction, QuoridorBoard } from '../lib/gameLogic.js';
 import { decodeReplayCode, encodeReplayFromActions } from '../lib/replayCode.js';
-import { fetchCatSnapshot, indexCatWalls, prewarmCatSnapshot, applyVisionTuning, getVisionTuning } from '../lib/catHeatmap.js';
+import {
+  LMR_AGGRESSION_DEFAULT,
+  fetchCatSnapshot,
+  indexCatWalls,
+  prewarmCatSnapshot,
+  applyVisionTuning,
+  getVisionTuning,
+} from '../lib/catHeatmap.js';
 import { buildLmrViz, fetchLmrSnapshot } from '../lib/lmrHeatmap.js';
 import { toAlgebraic } from '../lib/gameLogic.js';
 import { EngineClient } from '../lib/engineClient.js';
@@ -1065,7 +1072,7 @@ export class AppController {
     this.onChange?.();
   }
 
-  /** LMR tuning -500..150% (100 = default CAT/index LMR). Visualization worker only. */
+  /** LMR tuning -500..150% (-177 = current engine default). Visualization worker only. */
   setLmrAggressionPercent(value) {
     const tuning = applyVisionTuning({ lmrAggressionPercent: value });
     this.settings.lmrAggressionPercent = tuning.lmrAggressionPercent;
@@ -1175,22 +1182,7 @@ export class AppController {
       return null;
     }
     const posKey = this.lmrPositionKey();
-    let viz = null;
-    if (this.settings.lmrVisionShallow) {
-      viz = this.lmrShallowByPosition.get(posKey) ?? null;
-    } else if (
-      this.aiThinking &&
-      this.lmrVizLive &&
-      this.thinkingPlayerType &&
-      isTitaniumEngine(this.thinkingPlayerType, this.engineConfigs)
-    ) {
-      viz = this.lmrVizLive;
-    } else {
-      viz =
-        this.lmrSearchByPosition.get(posKey) ??
-        this.lmrShallowByPosition.get(posKey) ??
-        null;
-    }
+    const viz = this.lmrShallowByPosition.get(posKey) ?? null;
     if (viz) {
       this._lmrDisplayViz = viz;
       return viz;
@@ -1212,7 +1204,7 @@ export class AppController {
     const posKey = this.lmrPositionKey();
     const timeSec = this.lmrTimeSecForPosition();
     const idDepth = this.lmrPlanDepthHint();
-    const lmrAggressionPercent = this.settings.lmrAggressionPercent ?? -150;
+    const lmrAggressionPercent = this.settings.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT;
     const pathBiasPercent = this.settings.pathBiasPercent ?? 0;
     const fetchKey = `${posKey}|${timeSec}|d${idDepth}|pb${pathBiasPercent}|la${lmrAggressionPercent}`;
     if (fetchKey === this._lmrShallowKey && this.lmrShallowByPosition.has(posKey)) {

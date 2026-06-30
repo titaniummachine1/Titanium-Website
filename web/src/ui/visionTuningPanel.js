@@ -69,7 +69,7 @@ export function renderVisionTuningPanelHtml(state) {
   return `
     <div class="vision-tuning" data-vision-tuning>
       <p class="vision-tuning__title">Vision tuning <span class="vision-tuning__badge">local only</span></p>
-      <p class="vision-tuning__hint">Fixed 10-ply LMR tuning: -500% absolute max cut, 0% CAT-shaped max cut, 100% default, 150% full depth.</p>
+      <p class="vision-tuning__hint">Fixed 10-ply LMR tuning: -500% absolute max cut, 0% CAT-shaped max cut, -177% engine default, 150% full depth.</p>
       <div class="vision-tuning__row">
         <label class="vision-tuning__label">
           LMR tuning

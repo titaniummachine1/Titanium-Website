@@ -525,17 +525,6 @@ function renderCatVision(dom, state) {
   }
 }
 
-function lmrDepthLabel(entry) {
-  const used = Number(entry?.childDepthUsed);
-  if (!Number.isFinite(used)) {
-    return '';
-  }
-  if (used === 0 && (entry?.deadTail || entry?.reduction > 0)) {
-    return '0';
-  }
-  return used > 0 ? String(used) : '';
-}
-
 function addLmrPawnHeat(dom, engineMove, entry, isFlipped, viz, maxDepth) {
   const viewCell = viewMove(engineMove, isFlipped);
   const cell = dom.cellEls[viewCell];
@@ -544,7 +533,7 @@ function addLmrPawnHeat(dom, engineMove, entry, isFlipped, viz, maxDepth) {
   }
   const depth = lmrEntryDepth(entry);
   const style = lmrDepthStyle(entry, viz);
-  const depthLabel = lmrDepthLabel(entry) || lmrDisplayText(entry, viz);
+  const depthLabel = lmrDisplayText(entry, viz);
   const el = document.createElement('div');
   el.className = 'cat-move-ghost cat-move-ghost--pawn lmr-move-ghost lmr-move-ghost--pawn';
   el.style.background = style.fill;
@@ -552,7 +541,7 @@ function addLmrPawnHeat(dom, engineMove, entry, isFlipped, viz, maxDepth) {
   el.classList.toggle('lmr-move-ghost--dead-tail', style.mode === 'dead-tail');
   el.style.zIndex = String(visionStackZ(depth, maxDepth));
   el.textContent = depthLabel;
-  el.title = `${entry.move}: child d${depthLabel} (req cut ${Number(entry.requestedReductionFp ?? 0).toFixed(2)} ply, effective −${entry.reduction}, full ${entry.childDepthFull})`;
+  el.title = `${entry.move}: cut ${entry.reduction} ply, child d${entry.childDepthUsed} (req ${Number(entry.requestedReductionFp ?? 0).toFixed(2)}, full ${entry.childDepthFull})`;
   cell.appendChild(el);
   dom.catEls.push(el);
   trackVisionCellZ(dom, cell, depth, maxDepth);
@@ -561,14 +550,14 @@ function addLmrPawnHeat(dom, engineMove, entry, isFlipped, viz, maxDepth) {
 function addLmrWallBar(dom, boardEl, type, viewSlot, entry, viz, maxDepth) {
   const depth = lmrEntryDepth(entry);
   const style = lmrDepthStyle(entry, viz);
-  const depthLabel = lmrDepthLabel(entry) || lmrDisplayText(entry, viz);
+  const depthLabel = lmrDisplayText(entry, viz);
   const el = document.createElement('div');
   el.className = 'cat-move-ghost cat-move-ghost--wall lmr-move-ghost lmr-move-ghost--wall ' + (type === 0 ? 'wallpiece--h' : 'wallpiece--v');
   el.style.background = style.fill;
   el.style.borderColor = style.fill;
   el.classList.toggle('lmr-move-ghost--dead-tail', style.mode === 'dead-tail');
   el.style.zIndex = String(visionStackZ(depth, maxDepth));
-  el.title = `${entry.move}: child d${depthLabel} (req cut ${Number(entry.requestedReductionFp ?? 0).toFixed(2)} ply, effective −${entry.reduction}, full ${entry.childDepthFull})`;
+  el.title = `${entry.move}: cut ${entry.reduction} ply, child d${entry.childDepthUsed} (req ${Number(entry.requestedReductionFp ?? 0).toFixed(2)}, full ${entry.childDepthFull})`;
   const { gr, gc, rowSpan, colSpan } = wallGridFromSlot(type, viewSlot);
   applyGridPos(el, gr, gc, rowSpan, colSpan);
   boardEl.appendChild(el);
@@ -577,7 +566,7 @@ function addLmrWallBar(dom, boardEl, type, viewSlot, entry, viz, maxDepth) {
 
 /** Second pass: same slot/offset as wall bar, labels only — z above same-depth bar. */
 function addLmrWallLabel(dom, boardEl, type, viewSlot, entry, viz, maxDepth) {
-  const depthLabel = lmrDepthLabel(entry) || lmrDisplayText(entry, viz);
+  const depthLabel = lmrDisplayText(entry, viz);
   if (!depthLabel) {
     return;
   }
