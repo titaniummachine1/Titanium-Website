@@ -115,11 +115,11 @@ async function fetchCatSnapshotFromWorker(algebraicMoves) {
 }
 
 /** LMR plan via the same warm CAT engine (no server needed — works on Pages). */
-export async function fetchLmrFromWorker(algebraicMoves, timeSec = 10, idDepth = 8, maxExtra = 3.0) {
+export async function fetchLmrFromWorker(algebraicMoves, timeSec = 10, idDepth = 8, maxReduction = 0.5) {
   await ensureCatWorkerReady();
   const result = await postCatWorkerMessage(
     'lmr',
-    { moves: algebraicMoves ?? [], timeMs: Math.round(timeSec * 1000), idDepth, maxExtra },
+    { moves: algebraicMoves ?? [], timeMs: Math.round(timeSec * 1000), idDepth, maxExtra: maxReduction },
     30_000,
   );
   return result.data;

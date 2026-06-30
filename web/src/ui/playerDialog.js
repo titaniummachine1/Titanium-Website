@@ -60,6 +60,25 @@ const WALL_CLOCK_MIN        = 0.5;
 const WALL_CLOCK_MAX        = 60;
 const WALL_CLOCK_STEP       = 0.5;
 const CORES_MIN             = 1;
+// CAT-LMR aggression shown as a percent (0 = no reduction, 100 = max). The
+// controller setting is the 0..1 fraction; the dialog works in percent.
+const LMR_AGGRESSIVENESS_MIN = 0;
+const LMR_AGGRESSIVENESS_MAX = 100;
+const LMR_AGGRESSIVENESS_STEP = 5;
+
+const DEFAULT_CAT_VISION = Object.freeze({
+  showSquares: true,
+  showWalls: true,
+  showNumbers: false,
+  squareOpacity: 1,
+  wallOpacity: 1,
+});
+
+const VISION_MODE_OPTIONS = [
+  { label: 'Off', id: 'off' },
+  { label: 'CAT', id: 'cat' },
+  { label: 'LMR', id: 'lmr' },
+];
 
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -68,6 +87,33 @@ function escHtml(s) {
 function formatTime(seconds) {
   if (seconds < 1) return seconds + ' s';
   return (Number.isInteger(seconds) ? seconds : seconds.toFixed(1)) + ' s';
+}
+
+function formatPercent(value) {
+  return Math.round(Number(value ?? 1) * 100) + '%';
+}
+
+function formatPly(value) {
+  const n = Math.round(Number(value) || 0);
+  return `${n} ply`;
+}
+
+function clampNumber(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, n));
+}
+
+function visionModeFromSettings(settings = {}) {
+  if (settings.showLmrVision) {
+    return 'lmr';
+  }
+  if (settings.showCatVision) {
+    return 'cat';
+  }
+  return 'off';
 }
 
 /** Classify a player type into a dialog control category. */
@@ -190,6 +236,16 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     remoteStrength: [...prefs.remoteStrength],
     titaniumNet: [...prefs.titaniumNet],
     cores: [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])],
+    visionMode: visionModeFromSettings(state.settings),
+    catVision: {
+      ...DEFAULT_CAT_VISION,
+      ...(state.settings?.catVision ?? {}),
+    },
+    lmrAggressiveness: Math.round(clampNumber(
+      (state.settings?.lmrAggressiveness ?? 0.5) * 100,
+      LMR_AGGRESSIVENESS_MIN,
+      LMR_AGGRESSIVENESS_MAX,
+    )),
   };
 
   const groups = getPlayerOptionGroups();
@@ -208,6 +264,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
         renderSeatSection(1, selections, groups) +
         '<div data-oracle-hint="1">' + oracleStatusHtml(state, selections) + '</div>' +
         '<div class="player-dialog__options">' +
+          renderVisionSettings(selections) +
           '<label class="player-dialog__option-row">' +
             '<input type="checkbox" data-option="bestMoveHint"' + (state.settings?.showBestMoveHint !== false ? ' checked' : '') + '>' +
             ' Show best-move hint on board while engine thinks' +
@@ -242,6 +299,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
 
   wireEngineControls(overlay, 0, selections);
   wireEngineControls(overlay, 1, selections);
+  wireVisionSettings(overlay, selections, controller);
 
   const confirmDialog = () => { applyAndClose(); };
   const cancelDialog = () => { overlay.remove(); currentDialog = null; };
@@ -264,6 +322,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     // Apply display toggles immediately via controller
     const bmHint = overlay.querySelector('[data-option="bestMoveHint"]')?.checked ?? true;
     controller.toggleBestMoveHint?.(bmHint);
+    applyVisionSettings(selections, controller);
     applySelections(selections, isNewGame, controller, state);
     overlay.remove();
     currentDialog = null;
@@ -299,6 +358,85 @@ export function refreshOpenPlayerDialog(state) {
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
+
+function renderVisionSettings(selections) {
+  const current = selections.visionMode ?? 'off';
+  const btns = VISION_MODE_OPTIONS.map((opt) =>
+    '<button type="button" class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
+    ' data-vision-mode="' + opt.id + '">' +
+    escHtml(opt.label) + '</button>'
+  ).join('');
+
+  return (
+    '<div class="player-dialog__field player-dialog__field--vision">' +
+      '<label class="player-dialog__label">Vision overlay</label>' +
+      '<div class="player-dialog__preset-group player-dialog__preset-group--vision">' + btns + '</div>' +
+      '<div data-vision-detail>' + renderVisionDetail(selections) + '</div>' +
+    '</div>'
+  );
+}
+
+function renderVisionDetail(selections) {
+  if (selections.visionMode === 'cat') {
+    const catVision = {
+      ...DEFAULT_CAT_VISION,
+      ...(selections.catVision ?? {}),
+    };
+    return (
+      '<div class="player-dialog__vision-detail">' +
+        '<label class="player-dialog__option-row">' +
+          '<input type="checkbox" data-cat-setting="showSquares"' + (catVision.showSquares ? ' checked' : '') + '>' +
+          ' Squares' +
+        '</label>' +
+        '<label class="player-dialog__option-row">' +
+          '<input type="checkbox" data-cat-setting="showWalls"' + (catVision.showWalls ? ' checked' : '') + '>' +
+          ' Walls' +
+        '</label>' +
+        '<label class="player-dialog__option-row">' +
+          '<input type="checkbox" data-cat-setting="showNumbers"' + (catVision.showNumbers ? ' checked' : '') + '>' +
+          ' Numbers' +
+        '</label>' +
+        renderVisionSlider('squareOpacity', 'Square opacity', catVision.squareOpacity, 0.25, 1.5, 0.05, formatPercent(catVision.squareOpacity)) +
+        renderVisionSlider('wallOpacity', 'Wall opacity', catVision.wallOpacity, 0.25, 1.5, 0.05, formatPercent(catVision.wallOpacity)) +
+      '</div>'
+    );
+  }
+
+  if (selections.visionMode === 'lmr') {
+    const aggr = clampNumber(
+      selections.lmrAggressiveness ?? 50,
+      LMR_AGGRESSIVENESS_MIN,
+      LMR_AGGRESSIVENESS_MAX,
+    );
+    return (
+      '<div class="player-dialog__vision-detail">' +
+        renderVisionSlider(
+          'lmrAggressiveness',
+          'LMR aggression (0 = full depth, 100 = max reduction)',
+          aggr,
+          LMR_AGGRESSIVENESS_MIN,
+          LMR_AGGRESSIVENESS_MAX,
+          LMR_AGGRESSIVENESS_STEP,
+          `${Math.round(aggr)}%`,
+        ) +
+      '</div>'
+    );
+  }
+
+  return '';
+}
+
+function renderVisionSlider(key, label, value, min, max, step, displayValue) {
+  return (
+    '<div class="player-dialog__field player-dialog__field--compact">' +
+      '<label class="player-dialog__label">' + escHtml(label) + ': ' +
+        '<span class="player-dialog__time-val" data-vision-slider-label="' + escHtml(key) + '">' + escHtml(displayValue) + '</span>' +
+      '</label>' +
+      '<input type="range" class="player-dialog__time-slider" data-vision-slider="' + escHtml(key) + '"' +
+      ' min="' + min + '" max="' + max + '" step="' + step + '" value="' + escHtml(value) + '">' +
+    '</div>'
+  );
+}
 
 function renderSeatSection(seat, selections, groups) {
   const colorName = playerColorName(seat + 1);
@@ -463,6 +601,79 @@ function renderTimeSlider(seat, selections, labelText) {
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
+function wireVisionSettings(overlay, selections, controller) {
+  const refreshDetail = () => {
+    const host = overlay.querySelector('[data-vision-detail]');
+    if (host) {
+      host.innerHTML = renderVisionDetail(selections);
+    }
+    overlay.querySelectorAll('[data-vision-mode]').forEach((btn) => {
+      const active = btn.dataset.visionMode === selections.visionMode;
+      btn.classList.toggle('btn--primary', active);
+      btn.classList.toggle('btn--ghost', !active);
+    });
+    wireVisionDetail(overlay, selections, controller);
+  };
+
+  overlay.querySelectorAll('[data-vision-mode]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      selections.visionMode = btn.dataset.visionMode ?? 'off';
+      refreshDetail();
+    });
+  });
+
+  wireVisionDetail(overlay, selections, controller);
+}
+
+function wireVisionDetail(overlay, selections, controller) {
+  overlay.querySelectorAll('[data-cat-setting]').forEach((input) => {
+    const update = (event) => {
+      const target = event.currentTarget;
+      const key = target.dataset.catSetting;
+      selections.catVision = {
+        ...DEFAULT_CAT_VISION,
+        ...(selections.catVision ?? {}),
+        [key]: target.type === 'checkbox' ? target.checked : Number(target.value),
+      };
+    };
+    input.addEventListener('input', update);
+    input.addEventListener('change', update);
+  });
+
+  overlay.querySelectorAll('[data-vision-slider]').forEach((slider) => {
+    slider.addEventListener('input', () => {
+      const key = slider.dataset.visionSlider;
+      const value = Number(slider.value);
+      if (key === 'lmrAggressiveness') {
+        selections.lmrAggressiveness = Math.round(clampNumber(
+          value,
+          LMR_AGGRESSIVENESS_MIN,
+          LMR_AGGRESSIVENESS_MAX,
+        ));
+        if (selections.visionMode === 'lmr') {
+          controller.setLmrAggressiveness?.(selections.lmrAggressiveness / 100);
+          controller.setVisionMode?.('lmr');
+        }
+      } else if (key === 'squareOpacity' || key === 'wallOpacity') {
+        selections.catVision = {
+          ...DEFAULT_CAT_VISION,
+          ...(selections.catVision ?? {}),
+          [key]: clampNumber(value, 0.25, 1.5),
+        };
+        if (selections.visionMode === 'cat') {
+          controller.updateCatVisionSettings?.(selections.catVision);
+          controller.setVisionMode?.('cat');
+        }
+      }
+      const label = overlay.querySelector('[data-vision-slider-label="' + key + '"]');
+      if (label) {
+        label.textContent =
+          key === 'lmrAggressiveness' ? `${Math.round(value)}%` : formatPercent(value);
+      }
+    });
+  });
+}
+
 function wireEngineControls(overlay, seat, selections) {
   const host = overlay.querySelector('[data-engine-controls="' + seat + '"]');
   if (!host) return;
@@ -585,6 +796,16 @@ function buildAiSettings(playerType, selections, seat) {
     wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
     visitsBudget:     0,  // time-bounded; engine uses default node budget
   };
+}
+
+function applyVisionSettings(selections, controller) {
+  const mode = selections.visionMode ?? 'off';
+  controller.updateCatVisionSettings?.({
+    ...DEFAULT_CAT_VISION,
+    ...(selections.catVision ?? {}),
+  });
+  controller.setLmrAggressiveness?.((selections.lmrAggressiveness ?? 50) / 100);
+  controller.setVisionMode?.(mode);
 }
 
 function applySelections(selections, isNewGame, controller, state) {

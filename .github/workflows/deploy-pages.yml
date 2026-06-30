@@ -50,12 +50,12 @@ jobs:
           VITE_BUILD_SHA: ${{ github.sha }}
           # wasm32 cross-compile — do not use target-cpu=native (native titanium.exe only).
           RUSTFLAGS: ""
-          # Threaded build: play multithreads when crossOriginIsolated (COI
-          # service worker). If the threaded search crashes on a weaker device,
-          # titaniumWasmClient degrades that session to single-thread and retries
-          # — "multithreading if possible", never a hard crash. The CAT overlay
-          # worker uses this same build single-threaded (no initThreadPool).
-          TITANIUM_WASM_THREADS: "1"
+          # Single-thread build. The threaded build hard-crashes the worker during
+          # thread-pool init on some devices (SharedArrayBuffer/memory limits) — a
+          # hard WASM abort can't be caught and auto-recovered reliably. Until that
+          # is debugged on-device, ship single-thread (proven stable). Pages can't
+          # set COOP/COEP anyway. (COI service worker stays for the future.)
+          TITANIUM_WASM_THREADS: "0"
         run: |
           npm ci
           npm run build:pages

@@ -4,14 +4,14 @@ import { fetchLmrFromWorker } from './catHeatmap.js';
 
 /**
  * Pre-search LMR plan via the warm WASM engine (works on static Pages — no
- * server). `maxExtra` is the CAT-LMR aggressiveness slider.
+ * server). `maxReduction` caps total visible LMR reduction plies; 0 means none.
  * @param {string[]} algebraicMoves
  * @param {number} [timeSec]
  * @param {number} [idDepth]
- * @param {number} [maxExtra]
+ * @param {number} [maxReduction]
  */
-export async function fetchLmrSnapshot(algebraicMoves, timeSec = 10, idDepth = 8, maxExtra = 3.0) {
-  return fetchLmrFromWorker(algebraicMoves, timeSec, idDepth, maxExtra);
+export async function fetchLmrSnapshot(algebraicMoves, timeSec = 10, idDepth = 8, maxReduction = 0.5) {
+  return fetchLmrFromWorker(algebraicMoves, timeSec, idDepth, maxReduction);
 }
 
 function normalizeLmrEntry(entry) {
@@ -383,7 +383,7 @@ export function buildLmrViz(payload) {
   const coldCm = Number(profile.coldCm ?? 60);
   moves = attachEffortShares(moves, coldCm, { shallow });
   const vizDraft = { shallow, searchDepth, lmrProfile: profile };
-  let visibleMoves = pickLmrBoardMoves(moves, vizDraft);
+  let visibleMoves = shallow ? moves : pickLmrBoardMoves(moves, vizDraft);
   if (shallow && visibleMoves.length === 0 && moves.length > 0) {
     visibleMoves = moves.filter((m) => !m.pruned).slice(0, 48);
   }

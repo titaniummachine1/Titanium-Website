@@ -269,7 +269,7 @@ export class AppController {
       catVision: { ...DEFAULT_CAT_VISION_SETTINGS },
       showLmrVision: false,
       lmrVisionShallow: false,
-      lmrAggressiveness: 3.0,
+      lmrAggressiveness: 0.5,
       showBestMoveHint: true,
       uiMode: 'play',
     };
@@ -944,6 +944,39 @@ export class AppController {
     this.onChange?.();
   }
 
+  setVisionMode(mode) {
+    const next = mode === 'cat' || mode === 'lmr' ? mode : 'off';
+    if (next === 'cat') {
+      this.toggleCatVision(true);
+      return;
+    }
+    if (next === 'lmr') {
+      this.toggleLmrVision(true);
+      return;
+    }
+    const hadCat = this.settings.showCatVision;
+    const hadLmr = this.settings.showLmrVision;
+    this.settings.showCatVision = false;
+    this.settings.showLmrVision = false;
+    if (hadCat) {
+      this._catFetchSeq += 1;
+      this._catMovesKey = null;
+      this.catViz = null;
+      this.catVizError = null;
+      this.catVizLoading = false;
+      this.showCatHint = false;
+    }
+    if (hadLmr) {
+      this._lmrFetchSeq += 1;
+      this._lmrShallowKey = null;
+      this.lmrVizLive = null;
+      this.lmrVizError = null;
+      this.lmrVizLoading = false;
+      this.showLmrHint = false;
+    }
+    this.onChange?.();
+  }
+
   toggleLmrVision(enabled = !this.settings.showLmrVision) {
     this.settings.showLmrVision = Boolean(enabled);
     if (this.settings.showLmrVision) {
@@ -1000,10 +1033,10 @@ export class AppController {
     }
   }
 
-  /** CAT-LMR aggressiveness for the LMR vision (max extra reduction plies). */
+  /** CAT-LMR aggression ∈ [0,1]: 0 = no reduction, 1 = everything maximally reduced. */
   setLmrAggressiveness(value) {
-    const v = Math.max(0, Math.min(6, Number(value) || 0));
-    this.settings.lmrAggressiveness = Math.round(v * 2) / 2; // 0.5 steps
+    const v = Math.max(0, Math.min(1, Number(value) || 0));
+    this.settings.lmrAggressiveness = Math.round(v * 20) / 20; // 0.05 steps
     this.lmrShallowByPosition.clear();
     this._lmrShallowKey = null;
     if (this.settings.showLmrVision) {
@@ -1123,7 +1156,7 @@ export class AppController {
     ) {
       return this.lmrVizLive;
     }
-    return this.lmrSearchByPosition.get(posKey) ?? null;
+    return this.lmrSearchByPosition.get(posKey) ?? this.lmrShallowByPosition.get(posKey) ?? null;
   }
 
   scheduleLmrRefresh() {
@@ -1137,8 +1170,8 @@ export class AppController {
     const posKey = this.lmrPositionKey();
     const timeSec = this.lmrTimeSecForPosition();
     const idDepth = this.lmrPlanDepthHint();
-    const maxExtra = this.settings.lmrAggressiveness ?? 3.0;
-    const fetchKey = `${posKey}|${timeSec}|d${idDepth}|x${maxExtra}`;
+    const maxReduction = this.settings.lmrAggressiveness ?? 0.5;
+    const fetchKey = `${posKey}|${timeSec}|d${idDepth}|r${maxReduction}`;
     if (fetchKey === this._lmrShallowKey && this.lmrShallowByPosition.has(posKey)) {
       return;
     }
@@ -1151,7 +1184,7 @@ export class AppController {
 
     const moves = this.session.actions.map((action) => toAlgebraic(action));
     try {
-      const data = await fetchLmrSnapshot(moves, timeSec, idDepth, maxExtra);
+      const data = await fetchLmrSnapshot(moves, timeSec, idDepth, maxReduction);
       if (seq !== this._lmrFetchSeq) {
         return;
       }
@@ -1274,6 +1307,7 @@ export class AppController {
     this.catVizLoading = false;
     this.prewarmCatVision();
     this.scheduleCatRefresh();
+    this.scheduleLmrRefresh();
   }
 
   scheduleCatRefresh() {

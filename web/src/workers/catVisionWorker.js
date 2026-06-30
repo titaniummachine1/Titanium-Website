@@ -90,7 +90,7 @@ self.onmessage = async (event) => {
         data.moves ?? [],
         data.timeMs ?? 10_000,
         data.idDepth ?? 8,
-        data.maxExtra ?? 3.0,
+        data.maxExtra ?? 0.5,
       );
       return;
     }
