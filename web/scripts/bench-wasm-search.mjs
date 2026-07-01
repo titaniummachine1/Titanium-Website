@@ -1,6 +1,6 @@
 /**
  * WASM search throughput (Node loads web-target glue; no browser worker overhead).
- * Usage: node scripts/bench-wasm-search.mjs [timeMs] [withProgress]
+ * Usage: node scripts/bench-wasm-search.mjs [timeMs] [withProgress] [tier] [moves...]
  */
 
 import { readFileSync } from 'node:fs';
@@ -11,6 +11,8 @@ const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const wasmDir = path.join(webDir, 'src', 'wasm', 'titanium');
 const timeMs = Number(process.argv[2] || 10_000);
 const withProgress = process.argv[3] !== '0';
+const tier = Number(process.argv[4] || 4);
+const moves = process.argv.slice(5).join(' ');
 
 const wasmBytes = readFileSync(path.join(wasmDir, 'titanium_bg.wasm'));
 const { default: init, WasmEngine } = await import(pathToFileURL(path.join(wasmDir, 'titanium.js')).href);
@@ -23,7 +25,10 @@ const onProgress = withProgress
     }
   : undefined;
 
-const engine = new WasmEngine(2); // hard tier (embedded weights)
+const engine = new WasmEngine(tier);
+if (moves.trim()) {
+  engine.position(moves);
+}
 const t0 = performance.now();
 const mv =
   typeof engine.go_threads === 'function'
@@ -39,6 +44,8 @@ console.log(
     {
       timeMs,
       withProgress,
+      tier,
+      moves,
       progressCalls,
       move: mv,
       depth,

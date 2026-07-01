@@ -6,6 +6,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,7 +34,24 @@ const { chromium } = require('playwright');
   const page = await browser.newPage();
   page.on('console', (msg) => console.log('[browser]', msg.text()));
   await page.goto(url, { waitUntil: 'networkidle', timeout: timeoutMs });
-  await page.waitForFunction(() => window.__BENCH_DONE__ === true, null, { timeout: timeoutMs });
+  try {
+    await page.waitForFunction(() => window.__BENCH_DONE__ === true, null, { timeout: timeoutMs });
+  } catch (err) {
+    const probe = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      done: window.__BENCH_DONE__ === true,
+      error: window.__BENCH_ERROR__ ?? null,
+      status: document.getElementById('status')?.textContent?.slice(0, 4000) ?? null,
+      runtime: {
+        crossOriginIsolated: typeof crossOriginIsolated === 'undefined' ? null : crossOriginIsolated,
+        hasSharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
+        serviceWorkerController: !!navigator.serviceWorker?.controller,
+      },
+    }));
+    console.error(JSON.stringify({ timeout: true, probe }, null, 2));
+    throw err;
+  }
   const err = await page.evaluate(() => window.__BENCH_ERROR__ ?? null);
   const results = await page.evaluate(() => window.__BENCH_RESULTS__ ?? null);
   await browser.close();
@@ -51,20 +69,24 @@ const env = {
   BENCH_URL: args.url,
   BENCH_TIMEOUT_MS: String(args.timeoutMs),
 };
+const tmpRoot = path.join(webDir, '.tmp');
+mkdirSync(tmpRoot, { recursive: true });
+const runnerDir = mkdtempSync(path.join(tmpRoot, 'browser-bench-'));
+const runnerPath = path.join(runnerDir, 'runner.cjs');
+writeFileSync(runnerPath, runner);
 
-const install = spawnSync('npm', ['exec', '--yes', 'playwright@1.49.1', '--', 'install', 'chromium'], {
-  cwd: webDir,
-  stdio: 'inherit',
-  shell: true,
-});
-if (install.status !== 0) {
-  process.exit(install.status ?? 1);
-}
-
-const run = spawnSync('npm', ['exec', '--yes', 'playwright@1.49.1', '--', 'node', '-e', runner], {
+const run = spawnSync(process.execPath, [runnerPath], {
   cwd: webDir,
   env,
   stdio: 'inherit',
-  shell: true,
 });
-process.exit(run.status ?? 0);
+rmSync(runnerDir, { recursive: true, force: true });
+if (run.error) {
+  console.error(run.error);
+  process.exit(1);
+}
+if (run.signal) {
+  console.error(`browser bench terminated by signal ${run.signal}`);
+  process.exit(1);
+}
+process.exit(run.status ?? 1);

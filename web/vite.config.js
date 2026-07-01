@@ -26,6 +26,12 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       emptyOutDir: false,
+      rollupOptions: {
+        input: {
+          main: path.resolve(rootDir, 'index.html'),
+          bench: path.resolve(rootDir, 'bench.html'),
+        },
+      },
     },
   };
 });

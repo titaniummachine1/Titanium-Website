@@ -98,6 +98,9 @@ assert(
 console.log('\n[isolate] WASM workers — dedicated Worker per engine client');
 const tiWasmClient = readSrc('lib/titaniumWasmClient.js');
 const tiWasmWorker = readSrc('workers/titaniumWasmWorker.js');
+const workerBenchSrc = readSrc('bench/workerBench.mjs');
+const benchHtmlSrc = readFileSync(path.resolve(WEB_SRC, '../bench.html'), 'utf8');
+const viteConfigSrc = readFileSync(path.resolve(WEB_SRC, '../vite.config.js'), 'utf8');
 const aceWasmClient = readSrc('lib/aceRustWasmClient.js');
 assert(
   tiWasmClient.includes('resolveTitaniumSearchCores'),
@@ -128,6 +131,21 @@ assert(
     buildWasmSrc.includes('wasm-threads,embed-tables') &&
     buildWasmSrc.includes('build-std=panic_abort,std'),
   'build:wasm has explicit threaded WASM profile',
+);
+assert(
+  benchHtmlSrc.includes('coi-serviceworker.js'),
+  'browser benchmark page loads COOP/COEP bootstrap before WASM worker',
+);
+assert(
+  viteConfigSrc.includes("bench: path.resolve(rootDir, 'bench.html')"),
+  'production build deploys bench.html for threaded WASM verification',
+);
+assert(
+  workerBenchSrc.includes('requireThreaded') &&
+    workerBenchSrc.includes('helperStarts') &&
+    workerBenchSrc.includes('helperNodes') &&
+    workerBenchSrc.includes('e2 e8 e3 e7 e4 e6 c3h'),
+  'browser benchmark can fail closed when WASM threads or real search regress',
 );
 assert(
   !tiWasmClient.includes('lmrBias') && !tiWasmWorker.includes('lmrBias'),
