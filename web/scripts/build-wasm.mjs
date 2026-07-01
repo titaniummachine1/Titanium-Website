@@ -16,13 +16,16 @@ import { fileURLToPath } from 'node:url';
 
 const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const monorepoEngine = path.resolve(webDir, '..', '..', 'engine');
+const checkoutEngine = path.resolve(webDir, '..', 'engine');
 const outDir = path.join(webDir, 'src', 'wasm', 'titanium');
 const publicWasmDir = path.join(webDir, 'public', 'wasm');
 
-if (!existsSync(path.join(monorepoEngine, 'Cargo.toml'))) {
-  throw new Error(`Canonical engine missing: ${monorepoEngine}`);
+const engineDir = existsSync(path.join(monorepoEngine, 'Cargo.toml'))
+  ? monorepoEngine
+  : checkoutEngine;
+if (!existsSync(path.join(engineDir, 'Cargo.toml'))) {
+  throw new Error(`Canonical engine missing: ${monorepoEngine} or ${checkoutEngine}`);
 }
-const engineDir = monorepoEngine;
 console.log(`[build:wasm] engine dir: ${engineDir}`);
 
 function sha256File(filePath) {
@@ -44,7 +47,7 @@ const buildTimestamp = new Date().toISOString();
 const commit = gitCommit();
 
 const exportScript = path.join(
-  monorepoEngine,
+  engineDir,
   '..',
   'training',
   'tools',
