@@ -795,4 +795,5 @@ module.exports = {
   ourTcLabel,
   runningElo,
   isCompleteGame,
+  RemoteEngine,
 };
