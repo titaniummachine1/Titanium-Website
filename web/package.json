@@ -9,7 +9,7 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "audit:wasm": "node scripts/audit-wasm-hashes.mjs",
     "bench:browser": "node scripts/run-browser-bench.mjs",
-    "bench:threads": "node scripts/run-browser-bench.mjs --url \"http://127.0.0.1:5173/bench.html?auto=1&timeSec=5&runs=1&net=easy&threads=8&requireThreaded=1&moves=e2%20e8%20e3%20e7%20e4%20e6%20c3h\"",
+    "bench:threads": "node scripts/run-browser-bench.mjs --url \"http://localhost:5173/bench.html?auto=1&timeSec=5&runs=1&net=easy&threads=8&requireThreaded=1&moves=e2%20e8%20a3h%20g6h%20b3v\"",
     "build:pages": "npm run build:wasm && vite build --mode ghpages",
     "preview": "vite preview",
     "preview:pages": "vite preview --mode ghpages",

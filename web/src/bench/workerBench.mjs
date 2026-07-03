@@ -13,7 +13,10 @@ const RUNS = Number(params.get('runs') || 1);
 const AUTO = params.get('auto') === '1';
 const WASM_THREADS = Math.max(1, Number(params.get('threads') || 8));
 const NET = params.get('net') || 'easy';
-const MOVE_HISTORY = (params.get('moves') || 'e2 e8 e3 e7 e4 e6 c3h')
+// Default position must stay OFF-BOOK: the 15-ply always-play opening book
+// answers in-book positions instantly with zero searched nodes, which trips
+// the requireSearch assertion. Early flank walls are outside any book line.
+const MOVE_HISTORY = (params.get('moves') || 'e2 e8 a3h g6h b3v')
   .trim()
   .split(/\s+/)
   .filter(Boolean);

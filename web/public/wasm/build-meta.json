@@ -1,8 +1,8 @@
 {
   "engine_version": "titanium-v16",
   "git_commit": "0b566c5c556277a51edd4d479776eb5198ad859f",
-  "build_timestamp": "2026-07-03T08:26:33.739Z",
-  "wasm_sha256": "852d12ccaeec7cb84ffffe58504360a27e818fbf0cf8d50d78f16f950acd996d",
+  "build_timestamp": "2026-07-03T08:58:54.214Z",
+  "wasm_sha256": "6e94d5fafd587eba5a518a62671681a951e3887e66ccedb67b8b89455fe5fa8d",
   "wasm_bytes": 3008671,
   "weights_live_sha256": "5da3d457b400ecde52a8cf961002dc80db908f170278f8fa376aa5f37aedbbcd",
   "features": "wasm-threads,embed-tables",
