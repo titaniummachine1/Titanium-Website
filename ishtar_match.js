@@ -64,6 +64,7 @@ function parseArgs(argv) {
     dumpGames: false,
     saveGames: null,
     sourceTag: 'ishtar-match',
+    ourSide: 'alternate',
     verbose: false,
   };
   for (let i = 2; i < argv.length; i++) {
@@ -81,6 +82,8 @@ function parseArgs(argv) {
     else if (a === '--dump-games') o.dumpGames = true;
     else if (a === '--save-games') o.saveGames = next();
     else if (a === '--source-tag') o.sourceTag = next();
+    // p1|p2|random|alternate (default: alternate by game index, prior behavior)
+    else if (a === '--our-side') o.ourSide = next();
     else if (a === '--fair-time') o.fairTime = true;
     else if (a === '--no-fair-time') o.fairTime = false;
     else if (a === '--verbose') o.verbose = true;
@@ -92,7 +95,16 @@ function parseArgs(argv) {
 const coord = require('./coordinator_client');
 
 async function persistGame(moves, result, sourceTag, gamesFile, releaseRemote = false, gameId = null) {
-  return coord.upsertGame({ moves, result, tag: sourceTag, gamesFile, releaseRemote, gameId });
+  // Same story as loadPriorMatchup: the coordinator this posts to may not be
+  // running under the current pipeline. A completed game already reached the
+  // caller (stdout dump / return value) by the time this runs -- a failure
+  // here must not crash the match or lose that game.
+  try {
+    return await coord.upsertGame({ moves, result, tag: sourceTag, gamesFile, releaseRemote, gameId });
+  } catch (e) {
+    process.stderr.write(`persistGame (coordinator) failed, ignoring: ${e.message}\n`);
+    return null;
+  }
 }
 
 function ourTcLabel(_opts) {
@@ -592,7 +604,15 @@ async function playGame(opts, gl, gameIdx, ourIsP1, slot, progress) {
           if (opts.opp === 'ka') {
             progress.thinking(slot, 'ka-queue', 30);
             const queueTimeout = kaQueueAcquireTimeoutSec(timingMode);
-            await coord.acquireKaSearch(opts.oppTime, gameId, queueTimeout);
+            // Default timeout here is 900s+ if the coordinator this posts to
+            // is unreachable (e.g. current pipeline has no such server
+            // running) -- that would hang the whole match for 15+ minutes
+            // with zero output. Concurrency throttling against Ka is handled
+            // Python-side instead (see continuous_pool.py) when the
+            // coordinator isn't available.
+            await coord.acquireKaSearch(opts.oppTime, gameId, queueTimeout).catch((e) => {
+              process.stderr.write(`ka-search-acquire (coordinator) unavailable, proceeding without queue: ${e.message}\n`);
+            });
           }
           await remote.prepareForSearch({ afterQueue: opts.opp === 'ka' });
           try {
@@ -703,7 +723,11 @@ async function main() {
 
   if (opts.saveGames) log(`saving games -> ${opts.saveGames}`);
 
-  const prior = await loadPriorMatchup(opts.engine, opts.opp, ourTcLabel(opts), opts.oppTime);
+  // The old training/coordinator.py HTTP server this hits may not be running
+  // (e.g. port 8765 is the Oracle SSH tunnel in the current pipeline) --
+  // don't let a missing/incompatible coordinator crash the whole match.
+  const prior = await loadPriorMatchup(opts.engine, opts.opp, ourTcLabel(opts), opts.oppTime)
+    .catch(() => ({ ourW: 0, oppW: 0 }));
   let ourW = prior.ourW, oppW = prior.oppW;
   let sessionOur = 0, sessionOpp = 0;
   let done = 0;
@@ -718,7 +742,10 @@ async function main() {
         progress.idle(slot);
         return;
       }
-      const ourIsP1 = idx % 2 === 0;
+      const ourIsP1 = opts.ourSide === 'p1' ? true
+        : opts.ourSide === 'p2' ? false
+        : opts.ourSide === 'random' ? Math.random() < 0.5
+        : idx % 2 === 0; // 'alternate' (default, unchanged prior behavior)
       let r;
       try {
         r = await playGame(opts, gl, idx, ourIsP1, slot, progress);
