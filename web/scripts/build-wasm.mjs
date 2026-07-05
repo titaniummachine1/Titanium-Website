@@ -79,7 +79,7 @@ const env = {
           // threaded search's shared-TT allocation → handle_alloc_error abort
           // (surfaced as a bare wasm `unreachable`). 256MB gives headroom for 8
           // threads. (Shared memory reserves this as virtual address space only.)
-          '-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=268435456 -C link-arg=--export=__heap_base -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base',
+          '-C target-feature=+atomics,+bulk-memory,+simd128 -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=268435456 -C link-arg=--export=__heap_base -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base',
       }
     : {}),
 };
