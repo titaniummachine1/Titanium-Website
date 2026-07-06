@@ -12,6 +12,7 @@ export class AceRustWasmEngineClient {
     this.algebraicMoves = [];
     this.pendingRequest = null;
     this.queuedRequest = null;
+    this._requestSeq = 0;
   }
 
   ensureWorker() {
@@ -22,7 +23,7 @@ export class AceRustWasmEngineClient {
     this.worker.onmessage = (event) => {
       const data = event.data;
       const pending = this.pendingRequest;
-      if (!pending) {
+      if (!pending || (data.seq != null && data.seq !== pending.seq)) {
         return;
       }
       if (data.type === 'error') {
@@ -125,13 +126,14 @@ export class AceRustWasmEngineClient {
     this.setStatus('idle');
   }
 
+  // Soft cancel: drops the pending/queued request but leaves the worker (and
+  // its warm WASM instance) alive. Any in-flight search finishes in the
+  // background and its result is dropped by the seq check above, so it can
+  // never be misattributed to a later request. Used for undo / analysis
+  // jumps / replay loads.
   cancelSearch() {
     this.queuedRequest = null;
     this.pendingRequest = null;
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
     this.setStatus('idle');
   }
 
@@ -139,13 +141,22 @@ export class AceRustWasmEngineClient {
     this.queuedRequest = null;
   }
 
+  // Hard teardown: actually kills the worker. Only for when the engine
+  // instance itself is being discarded (seat destroyed / engine config
+  // switched).
   destroy() {
-    this.cancelSearch();
+    this.queuedRequest = null;
+    this.pendingRequest = null;
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    this.setStatus('idle');
     this.algebraicMoves = [];
   }
 
   resetConnection() {
-    this.destroy();
+    this.cancelSearch();
     this.algebraicMoves = [];
   }
 
@@ -189,7 +200,9 @@ export class AceRustWasmEngineClient {
     const started = performance.now();
     this.ensureWorker();
 
+    const seq = ++this._requestSeq;
     this.pendingRequest = {
+      seq,
       started,
       finalMeta: {},
       onInfo: (info) => this.onInfo?.(info),
@@ -205,6 +218,7 @@ export class AceRustWasmEngineClient {
     };
 
     this.worker.postMessage({
+      seq,
       algebraicMoves: this.algebraicMoves,
       timeMs,
       maxDepth: 30,

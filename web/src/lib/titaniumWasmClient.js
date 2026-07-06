@@ -46,6 +46,7 @@ export class TitaniumWasmEngineClient {
     this.queuedRequest = null;
     this.workerCrashRetries = 0;
     this._initInFlight = null;
+    this._requestSeq = 0;
   }
 
   _workerProfileKey(
@@ -213,7 +214,7 @@ export class TitaniumWasmEngineClient {
         return;
       }
       const pending = this.pendingRequest;
-      if (!pending) {
+      if (!pending || (data.seq != null && data.seq !== pending.seq)) {
         return;
       }
       this.pendingRequest = null;
@@ -223,7 +224,7 @@ export class TitaniumWasmEngineClient {
     }
 
     const pending = this.pendingRequest;
-    if (!pending) {
+    if (!pending || (data.seq != null && data.seq !== pending.seq)) {
       return;
     }
 
@@ -407,10 +408,16 @@ export class TitaniumWasmEngineClient {
   ponder() {}
   stopPonder() {}
 
+  // Soft cancel: drops any in-flight/queued search but keeps the worker (and
+  // its warm WASM instance + thread pool) alive. The stale search, if still
+  // running, finishes in the background and its result is discarded by the
+  // seq check in _onWorkerMessage -- it is never terminated, so a fresh
+  // request never pays the full worker/thread-pool re-init cost. Used for
+  // undo / analysis jumps / replay loads, where the engine seat itself isn't
+  // going away, only the position under it changed.
   async cancelSearch() {
     this.queuedRequest = null;
     this.pendingRequest = null;
-    this.terminateWorkers();
     this.setStatus('idle');
   }
 
@@ -418,13 +425,18 @@ export class TitaniumWasmEngineClient {
     this.queuedRequest = null;
   }
 
+  // Hard teardown: actually kills the worker. Only for when the engine
+  // instance itself is being discarded (seat destroyed / engine config
+  // switched) -- see destroyEngineForSeat in appController.js.
   destroy() {
-    void this.cancelSearch();
+    this.queuedRequest = null;
+    this.pendingRequest = null;
+    this.terminateWorkers();
     this.algebraicMoves = [];
   }
 
   resetConnection() {
-    this.destroy();
+    void this.cancelSearch();
     this.algebraicMoves = [];
   }
 
@@ -490,7 +502,9 @@ export class TitaniumWasmEngineClient {
     }
 
     const started = performance.now();
+    const seq = ++this._requestSeq;
     const pending = {
+      seq,
       started,
       initMs: 0,
       timeMs,
@@ -499,7 +513,9 @@ export class TitaniumWasmEngineClient {
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => this.onBestMove?.(action),
       onError: (err) => {
-        this.pendingRequest = null;
+        if (this.pendingRequest === pending) {
+          this.pendingRequest = null;
+        }
         this.onError?.(err);
         this.drainQueuedRequest();
       },
@@ -510,7 +526,9 @@ export class TitaniumWasmEngineClient {
     try {
       await this.initWorkers(engineMode, { catLmrCeiling, threads: this.threads });
     } catch (err) {
-      this.pendingRequest = null;
+      if (this.pendingRequest === pending) {
+        this.pendingRequest = null;
+      }
       this.setStatus('error');
       throw err;
     }
@@ -519,6 +537,7 @@ export class TitaniumWasmEngineClient {
 
     this.worker.postMessage({
       op: 'search',
+      seq,
       algebraicMoves: this.algebraicMoves,
       timeMs,
       maxNodes,

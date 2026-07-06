@@ -119,7 +119,7 @@ assert(
   'titanium WASM passes configured threads into Rust instead of JS fanout',
 );
 assert(
-  tiWasmWorker.includes('go_threads_json(movetime, cap, requestedThreads, onProgress)'),
+  tiWasmWorker.includes('go_threads_json(movetime, cap, depthCap, requestedThreads, onProgress)'),
   'titanium WASM worker calls standalone Rust API',
 );
 assert(
@@ -144,7 +144,7 @@ assert(
   workerBenchSrc.includes('requireThreaded') &&
     workerBenchSrc.includes('helperStarts') &&
     workerBenchSrc.includes('helperNodes') &&
-    workerBenchSrc.includes('e2 e8 e3 e7 e4 e6 c3h'),
+    workerBenchSrc.includes('e2 e8 a3h g6h b3v'),
   'browser benchmark can fail closed when WASM threads or real search regress',
 );
 assert(

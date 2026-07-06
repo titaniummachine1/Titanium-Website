@@ -1436,7 +1436,30 @@ export class AppController {
     this._lmrDisplayViz = null;
     this.handleCatPositionChanged();
     this.onChange?.();
+    this._prewarmAiEngines();
     this.maybeRequestAiMove();
+  }
+
+  /**
+   * Kick off WASM module load + thread-pool init for both AI seats right at
+   * game start, instead of paying that cost lazily inside the first move's
+   * think-time budget. Fire-and-forget: getEngineForSeat's cache means the
+   * later real move request picks up the same (by-then-likely-warm)
+   * instance. Safe to call for any engine kind -- initWorkers is optional
+   * chained, so it's a no-op for clients that don't have it (e.g. ACE JS).
+   */
+  _prewarmAiEngines() {
+    for (let seatIndex = 0; seatIndex < 2; seatIndex++) {
+      const playerType = this.settings.players[seatIndex];
+      if (!playerType || playerType === PlayerType.Human) {
+        continue;
+      }
+      const engine = this.getEngineForSeat(seatIndex);
+      engine?.initWorkers?.().catch(() => {
+        // Swallow -- the real move request will retry init and surface any
+        // genuine failure through the normal error path.
+      });
+    }
   }
 
   isFreePlayMode() {

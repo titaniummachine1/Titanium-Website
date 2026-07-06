@@ -36,7 +36,7 @@ function mergeDepthLogs(existing, incoming) {
 }
 
 self.onmessage = async (event) => {
-  const { algebraicMoves, timeMs, maxDepth, engineMode } = event.data ?? {};
+  const { seq, algebraicMoves, timeMs, maxDepth, engineMode } = event.data ?? {};
   try {
     const wasm = await ensureEngine();
     const history = algebraicMoves ?? [];
@@ -57,6 +57,7 @@ self.onmessage = async (event) => {
       };
       self.postMessage({
         type: 'info',
+        seq,
         thinking: true,
         ...finalMeta,
       });
@@ -70,11 +71,12 @@ self.onmessage = async (event) => {
       onProgress,
     );
     if (!best || best === '(none)') {
-      self.postMessage({ type: 'error', message: 'ACE WASM returned no legal move' });
+      self.postMessage({ type: 'error', seq, message: 'ACE WASM returned no legal move' });
       return;
     }
     self.postMessage({
       type: 'bestmove',
+      seq,
       algebraicMove: best,
       stoppedBy: finalMeta.stoppedBy ?? mode,
       mode: finalMeta.mode ?? mode,
@@ -90,6 +92,6 @@ self.onmessage = async (event) => {
     const panic = typeof last_panic === 'function' ? last_panic() : '';
     const base = err?.message ?? String(err);
     const message = panic && !base.includes(panic) ? `${base} | ${panic}` : base;
-    self.postMessage({ type: 'error', message });
+    self.postMessage({ type: 'error', seq, message });
   }
 };

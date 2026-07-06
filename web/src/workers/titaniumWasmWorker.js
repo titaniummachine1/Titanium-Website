@@ -83,6 +83,14 @@ function ensureEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) 
   return engine;
 }
 
+function replaceEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) {
+  const key = engineCacheKey(engineMode, catLmrCeiling);
+  const stale = engines.get(key);
+  stale?.free?.();
+  engines.delete(key);
+  return ensureEngineInstance(engineMode, catLmrCeiling);
+}
+
 async function ensureThreadPool(requestedThreads = 1) {
   await ensureInit();
   const initThreadPool = titaniumWasm.initThreadPool;
@@ -168,9 +176,11 @@ async function handleInit(engineMode, catLmrCeiling, threads = 1) {
 
 async function handleSearch(eventData) {
   const {
+    seq,
     algebraicMoves,
     timeMs,
     maxNodes,
+    maxDepth,
     isFreshGame,
     engineMode = 'titanium-v16',
     catLmrCeiling = 800,
@@ -183,7 +193,7 @@ async function handleSearch(eventData) {
   const canThread = canUseThreads();
   let effectiveThreads = canThread ? Math.max(1, threads) : 1;
   let fallbackReason = threadFallbackReason(threads);
-  const wasm = await ensureEngine(engineMode, catLmrCeiling, effectiveThreads);
+  let wasm = await ensureEngine(engineMode, catLmrCeiling, effectiveThreads);
   if (isFreshGame) {
     wasm.reset();
   }
@@ -205,6 +215,7 @@ async function handleSearch(eventData) {
           lastProgress = data;
           self.postMessage({
             type: 'info',
+            seq,
             thinking: true,
             ...data,
             mode: data.engine ?? data.stoppedBy ?? engineMode,
@@ -218,11 +229,17 @@ async function handleSearch(eventData) {
 
   const movetime = Math.max(1, timeMs ?? 10_000);
   const cap = maxNodes ?? 0;
+  const depthCap = maxDepth ?? 0; // <=0 means "no explicit cap" to the wasm engine
 
   function runSearch(engine, requestedThreads = effectiveThreads) {
     if (typeof engine.go_threads_json === 'function') {
-      const json = engine.go_threads_json(movetime, cap, requestedThreads, onProgress);
+      const json = engine.go_threads_json(movetime, cap, depthCap, requestedThreads, onProgress);
       const data = JSON.parse(json);
+      if (Array.isArray(data.progress) && typeof onProgress === 'function') {
+        for (const progress of data.progress) {
+          onProgress(JSON.stringify(progress));
+        }
+      }
       return {
         best: data.move,
         depth: data.depth,
@@ -233,12 +250,12 @@ async function handleSearch(eventData) {
     }
     if (typeof engine.go_threads === 'function') {
       return {
-        best: engine.go_threads(movetime, cap, requestedThreads, onProgress),
+        best: engine.go_threads(movetime, cap, depthCap, requestedThreads, onProgress),
         usedJsonApi: false,
       };
     }
     return {
-      best: engine.go(movetime, cap, onProgress),
+      best: engine.go(movetime, cap, depthCap, onProgress),
       usedJsonApi: false,
     };
   }
@@ -260,6 +277,7 @@ async function handleSearch(eventData) {
     if (!isTrap && !isAliasing) {
       throw firstErr;
     }
+    wasm = replaceEngineInstance(engineMode, catLmrCeiling);
     if (isFreshGame) {
       wasm.reset();
     } else if (history.length > 0) {
@@ -279,6 +297,7 @@ async function handleSearch(eventData) {
   if (!best || best === '(none)') {
     self.postMessage({
       type: 'error',
+      seq,
       message: 'WASM engine returned no legal move',
     });
     return;
@@ -298,6 +317,7 @@ async function handleSearch(eventData) {
 
   self.postMessage({
     type: 'bestmove',
+    seq,
     algebraicMove: best,
     depth,
     nodes,
@@ -345,6 +365,7 @@ self.onmessage = async (event) => {
       (err instanceof WebAssembly.RuntimeError ? 'WASM runtime error (engine panic)' : String(err));
     self.postMessage({
       type: 'error',
+      seq: data.seq,
       message,
       stack: err?.stack,
     });

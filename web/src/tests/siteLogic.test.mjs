@@ -5,6 +5,7 @@
 
 import { resolveLiveBestMoveKey, canPlayNow, pvFirstMoveFromLiveSearch } from '../lib/liveBestMove.js';
 import {
+  formatEngineScore,
   formatScoreForCard,
   ACE_MATE_VALUE,
   TITANIUM_MATE_VALUE,
@@ -136,12 +137,12 @@ assert(canPlayNow(baseState), 'canPlayNow when live pv legal');
 
 console.log('\n[mate] Quoridor moves from engine plies (AceV13 parity)');
 assertEqual(quoridorMovesFromMatePlies(1), 1, 'mate in 1 ply = 1 move');
-assertEqual(quoridorMovesFromMatePlies(2), 1, 'mate in 2 plies = 1 move');
-assertEqual(quoridorMovesFromMatePlies(4), 2, 'mate in 4 plies = 2 moves');
+assertEqual(quoridorMovesFromMatePlies(2), 2, 'mate in 2 plies = 2 moves');
+assertEqual(quoridorMovesFromMatePlies(4), 4, 'mate in 4 plies = 4 moves');
 assertEqual(
   formatScoreForCard(ACE_MATE_VALUE - 4),
-  'Win in 2',
-  'true mate score (MATE-4 plies) shows Win in 2',
+  'Win in 4',
+  'true mate score (MATE-4 plies) shows Win in 4',
 );
 assertEqual(
   formatScoreForCard(ACE_MATE_VALUE - 1),
@@ -150,14 +151,15 @@ assertEqual(
 );
 assertEqual(
   formatScoreForCard(TITANIUM_MATE_VALUE - 5),
-  'Win in 3',
-  'titanium mate win (MATE-5 plies) shows Win in 3',
+  'Win in 5',
+  'titanium mate win (MATE-5 plies) shows Win in 5',
 );
 assertEqual(
-  formatScoreForCard(-(TITANIUM_MATE_VALUE - 10)),
-  'Lose in 5',
+  formatScoreForCard(-(32_000 - 10)),
+  'Lose in 10',
   'race-proof loss shows Lose in N',
 );
+assertEqual(formatEngineScore(31_975), '+M25', 'race-proof win 31975 shows +M25');
 
 console.log('\n[legality] user midgame line replays legally');
 import { QuoridorBoard, parseAlgebraic } from '../lib/gameLogic.js';
