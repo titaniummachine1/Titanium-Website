@@ -30,7 +30,16 @@ import {
   coresSliderMax,
   defaultThreadCount,
   clampCores,
+  analysisThreadsMax,
+  defaultAnalysisThreadCount,
+  clampAnalysisCores,
 } from '../lib/timeControl.js';
+
+const UI_MODE_TABS = [
+  { id: 'play', label: 'Play' },
+  { id: 'analysis', label: 'Analysis' },
+  { id: 'replay', label: 'Review' },
+];
 
 const TITANIUM_NET_OPTIONS = [
   { label: 'Easy', id: TITANIUM_NET_EASY },
@@ -176,14 +185,14 @@ function aiSelected(players) {
 }
 
 function oracleBlocksStart(state, selections) {
-  if (!aiSelected(selections.players)) {
+  if (selections.uiMode !== 'play' || !aiSelected(selections.players)) {
     return false;
   }
   return !state.legalityOracleState?.ready;
 }
 
 function oracleStatusHtml(state, selections) {
-  if (!aiSelected(selections.players)) {
+  if (selections.uiMode !== 'play' || !aiSelected(selections.players)) {
     return '';
   }
   if (state.legalityOracleState?.ready) {
@@ -229,7 +238,9 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
       : 'Change players';
 
   const prefs = loadPrefs(state);
+  const analysisEngine = state.settings?.analysisEngine ?? {};
   const selections = {
+    uiMode: state.uiMode ?? 'play',
     players:     [...prefs.players],
     wallClock:   [...prefs.wallClock],
     timeToMove:  [...prefs.timeToMove],
@@ -237,6 +248,8 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     remoteStrength: [...prefs.remoteStrength],
     titaniumNet: [...prefs.titaniumNet],
     cores: [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])],
+    analysisWallClock: analysisEngine.wallClockSeconds ?? 3,
+    analysisCores: analysisEngine.cores ?? defaultAnalysisThreadCount(),
     visionMode: visionModeFromSettings(state.settings),
     lmrVisionShallow: state.settings?.lmrVisionShallow !== false,
     catVision: {
@@ -269,12 +282,14 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
         '<button type="button" class="player-dialog__close" aria-label="Close" data-action="close">✕</button>' +
       '</div>' +
       '<div class="player-dialog__body">' +
-        '<div class="player-dialog__hint">White starts at the bottom and moves upward. Black starts at the top and moves downward.</div>' +
-        renderSeatSection(0, selections, groups) +
-        renderSeatSection(1, selections, groups) +
-        '<div data-oracle-hint="1">' + oracleStatusHtml(state, selections) + '</div>' +
+        renderUiModeTabs(selections) +
+        '<div data-mode-body>' + renderModeBody(state, selections, groups) + '</div>' +
         '<div class="player-dialog__options">' +
           renderVisionSettings(selections) +
+          '<label class="player-dialog__option-row">' +
+            '<input type="checkbox" data-option="evalBar"' + (state.settings?.displayEvalBar !== false ? ' checked' : '') + '>' +
+            ' Show eval bar' +
+          '</label>' +
           '<label class="player-dialog__option-row">' +
             '<input type="checkbox" data-option="bestMoveHint"' + (state.settings?.showBestMoveHint !== false ? ' checked' : '') + '>' +
             ' Show best-move hint on board while engine thinks' +
@@ -296,26 +311,58 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
 
   setTimeout(() => overlay.querySelector('[data-action="start"]')?.focus(), 50);
 
-  // Wire seat selects
-  for (const seat of [0, 1]) {
-    const sel = overlay.querySelector('[data-seat-select="' + seat + '"]');
-    if (sel) {
-      sel.addEventListener('change', () => {
-        selections.players[seat] = sel.value;
-        rebuildEngineControls(overlay, seat, selections);
-      });
-    }
-  }
-
-  wireEngineControls(overlay, 0, selections);
-  wireEngineControls(overlay, 1, selections);
+  wireModeBody(overlay, state, selections, groups);
   wireVisionSettings(overlay, selections, controller);
+
+  overlay.querySelectorAll('[data-mode-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.modeTab === selections.uiMode) return;
+      selections.uiMode = btn.dataset.modeTab;
+      overlay.querySelectorAll('[data-mode-tab]').forEach((b) => {
+        b.classList.toggle('mode-tab--active', b.dataset.modeTab === selections.uiMode);
+      });
+      const host = overlay.querySelector('[data-mode-body]');
+      if (host) {
+        host.innerHTML = renderModeBody(controller.getState(), selections, groups);
+        wireModeBody(overlay, state, selections, groups);
+      }
+      const startBtn = overlay.querySelector('[data-action="start"]');
+      if (startBtn) {
+        startBtn.textContent = selections.uiMode !== 'play'
+          ? 'Apply'
+          : (isNewGame ? 'Start game' : isSettings ? 'Apply settings' : 'Apply');
+      }
+      updateStartButtonState(overlay, controller.getState(), selections);
+    });
+  });
 
   const confirmDialog = () => { applyAndClose(); };
   const cancelDialog = () => { overlay.remove(); currentDialog = null; };
 
   function applyAndClose() {
     const liveState = controller.getState();
+    // Apply display toggles immediately via controller (both branches).
+    const evalBar = overlay.querySelector('[data-option="evalBar"]')?.checked ?? true;
+    if ((liveState.settings?.displayEvalBar !== false) !== evalBar) {
+      controller.toggleDisplayEvalBar?.();
+    }
+    const bmHint = overlay.querySelector('[data-option="bestMoveHint"]')?.checked ?? true;
+    controller.toggleBestMoveHint?.(bmHint);
+    applyVisionSettings(selections, controller);
+
+    if (selections.uiMode !== 'play') {
+      // Analysis/Review: apply the single-engine settings chosen here, then
+      // actually switch modes -- this used to be missing entirely, so
+      // picking the Analysis/Review tab and hitting Apply silently did
+      // nothing (stayed in Play with whatever players were already set).
+      controller.setAnalysisEngineSetting?.('wallClockSeconds', selections.analysisWallClock);
+      controller.setAnalysisEngineSetting?.('cores', selections.analysisCores);
+      controller.setUiMode?.(selections.uiMode);
+      overlay.remove();
+      currentDialog = null;
+      return;
+    }
+
     if (oracleBlocksStart(liveState, selections)) {
       refreshOpenPlayerDialog(liveState);
       return;
@@ -329,11 +376,12 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
       titaniumNet: selections.titaniumNet,
       cores: selections.cores,
     });
-    // Apply display toggles immediately via controller
-    const bmHint = overlay.querySelector('[data-option="bestMoveHint"]')?.checked ?? true;
-    controller.toggleBestMoveHint?.(bmHint);
-    applyVisionSettings(selections, controller);
-    applySelections(selections, isNewGame, controller, state);
+    if (liveState.uiMode !== 'play') {
+      // Coming back to Play from Analysis/Review via "Settings" (not "New
+      // game") -- changePlayers() alone doesn't touch uiMode, so do it here.
+      controller.setUiMode?.('play');
+    }
+    applySelections(selections, isNewGame, controller, liveState);
     overlay.remove();
     currentDialog = null;
   }
@@ -368,6 +416,58 @@ export function refreshOpenPlayerDialog(state) {
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
+
+function renderUiModeTabs(selections) {
+  const btns = UI_MODE_TABS.map((tab) =>
+    '<button type="button" class="mode-tab ' + (tab.id === selections.uiMode ? 'mode-tab--active' : '') + '"' +
+    ' data-mode-tab="' + tab.id + '">' + escHtml(tab.label) + '</button>'
+  ).join('');
+  return '<div class="mode-tabs">' + btns + '</div>';
+}
+
+function renderModeBody(state, selections, groups) {
+  if (selections.uiMode !== 'play') {
+    return renderAnalysisEngineSection(selections);
+  }
+  return (
+    '<div class="player-dialog__hint">White starts at the bottom and moves upward. Black starts at the top and moves downward.</div>' +
+    renderSeatSection(0, selections, groups) +
+    renderSeatSection(1, selections, groups) +
+    '<div data-oracle-hint="1">' + oracleStatusHtml(state, selections) + '</div>'
+  );
+}
+
+function renderAnalysisEngineSection(selections) {
+  const hint = selections.uiMode === 'analysis'
+    ? 'Move either side on the board. Titanium v16 evaluates the current position continuously.'
+    : 'Load a game via the Moves card\'s Load button (right sidebar). Review evaluates game positions with parallel single-thread workers.';
+  const workerLabel = selections.uiMode === 'analysis'
+    ? 'Search threads'
+    : 'Parallel workers';
+  return (
+    '<div class="player-dialog__hint">' + escHtml(hint) + '</div>' +
+    '<div class="player-dialog__field">' +
+      '<label class="player-dialog__label">Evaluation engine</label>' +
+      '<div class="player-dialog__preset-group">' +
+        '<button type="button" class="btn btn--primary btn--small btn--fit" disabled>Titanium v16</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="player-dialog__field">' +
+      '<label class="player-dialog__label">Time per position: ' +
+        '<span class="player-dialog__time-val" data-analysis-time-label>' + formatTime(selections.analysisWallClock) + '</span>' +
+      '</label>' +
+      '<input type="range" class="player-dialog__time-slider" data-analysis-time-slider' +
+      ' min="' + WALL_CLOCK_MIN + '" max="' + WALL_CLOCK_MAX + '" step="' + WALL_CLOCK_STEP + '" value="' + selections.analysisWallClock + '">' +
+    '</div>' +
+    '<div class="player-dialog__field">' +
+      '<label class="player-dialog__label">' + workerLabel + ' (device max ' + analysisThreadsMax() + '): ' +
+        '<span class="player-dialog__time-val" data-analysis-cores-label>' + selections.analysisCores + '</span>' +
+      '</label>' +
+      '<input type="range" class="player-dialog__time-slider" data-analysis-cores-slider' +
+      ' min="1" max="' + analysisThreadsMax() + '" step="1" value="' + selections.analysisCores + '">' +
+    '</div>'
+  );
+}
 
 function renderVisionSettings(selections) {
   const current = selections.visionMode ?? 'off';
@@ -798,6 +898,46 @@ function rebuildEngineControls(overlay, seat, selections) {
   if (!host) return;
   host.innerHTML = renderEngineControls(seat, selections);
   wireEngineControls(overlay, seat, selections);
+}
+
+/** Wires whichever body is currently rendered — seat pickers (Play) or the single-engine analysis section. */
+function wireModeBody(overlay, state, selections) {
+  if (selections.uiMode !== 'play') {
+    wireAnalysisEngineSection(overlay, selections);
+    return;
+  }
+
+  for (const seat of [0, 1]) {
+    const sel = overlay.querySelector('[data-seat-select="' + seat + '"]');
+    if (sel) {
+      sel.addEventListener('change', () => {
+        selections.players[seat] = sel.value;
+        rebuildEngineControls(overlay, seat, selections);
+      });
+    }
+  }
+  wireEngineControls(overlay, 0, selections);
+  wireEngineControls(overlay, 1, selections);
+}
+
+function wireAnalysisEngineSection(overlay, selections) {
+  const timeSlider = overlay.querySelector('[data-analysis-time-slider]');
+  const timeLabel = overlay.querySelector('[data-analysis-time-label]');
+  if (timeSlider) {
+    timeSlider.addEventListener('input', () => {
+      selections.analysisWallClock = Number(timeSlider.value);
+      if (timeLabel) timeLabel.textContent = formatTime(selections.analysisWallClock);
+    });
+  }
+
+  const coresSlider = overlay.querySelector('[data-analysis-cores-slider]');
+  const coresLabel = overlay.querySelector('[data-analysis-cores-label]');
+  if (coresSlider) {
+    coresSlider.addEventListener('input', () => {
+      selections.analysisCores = Number(coresSlider.value);
+      if (coresLabel) coresLabel.textContent = String(selections.analysisCores);
+    });
+  }
 }
 
 // ── Apply ────────────────────────────────────────────────────────────────────

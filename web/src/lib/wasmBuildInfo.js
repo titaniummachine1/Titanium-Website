@@ -73,6 +73,10 @@ export function renderWasmDebugPanel(container) {
   if (!container) {
     return;
   }
+  if (!import.meta.env.DEV) {
+    container.innerHTML = '';
+    return;
+  }
   const id = mergedBuildIdentity();
   container.innerHTML =
     '<details class="wasm-debug-panel" open>' +

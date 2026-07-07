@@ -20,6 +20,7 @@ import { formatScoreForCard, isMateScore, mateInfo } from '../lib/engineScore.js
 import { resolveDisplayNodes } from '../lib/searchNodes.js';
 import { canPlayNow, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
 import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
+import { openLogsDialog } from './gameControls.js';
 
 function escHtml(s) {
   return String(s)
@@ -444,6 +445,18 @@ function bindPlayerCardActions(container, state, seatIndex, controller) {
   container.querySelector('[data-action="play-now"]')?.addEventListener('click', () => {
     controller.playNow?.();
   });
+
+  // Click the pawn icon to see full engine logs (chain-of-thought), same
+  // content as the old standalone Logs button -- works even when the engine
+  // hasn't errored, not just as an error-recovery affordance.
+  const pawnEl = container.querySelector('.player-card__pawn');
+  if (pawnEl) {
+    pawnEl.classList.add('player-card__pawn--clickable');
+    pawnEl.title = 'Click for full engine logs';
+    pawnEl.addEventListener('click', () => {
+      openLogsDialog(controller.getState());
+    });
+  }
 
   container
     .querySelector('[data-action="copy-engine-error"]')

@@ -51,6 +51,34 @@ export function defaultThreadCount() {
   return Math.min(DEFAULT_THREAD_COUNT, threadsSliderMax());
 }
 
+/**
+ * Analysis/Review's dedicated warm engine session is single-purpose (one
+ * search at a time, not N concurrent seats), so unlike Play mode it's not
+ * capped at THREADS_HARD_MAX=8 -- it uses the device's full logical CPU
+ * count, up to a generous safety ceiling to avoid pathological values on
+ * exotic hardware.
+ */
+export const ANALYSIS_THREADS_SAFETY_CAP = 32;
+
+export function analysisThreadsMax() {
+  if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0) {
+    return Math.max(1, Math.min(navigator.hardwareConcurrency, ANALYSIS_THREADS_SAFETY_CAP));
+  }
+  return THREADS_HARD_MAX;
+}
+
+export function defaultAnalysisThreadCount() {
+  return analysisThreadsMax();
+}
+
+export function clampAnalysisCores(cores) {
+  const n = Number(cores);
+  if (!Number.isFinite(n)) {
+    return defaultAnalysisThreadCount();
+  }
+  return Math.max(1, Math.min(analysisThreadsMax(), Math.round(n)));
+}
+
 /** @deprecated use defaultThreadCount */
 export function defaultCoreCount() {
   return defaultThreadCount();

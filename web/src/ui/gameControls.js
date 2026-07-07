@@ -1,15 +1,13 @@
 /**
- * Compact controls bar and notation bar beneath the board.
+ * Controls bar beneath the board — three big, evenly-sized buttons filling
+ * the full board width: ◀ Undo | ⏸ Pause | Redo ▶.
  *
- * Controls:
- *   ← Undo | New game | ⏸ Pause | Logs | Load | Settings | Redo →
- *
- * Notation bar:
- *   Scrollable move list + error display.
+ * New game / Settings live above the sidebar's moves-card, Load lives in the
+ * moves-card header, and full engine logs open from the player-card pawn icon
+ * (see ui/sidebarView.js and ui/playerCard.js).
  */
 
 import { toAlgebraic } from '../lib/gameLogic.js';
-import { openPlayerDialog } from './playerDialog.js';
 import { formatEngineScore } from '../lib/engineScore.js';
 import {
   formatCanonicalGameLog,
@@ -25,33 +23,31 @@ function escHtml(s) {
 
 const PAUSE_ICON = '⏸';
 const PLAY_ICON = '▶';
+const PAUSE_HINT = 'Engines paused — make moves manually, or press Space / ▶ to resume';
 
 export function renderGameControls(container, state, controller) {
   const canUndo = state.actions.length > 0;
   const canRedo = !!state.canRedo;
   const paused = !!state.enginesPaused;
+  const pauseTitle = state.uiMode === 'replay'
+    ? (paused ? 'Resume review analysis (Space)' : 'Pause review analysis (Space)')
+    : (paused ? PAUSE_HINT : 'Pause engines (Space)');
+  const pauseLabel = state.uiMode === 'replay'
+    ? (paused ? 'Resume review analysis' : 'Pause review analysis')
+    : (paused ? 'Resume engines' : 'Pause engines');
 
   container.innerHTML = `
     <div class="game-controls">
-      <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="undo" ${canUndo ? '' : 'disabled'} title="Undo last move (Left Arrow)" aria-label="Undo last move">←</button>
-      <button type="button" class="btn btn--small game-controls__btn" data-action="new-game" title="Start a new game">New game</button>
-      <button type="button" class="btn btn--small game-controls__btn game-controls__btn--pause${paused ? ' game-controls__btn--pause-active' : ''}" data-action="pause" title="${paused ? 'Resume engines (Space)' : 'Pause engines (Space)'}" aria-label="${paused ? 'Resume engines' : 'Pause engines'}" aria-pressed="${paused ? 'true' : 'false'}">${paused ? PLAY_ICON : PAUSE_ICON}</button>
-      <button type="button" class="btn btn--small game-controls__btn" data-action="logs" title="Show AI thinking log for last move">Logs</button>
-      <button type="button" class="btn btn--small game-controls__btn" data-action="load-notation" title="Load game from notation">Load</button>
-      <button type="button" class="btn btn--small game-controls__btn" data-action="change-players" title="Change players and engine settings">Settings</button>
-      <button type="button" class="btn btn--small game-controls__btn game-controls__btn--nav" data-action="redo" ${canRedo ? '' : 'disabled'} title="Redo next move (Right Arrow)" aria-label="Redo next move">→</button>
+      <button type="button" class="game-controls__btn game-controls__btn--nav" data-action="undo" ${canUndo ? '' : 'disabled'} title="Undo last move (Left Arrow)" aria-label="Undo last move">◀</button>
+      <button type="button" class="game-controls__btn game-controls__btn--pause${paused ? ' game-controls__btn--pause-active' : ''}" data-action="pause" title="${escHtml(pauseTitle)}" aria-label="${escHtml(pauseLabel)}" aria-pressed="${paused ? 'true' : 'false'}">${paused ? PLAY_ICON : PAUSE_ICON}</button>
+      <button type="button" class="game-controls__btn game-controls__btn--nav" data-action="redo" ${canRedo ? '' : 'disabled'} title="Redo next move (Right Arrow)" aria-label="Redo next move">▶</button>
     </div>
-    ${paused ? '<div class="engines-pause-banner">Engines paused — make moves manually, or press Space / ▶ to resume</div>' : ''}
   `;
 
   wireControls(container, state, controller);
 }
 
 function wireControls(container, state, controller) {
-  container.querySelector('[data-action="new-game"]')?.addEventListener('click', () => {
-    openPlayerDialog(controller.getState(), controller, { mode: 'newgame' });
-  });
-
   container.querySelector('[data-action="undo"]')?.addEventListener('click', () => {
     controller.undo?.();
   });
@@ -63,19 +59,6 @@ function wireControls(container, state, controller) {
   container.querySelector('[data-action="pause"]')?.addEventListener('click', () => {
     controller.toggleEnginesPaused?.();
   });
-
-  container.querySelector('[data-action="logs"]')?.addEventListener('click', () => {
-    openLogsDialog(controller.getState());
-  });
-
-  container.querySelector('[data-action="load-notation"]')?.addEventListener('click', () => {
-    openLoadNotationDialog(controller);
-  });
-
-  container.querySelector('[data-action="change-players"]')?.addEventListener('click', () => {
-    openPlayerDialog(controller.getState(), controller, { mode: 'settings' });
-  });
-
 }
 
 function formatGameLogHeader(state) {
@@ -143,7 +126,7 @@ function formatLogsText(state) {
   return lines.join('\n');
 }
 
-function openLogsDialog(state) {
+export function openLogsDialog(state) {
   const existing = document.querySelector('.logs-dialog-overlay');
   if (existing) { existing.remove(); return; }
 
@@ -186,20 +169,31 @@ function openLogsDialog(state) {
   overlay.querySelector('textarea')?.focus();
 }
 
-function openLoadNotationDialog(controller) {
+/**
+ * Single Load entry point (Moves card, next to Copy) for every mode:
+ *  - Review: loads into the ply scrubber (controller.loadReplay) so you can
+ *    step through it move by move.
+ *  - Play/Analysis: jumps straight to the final position (controller.loadNotationString).
+ * Accepts plain "e2 e8 e3 e7 ..." lists and the raw wallz.gg move-history
+ * copy-paste layout (numbered lines, one move per line) -- both already
+ * parse fine through the same tokenizer.
+ */
+export function openLoadNotationDialog(controller) {
   const existing = document.querySelector('.load-notation-dialog');
   if (existing) { existing.remove(); return; }
+
+  const isReview = controller.getState?.().uiMode === 'replay';
 
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay load-notation-dialog';
   overlay.innerHTML = `
-    <div class="load-dialog" role="dialog" aria-modal="true" aria-label="Load notation">
+    <div class="load-dialog" role="dialog" aria-modal="true" aria-label="Load game">
       <div class="load-dialog__header">
-        <h2 class="load-dialog__title">Load notation</h2>
+        <h2 class="load-dialog__title">Load game</h2>
         <button class="load-dialog__close" data-action="close">✕</button>
       </div>
       <div class="load-dialog__body">
-        <textarea class="load-dialog__input" placeholder="Paste game notation here…" rows="5" spellcheck="false"></textarea>
+        <textarea class="load-dialog__input" placeholder="Paste move list (e2 e8 e3 e7 ... or wallz move-history copy-paste)" rows="5" spellcheck="false"></textarea>
         <div class="load-dialog__error" hidden></div>
       </div>
       <div class="load-dialog__footer">
@@ -219,6 +213,16 @@ function openLoadNotationDialog(controller) {
     const text = overlay.querySelector('.load-dialog__input')?.value?.trim() ?? '';
     if (!text) { close(); return; }
     const errEl = overlay.querySelector('.load-dialog__error');
+    if (isReview) {
+      try {
+        controller.loadReplay(text);
+        close();
+      } catch (err) {
+        errEl.hidden = false;
+        errEl.textContent = err?.message ?? String(err);
+      }
+      return;
+    }
     const result = controller.loadNotationString?.(text);
     if (result && result.error) {
       errEl.hidden = false;
@@ -231,76 +235,3 @@ function openLoadNotationDialog(controller) {
   overlay.querySelector('.load-dialog__input')?.focus();
 }
 
-// ── Notation bar ────────────────────────────────────────────────────────
-
-let lastNotationKey = '';
-
-export function renderNotationBar(container, state, controller) {
-  updateNotationBar(container, state, controller);
-}
-
-export function updateNotationBar(container, state, controller) {
-  const moves = state.actions ?? [];
-  const key = moves.map((a) => toAlgebraic(a)).join(' ') + '|' + (state.winner ?? '') + '|' + state.isDraw;
-
-  if (key === lastNotationKey && container.children.length > 0) return;
-  lastNotationKey = key;
-
-  // Build move list
-  const movePairs = [];
-  for (let i = 0; i < moves.length; i += 2) {
-    movePairs.push({
-      num: Math.floor(i / 2) + 1,
-      white: toAlgebraic(moves[i]),
-      black: moves[i + 1] ? toAlgebraic(moves[i + 1]) : '',
-    });
-  }
-
-  // Errors
-  const errors = Object.entries(state.engineErrors ?? {})
-    .filter(([, m]) => m)
-    .map(([seat, m]) => `${seat === '0' ? 'White' : 'Black'}: ${m}`)
-    .join(' | ');
-
-  const moveHtml = movePairs.length === 0
-    ? '<span class="notation-bar__empty">No moves yet</span>'
-    : movePairs.map((p) =>
-        `<span class="notation-pair"><span class="notation-num">${p.num}.</span><span class="notation-move">${escHtml(p.white)}</span>${p.black ? `<span class="notation-move">${escHtml(p.black)}</span>` : ''}</span>`,
-      ).join('');
-
-  let statusHtml = '';
-  if (state.winner) {
-    statusHtml = `<span class="notation-bar__result">${state.winner === 1 ? 'White' : 'Black'} wins</span>`;
-  } else if (state.isDraw) {
-    statusHtml = `<span class="notation-bar__result">Draw</span>`;
-  }
-
-  const hasMoves = moves.length > 0;
-  container.innerHTML = `
-    <div class="notation-bar">
-      <div class="notation-bar__moves">${moveHtml}${statusHtml}</div>
-      ${hasMoves ? `<button class="btn btn--small notation-bar__copy" data-action="copy-notation" title="Copy game notation">Copy</button>` : ''}
-      ${errors ? `<div class="notation-bar__errors">${escHtml(errors)}</div>` : ''}
-    </div>
-  `;
-
-  // Auto-scroll to end
-  const movesEl = container.querySelector('.notation-bar__moves');
-  if (movesEl) movesEl.scrollLeft = movesEl.scrollWidth;
-
-  // Wire copy button
-  container.querySelector('[data-action="copy-notation"]')?.addEventListener('click', (e) => {
-    const btn = e.currentTarget;
-    const notation = moves.map((a) => toAlgebraic(a)).join(' ');
-    navigator.clipboard.writeText(notation).catch(() => {
-      const ta = document.createElement('textarea');
-      ta.value = notation;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    });
-    btn.textContent = '✓';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-  });
-}

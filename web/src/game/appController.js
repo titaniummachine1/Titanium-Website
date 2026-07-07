@@ -1,6 +1,9 @@
 import { GameSession } from './gameSession.js';
 import { naiveDistanceEval, parseAlgebraic, isWallAction, QuoridorBoard } from '../lib/gameLogic.js';
 import { decodeReplayCode, encodeReplayFromActions } from '../lib/replayCode.js';
+import { AnalysisEngineSession, analysisResultToEvalState } from './analysisEngineSession.js';
+import { ReviewAnalysisSession, classifyReviewMoves } from './reviewAnalysisSession.js';
+import { defaultAnalysisThreadCount } from '../lib/timeControl.js';
 import {
   LMR_AGGRESSION_DEFAULT,
   fetchCatSnapshot,
@@ -190,6 +193,59 @@ function buildThinkSeatSnapshot({
     thinkMs: thinkMs ?? null,
   };
 }
+
+function pvArrayFromPayload(payload) {
+  if (Array.isArray(payload?.pv)) {
+    return payload.pv.filter(Boolean).map(String);
+  }
+  if (typeof payload?.pv === 'string') {
+    return payload.pv.trim().split(/\s+/).filter(Boolean);
+  }
+  const deep = deepestDepthEntry(payload?.depthLog);
+  if (typeof deep?.pv === 'string') {
+    return deep.pv.trim().split(/\s+/).filter(Boolean);
+  }
+  return [];
+}
+
+function searchPayloadToEvalState(payload, playerToMove) {
+  if (!payload) {
+    return null;
+  }
+  const hasDist = Number.isFinite(payload.whiteDist) && Number.isFinite(payload.blackDist);
+  const margin = hasDist ? payload.blackDist - payload.whiteDist : 0;
+  const hasScore = Number.isFinite(Number(payload.rootScore ?? payload.score));
+
+  let p1;
+  let whiteScore = null;
+  if (hasScore) {
+    const sideScore = Number(payload.rootScore ?? payload.score);
+    whiteScore = playerToMove === 2 ? -sideScore : sideScore;
+    p1 = 1 / (1 + Math.exp(-whiteScore / 350));
+  } else if (Number.isFinite(Number(payload.rootWinRate))) {
+    const sideWinRate = Math.max(0, Math.min(1, Number(payload.rootWinRate)));
+    p1 = playerToMove === 2 ? 1 - sideWinRate : sideWinRate;
+  } else if (hasDist) {
+    p1 = 0.5 + margin * 0.07;
+  } else {
+    return null;
+  }
+  p1 = Math.max(0.05, Math.min(0.95, p1));
+
+  const deep = deepestDepthEntry(payload.depthLog);
+  return {
+    p1,
+    margin,
+    whiteDist: payload.whiteDist,
+    blackDist: payload.blackDist,
+    rootScore: whiteScore,
+    playerToMove,
+    depth: payload.depth ?? payload.searchDepth ?? deep?.depth ?? null,
+    pv: pvArrayFromPayload(payload),
+    rootMove: payload.rootMove ?? null,
+    rootMoves: Array.isArray(payload.rootMoves) ? [...payload.rootMoves] : [],
+  };
+}
 import {
   WALL_CLOCK_RANGE,
   LOCAL_VISITS_RANGE,
@@ -265,6 +321,8 @@ export class AppController {
           players: persisted.players.map((p) => normalizePlayerType(p)),
           playerAiSettings: persisted.playerAiSettings ?? [{}, {}],
           playerAiSettingsMemory: persisted.playerAiSettingsMemory ?? [{}, {}],
+          displayEvalBar: persisted.displayEvalBar !== false,
+          showBestMoveHint: persisted.showBestMoveHint !== false,
         }
       : playDefaults;
     const visionTuning = getVisionTuning();
@@ -273,15 +331,21 @@ export class AppController {
       rotateBoard: false,
       displayCoordinates: true,
       displayRemainingWalls: true,
-      displayEvalBar: true,
+      displayEvalBar: restored.displayEvalBar !== false,
       showCatVision: false,
       catVision: { ...DEFAULT_CAT_VISION_SETTINGS },
       showLmrVision: false,
       lmrVisionShallow: true,
       pathBiasPercent: visionTuning.pathBiasPercent,
       lmrAggressionPercent: visionTuning.lmrAggressionPercent,
-      showBestMoveHint: true,
+      showBestMoveHint: restored.showBestMoveHint !== false,
       uiMode: 'play',
+      analysisEngine: {
+        unlimited: true,
+        wallClockSeconds: 3,
+        cores: defaultAnalysisThreadCount(),
+        titaniumNet: 'hard',
+      },
     };
     for (let seat = 0; seat < 2; seat++) {
       const playerType = this.settings.players[seat];
@@ -320,6 +384,54 @@ export class AppController {
     /** Frozen per-seat card after each played move — kept while opponent thinks. */
     this.lastCompletedThinkBySeat = [null, null];
     this.eval = { score: 0.5, p1: 0.5, pv: [] };
+    this.evalCacheByMode = {
+      play: new Map(),
+      analysis: new Map(),
+      replay: new Map(),
+    };
+    this.analysisSession = new AnalysisEngineSession();
+    this.analysisEval = null;
+    this.analysisEvalError = null;
+    this._analysisPositionKey = null;
+    this.reviewSession = new ReviewAnalysisSession();
+    this.reviewAnalysis = this.reviewSession.snapshot();
+    this.reviewSession.onUpdate = (result) => {
+      this.reviewAnalysis = {
+        ...result,
+        classifications: classifyReviewMoves(result.positions, this.replay?.algebraic ?? []),
+      };
+      if (this.replay) {
+        for (let i = 0; i < result.positions.length; i += 1) {
+          const position = result.positions[i];
+          if (position?.status !== 'done' || !position.eval) {
+            continue;
+          }
+          const key = positionKeyFromActions(this.replay.actions.slice(0, i));
+          this._cacheEvalState('replay', key, {
+            ...position.eval,
+            source: 'review-batch',
+          });
+        }
+      }
+      this.onChange?.();
+    };
+    this.analysisSession.onUpdate = (result, err) => {
+      if (err) {
+        this.analysisEvalError = err;
+      } else {
+        this.analysisEval = result;
+        this.analysisEvalError = null;
+        const key = this._analysisPositionKey ?? this.currentPositionKey();
+        const evalState = analysisResultToEvalState(result);
+        if (evalState) {
+          this._cacheEvalState(this._evalModeKey(), key, {
+            ...evalState,
+            source: 'analysis-engine',
+          });
+        }
+      }
+      this.onChange?.();
+    };
     this.aiThinking = false;
     this.liveSearch = null;
     this.thinkingPlayerType = null;
@@ -355,10 +467,227 @@ export class AppController {
     );
   }
 
+  /**
+   * The eval bar never competes with an active play engine. If a seat engine
+   * is thinking, its live info-card payload is the eval source. The dedicated
+   * analysis session is only for positions with no play search to mirror:
+   * paused Play, Analysis, and Review.
+   */
+  _hasBorrowablePlaySearch() {
+    return (
+      this.settings.uiMode === 'play' &&
+      this.aiThinking &&
+      this.thinkingSeatIndex != null &&
+      Boolean(this.liveSearch || this.searchInfoBySeat[this.thinkingSeatIndex])
+    );
+  }
+
+  _analysisShouldBeActive() {
+    if (this._hasBorrowablePlaySearch()) {
+      return false;
+    }
+    if (this.settings.uiMode === 'analysis') {
+      return !this.enginesPaused;
+    }
+    if (this.settings.uiMode === 'replay') {
+      return false;
+    }
+    return this.enginesPaused;
+  }
+
+  setAnalysisEngineSetting(key, value) {
+    if (!this.settings.analysisEngine) {
+      this.settings.analysisEngine = { unlimited: true, wallClockSeconds: 3, cores: defaultAnalysisThreadCount(), titaniumNet: 'hard' };
+    }
+    this.settings.analysisEngine = { ...this.settings.analysisEngine, [key]: value };
+    this._analysisPositionKey = null; // force a re-search with the new setting
+    if (this.settings.uiMode === 'replay' && this.replay) {
+      this._startReviewAnalysis();
+    }
+    this.onChange?.();
+  }
+
+  _syncAnalysisSessionActive() {
+    const should = this._analysisShouldBeActive();
+    if (should && !this.analysisSession.isActive()) {
+      this.analysisSession.start();
+      this._analysisPositionKey = null; // force a fresh search on the current position
+    } else if (!should && this.analysisSession.isActive()) {
+      this.analysisSession.stop();
+      this.analysisEval = null;
+    }
+  }
+
+  _syncAnalysisPositionIfNeeded(positionKey) {
+    if (!this.analysisSession.isActive() || positionKey === this._analysisPositionKey) {
+      return;
+    }
+    this._analysisPositionKey = positionKey;
+    this.analysisEval = null;
+    this.analysisEvalError = null;
+    this.analysisSession.setPosition(this.session.actions, this.settings.analysisEngine);
+  }
+
+  _evalModeKey() {
+    return this.settings.uiMode === 'replay'
+      ? 'replay'
+      : this.settings.uiMode === 'analysis'
+        ? 'analysis'
+        : 'play';
+  }
+
+  _cacheEvalState(mode, positionKey, evalState) {
+    const map = this.evalCacheByMode?.[mode];
+    if (!map || !positionKey || !evalState) {
+      return;
+    }
+    map.set(positionKey, { ...evalState });
+  }
+
+  _cachedEvalState(positionKey) {
+    const cached = this.evalCacheByMode?.[this._evalModeKey()]?.get(positionKey);
+    return cached ? { ...cached, cached: true } : null;
+  }
+
+  _seedReviewPositions(actions) {
+    return Array.from({ length: actions.length + 1 }, (_, index) => {
+      const key = positionKeyFromActions(actions.slice(0, index));
+      const cached = this.evalCacheByMode.replay.get(key);
+      return cached
+        ? { index, status: 'done', eval: { ...cached, source: 'review-batch' } }
+        : null;
+    });
+  }
+
+  _startReviewAnalysis() {
+    if (!this.replay) {
+      return;
+    }
+    this.analysisSession.stop();
+    this.analysisEval = null;
+    this._analysisPositionKey = null;
+    this.reviewSession.start(
+      this.replay.actions,
+      this.settings.analysisEngine,
+      this._seedReviewPositions(this.replay.actions),
+    );
+  }
+
+  _stopReviewAnalysis() {
+    this.reviewSession.stop({ destroyClients: true });
+    this.reviewAnalysis = this.reviewSession.snapshot();
+  }
+
+  toggleReviewAnalysisPaused() {
+    this.reviewSession.togglePaused();
+  }
+
+  _liveEngineEvalState(positionKey) {
+    if (
+      this.settings.uiMode !== 'play' ||
+      !this.aiThinking ||
+      this.thinkingSeatIndex == null ||
+      !(this.liveSearch || this.searchInfoBySeat[this.thinkingSeatIndex])
+    ) {
+      return null;
+    }
+    const payload = {
+      ...(this.searchInfoBySeat[this.thinkingSeatIndex] ?? {}),
+      ...this.liveSearch,
+    };
+    const evalState = searchPayloadToEvalState(payload, this.session.playerToMove);
+    if (!evalState) {
+      return null;
+    }
+    const withSource = {
+      ...evalState,
+      source: 'play-live',
+    };
+    this._cacheEvalState('play', positionKey, withSource);
+    return withSource;
+  }
+
+  _latestCompletedEngineEvalState() {
+    if (this.settings.uiMode !== 'play') {
+      return null;
+    }
+    let bestSeat = null;
+    let bestSnap = null;
+    for (let seat = 0; seat < 2; seat++) {
+      const snap = this.lastCompletedThinkBySeat?.[seat] ?? this.lastThinkBySeat?.[seat];
+      if (!snap || snap.live || (snap.score == null && snap.rootScore == null && !snap.depthLog?.length)) {
+        continue;
+      }
+      if (!bestSnap || (snap.ply ?? -1) > (bestSnap.ply ?? -1)) {
+        bestSeat = seat;
+        bestSnap = snap;
+      }
+    }
+    if (!bestSnap || bestSeat == null) {
+      return null;
+    }
+    const evalState = searchPayloadToEvalState(
+      {
+        ...bestSnap,
+        rootScore: bestSnap.score ?? bestSnap.rootScore,
+        searchDepth: bestSnap.depth ?? bestSnap.searchDepth,
+      },
+      bestSeat + 1,
+    );
+    return evalState
+      ? {
+          ...evalState,
+          source: 'play-last',
+        }
+      : null;
+  }
+
   getState() {
     const snapshot = this.session.getSnapshot();
     const distanceEval = naiveDistanceEval(this.session.board);
     const terminal = snapshot.winner != null || snapshot.isDraw;
+    const positionKey = this.currentPositionKey();
+
+    if (this._analysisShouldBeActive()) {
+      this._syncAnalysisPositionIfNeeded(positionKey);
+    }
+    const liveAnalysisEvalRaw = this._analysisShouldBeActive()
+      ? analysisResultToEvalState(this.analysisEval)
+      : null;
+    const liveAnalysisEval = liveAnalysisEvalRaw
+      ? { ...liveAnalysisEvalRaw, source: 'analysis-engine' }
+      : null;
+    if (liveAnalysisEval) {
+      this._cacheEvalState(this._evalModeKey(), positionKey, liveAnalysisEval);
+    }
+    const livePlayEval = this._liveEngineEvalState(positionKey);
+    const latestCompletedPlayEval = this._latestCompletedEngineEvalState();
+    const cachedEval = this._cachedEvalState(positionKey);
+    const distanceEvalState = {
+      p1: distanceEval.p1,
+      margin: distanceEval.margin,
+      whiteDist: distanceEval.whiteDist,
+      blackDist: distanceEval.blackDist,
+      playerToMove: snapshot.playerToMove,
+      pv: [],
+      rootMoves: [],
+      source: 'distance',
+    };
+    const reviewPendingEvalState = {
+      p1: 0.5,
+      margin: 0,
+      whiteDist: distanceEval.whiteDist,
+      blackDist: distanceEval.blackDist,
+      playerToMove: snapshot.playerToMove,
+      pv: [],
+      rootMoves: [],
+      source: 'review-pending',
+      pending: true,
+    };
+    const resolvedEval =
+      this.settings.uiMode === 'replay'
+        ? (cachedEval ?? reviewPendingEvalState)
+        : (livePlayEval ?? latestCompletedPlayEval ?? liveAnalysisEval ?? cachedEval ?? distanceEvalState);
 
     return {
       ...snapshot,
@@ -369,15 +698,18 @@ export class AppController {
       liveSearch: terminal ? null : this.liveSearch,
       thinkingPlayerType: terminal ? null : this.thinkingPlayerType,
       thinkingSeatIndex: terminal ? null : this.thinkingSeatIndex,
-      eval: {
-        p1: distanceEval.p1,
-        margin: distanceEval.margin,
-        whiteDist: distanceEval.whiteDist,
-        blackDist: distanceEval.blackDist,
-        pv: this.eval.pv ?? [],
+      eval: resolvedEval,
+      analysisEngineActive: this.analysisSession.isActive() || this.reviewAnalysis.status === 'running',
+      analysisEvalDepth: resolvedEval?.depth ?? this.analysisEval?.depth ?? null,
+      analysisEvalError: this.analysisEvalError,
+      reviewAnalysis: {
+        ...this.reviewAnalysis,
+        visiblePosition: this.replay
+          ? (this.reviewAnalysis.positions?.[this.replay.index] ?? null)
+          : null,
       },
       searchGeneration: this._activeSearchSeq,
-      positionKey: this.currentPositionKey(),
+      positionKey,
       strengthLevelPresets: STRENGTH_LEVEL_PRESETS,
       timeToMovePresets: TIME_TO_MOVE_PRESETS,
       playerOptionGroups: getPlayerOptionGroups(),
@@ -423,6 +755,7 @@ export class AppController {
           total: this.replay.actions.length,
           code: this.replay.code,
           meta: this.replay.meta,
+          algebraic: [...(this.replay.algebraic ?? [])],
         }
         : null,
       terminalOverlayDismissed: this._terminalOverlayDismissed,
@@ -471,11 +804,15 @@ export class AppController {
           players: persisted.players.map((p) => normalizePlayerType(p)),
           playerAiSettings: persisted.playerAiSettings ?? [{}, {}],
           playerAiSettingsMemory: persisted.playerAiSettingsMemory ?? [{}, {}],
+          displayEvalBar: persisted.displayEvalBar !== false,
+          showBestMoveHint: persisted.showBestMoveHint !== false,
         }
       : playDefaults;
     this.settings.players = restored.players;
     this.settings.playerAiSettings = restored.playerAiSettings;
     this.settings.playerAiSettingsMemory = restored.playerAiSettingsMemory;
+    this.settings.displayEvalBar = restored.displayEvalBar !== false;
+    this.settings.showBestMoveHint = restored.showBestMoveHint !== false;
     for (let seat = 0; seat < 2; seat++) {
       const playerType = this.settings.players[seat];
       if (playerType !== PlayerType.Human) {
@@ -485,16 +822,23 @@ export class AppController {
     this.destroyAllEngines();
   }
 
-  applyAnalysisCompareDefaults() {
-    const v13Js = defaultPlayerAiSettings(PlayerType.AceV13, this.engineConfigs);
-    v13Js.strengthLevel = 0;
-    const titaniumDefault = defaultPlayerAiSettings(PlayerType.TitaniumV16, this.engineConfigs);
-    this.settings.players = [PlayerType.AceV13, PlayerType.TitaniumV16];
-    this.settings.playerAiSettings = [v13Js, titaniumDefault];
-    const memory = [{}, {}];
-    memory[0][PlayerType.AceV13] = { ...v13Js };
-    memory[1][PlayerType.TitaniumV16] = { ...titaniumDefault };
-    this.settings.playerAiSettingsMemory = memory;
+  /**
+   * Analysis/Review mode: both seats are Human (free play / view-only per
+   * uiMode), evaluation comes from the dedicated warm AnalysisEngineSession
+   * instead of a per-seat AI, so no bot player is configured here.
+   */
+  applyAnalysisEvaluatorDefaults() {
+    this.settings.players = [PlayerType.Human, PlayerType.Human];
+    this.settings.playerAiSettings = [null, null];
+    this.settings.playerAiSettingsMemory = [{}, {}];
+    if (!this.settings.analysisEngine) {
+      this.settings.analysisEngine = {
+        unlimited: true,
+        wallClockSeconds: 3,
+        cores: defaultAnalysisThreadCount(),
+        titaniumNet: 'hard',
+      };
+    }
     this.destroyAllEngines();
   }
 
@@ -916,9 +1260,19 @@ export class AppController {
       return;
     }
     this.enginesPaused = next;
+    if (this.settings.uiMode === 'replay') {
+      if (next) {
+        this.reviewSession.pause();
+      } else {
+        this.reviewSession.resume();
+      }
+      this.onChange?.();
+      return;
+    }
     if (this.enginesPaused && this.aiThinking) {
       this._cancelActiveAiSearch();
     }
+    this._syncAnalysisSessionActive();
     this.onChange?.();
     if (!this.enginesPaused) {
       this.maybeRequestAiMove();
@@ -937,6 +1291,7 @@ export class AppController {
 
   toggleDisplayEvalBar() {
     this.settings.displayEvalBar = !this.settings.displayEvalBar;
+    this.persistPlaySettings();
     this.onChange?.();
   }
 
@@ -1047,6 +1402,7 @@ export class AppController {
 
   toggleBestMoveHint(enabled = !this.settings.showBestMoveHint) {
     this.settings.showBestMoveHint = Boolean(enabled);
+    this.persistPlaySettings();
     this.onChange?.();
   }
 
@@ -1404,6 +1760,7 @@ export class AppController {
     this._gameGeneration += 1;
     this._moveRequestSeq += 1;
     this._activeSearchSeq = 0;
+    this._stopReviewAnalysis();
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
@@ -1430,6 +1787,7 @@ export class AppController {
     this.showCatHint = false;
     this.settings.uiMode = 'play';
     this.eval = { score: 0.5, p1: 0.5, pv: [] };
+    this._syncAnalysisSessionActive();
     this._terminalOverlayDismissed = false;
     this.session.reset();
     this.catViz = null;
@@ -1468,9 +1826,47 @@ export class AppController {
 
   setUiMode(mode) {
     const prevMode = this.settings.uiMode;
+    const actionsBeforeModeSwitch = [...this.session.actions];
+    const replayFromCurrentGame =
+      mode === 'replay' &&
+      !this.replay &&
+      actionsBeforeModeSwitch.length > 0
+        ? {
+            actions: actionsBeforeModeSwitch,
+            algebraic: actionsBeforeModeSwitch.map((action) => toAlgebraic(action)),
+            index: actionsBeforeModeSwitch.length,
+            code: encodeReplayFromActions(
+              actionsBeforeModeSwitch,
+              this.session.winner
+                ? {
+                    winner: this.session.winner === 1 ? 'white' : 'black',
+                    plies: actionsBeforeModeSwitch.length,
+                  }
+                : null,
+            ),
+            meta: null,
+          }
+        : null;
     this.settings.uiMode = mode;
+    if (prevMode === 'replay' && mode !== 'replay') {
+      this._stopReviewAnalysis();
+    }
     if (mode === 'play' && prevMode !== 'play') {
       this.restorePersistedPlayMatchup();
+    }
+    // Analysis and Review are always Human vs Human -- evaluation comes from
+    // the dedicated warm analysis session, never a per-seat AI. Play mode's
+    // actual player/engine choices are preserved (see restorePersistedPlayMatchup above).
+    if (mode !== 'play' && prevMode === 'play') {
+      this.applyAnalysisEvaluatorDefaults();
+      // "Paused" means something different per mode (see _analysisShouldBeActive) --
+      // a stale paused-in-Play flag must not silently deactivate the analysis
+      // session the instant you switch to Analysis/Review.
+      this.enginesPaused = false;
+    }
+    if (replayFromCurrentGame) {
+      this.replay = replayFromCurrentGame;
+      this.applyReplayIndex();
     }
     if (mode === 'analysis') {
       this._moveRequestSeq += 1;
@@ -1478,10 +1874,12 @@ export class AppController {
       this.aiThinking = false;
       this.thinkingPlayerType = null;
       this.liveSearch = null;
-      if (prevMode !== 'analysis') {
-        this.applyAnalysisCompareDefaults();
-      }
     }
+    if (mode === 'replay' && this.replay) {
+      this.enginesPaused = false;
+      this._startReviewAnalysis();
+    }
+    this._syncAnalysisSessionActive();
     this.scheduleCatRefresh();
     this.onChange?.();
   }
@@ -1489,6 +1887,7 @@ export class AppController {
   loadAnalysisPosition(code) {
     this._moveRequestSeq += 1;
     this._abortEngineSearch({ bumpRequestSeq: false });
+    this._stopReviewAnalysis();
     const trimmed = code.trim();
     const { actions } = decodeReplayCode(trimmed);
     this.replay = null;
@@ -1562,12 +1961,14 @@ export class AppController {
       return;
     }
     this._moveRequestSeq += 1;
+    this._stopReviewAnalysis();
     this.replay = null;
     this.settings.uiMode = 'play';
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.liveSearch = null;
     this.moveThinkLog = [];
+    this._syncAnalysisSessionActive();
     this.onChange?.();
     this.maybeRequestAiMove();
   }
@@ -1575,6 +1976,7 @@ export class AppController {
   loadReplay(code) {
     this._moveRequestSeq += 1;
     this._abortEngineSearch({ bumpRequestSeq: false });
+    this._stopReviewAnalysis();
     const trimmed = code.trim();
     const { actions, meta, algebraic } = decodeReplayCode(trimmed);
     this.replay = {
@@ -1585,6 +1987,8 @@ export class AppController {
       meta,
     };
     this.settings.uiMode = 'replay';
+    this.applyAnalysisEvaluatorDefaults();
+    this.enginesPaused = false;
     this.aiThinking = false;
     this.liveSearch = null;
     this.engineErrors = {};
@@ -1592,6 +1996,8 @@ export class AppController {
       engine.resetConnection();
     }
     this.applyReplayIndex();
+    this._syncAnalysisSessionActive();
+    this._startReviewAnalysis();
     this.onChange?.();
   }
 
@@ -2922,6 +3328,7 @@ export class AppController {
       requestSeq,
       positionKey: requestPositionKey,
     };
+    this._syncAnalysisSessionActive();
     this.lmrVizLive = null;
     if (this.settings.showLmrVision && isTitaniumEngine(playerType, this.engineConfigs)) {
       this.scheduleLmrRefresh();
@@ -3271,6 +3678,7 @@ export class AppController {
       this.replay = null;
       this.moveThinkLog = [];
       this.settings.uiMode = 'play';
+      this._syncAnalysisSessionActive();
       this.session.rebuildFromActions(actions);
       this.handleCatPositionChanged();
       this.confirmStartup();

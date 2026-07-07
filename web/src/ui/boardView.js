@@ -5,7 +5,11 @@
 
 import { parseAlgebraic, toAlgebraic, isWallAction } from '../lib/gameLogic.js';
 import { playerColorName } from '../lib/playerColors.js';
-import { resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
+import {
+  normalizeGhostKey,
+  pvFirstMoveFromLiveSearch,
+  resolveLiveBestMoveKey,
+} from '../lib/liveBestMove.js';
 import {
   catSquareIndex,
   catSquareOverlay,
@@ -88,7 +92,30 @@ function liveGhostKey(state, validActions) {
               : state.liveSearch),
         }
       : state;
-  return resolveLiveBestMoveKey(merged, { validActions }) ?? '';
+  const liveMove = resolveLiveBestMoveKey(merged, { validActions });
+  if (liveMove) {
+    return liveMove;
+  }
+  if (
+    state.analysisEngineActive &&
+    (state.eval?.pv?.length || state.eval?.rootMove || state.eval?.rootMoves?.length)
+  ) {
+    const validKeySet = new Set();
+    for (const action of validActions ?? []) {
+      const key = toAlgebraic(action);
+      validKeySet.add(key);
+      validKeySet.add(normalizeGhostKey(key));
+    }
+    return pvFirstMoveFromLiveSearch(
+      {
+        pv: state.eval.pv,
+        rootMove: state.eval.rootMove,
+        rootMoves: state.eval.rootMoves,
+      },
+      { validKeySet },
+    ) ?? '';
+  }
+  return '';
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -923,7 +950,8 @@ function syncBoardDom(dom, state, controller) {
 
   const ghostKey = liveGhostKey(state, validActions);
   const thinkSeat = state.aiThinking ? state.thinkingSeatIndex : null;
-  const sideClass = thinkSeat === 1 ? 'player2' : 'player1';
+  const ghostPlayer = thinkSeat != null ? thinkSeat + 1 : (state.eval?.playerToMove ?? state.playerToMove);
+  const sideClass = ghostPlayer === 2 ? 'player2' : 'player1';
   const ghostIdentity = `${ghostKey}|${sideClass}`;
   if (dom._ghostIdentity !== ghostIdentity) {
     cellEls.forEach((cell) => {

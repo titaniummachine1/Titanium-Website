@@ -1,5 +1,6 @@
 web/node_modules/
 web/dist/
+web/dist-extension-engine/
 web/src/wasm/titanium/*
 !web/src/wasm/titanium/.gitkeep
 *.log
