@@ -248,7 +248,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     remoteStrength: [...prefs.remoteStrength],
     titaniumNet: [...prefs.titaniumNet],
     cores: [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])],
-    analysisWallClock: analysisEngine.wallClockSeconds ?? 3,
+    analysisWallClock: analysisEngine.wallClockSeconds ?? 5,
     analysisCores: analysisEngine.cores ?? defaultAnalysisThreadCount(),
     visionMode: visionModeFromSettings(state.settings),
     lmrVisionShallow: state.settings?.lmrVisionShallow !== false,

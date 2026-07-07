@@ -9,6 +9,17 @@ import {
 
 import { PlayerType } from '../lib/engineConfig.js';
 
+function sameAction(a, b) {
+  if (!a || !b) {
+    return false;
+  }
+  try {
+    return toAlgebraic(a) === toAlgebraic(b);
+  } catch {
+    return false;
+  }
+}
+
 export class GameSession {
   constructor() {
     this.reset();
@@ -58,6 +69,7 @@ export class GameSession {
         this.winner !== null || this.isDraw ? [] : this.board.validActions(),
       isTerminal: this.winner !== null || this.isDraw,
       canRedo: this.futureActions.length > 0,
+      futureActions: this.futureActions.map((action) => structuredClone(action)),
     };
   }
 
@@ -113,7 +125,10 @@ export class GameSession {
     this.board.takeAction(action);
     this.actions.push(structuredClone(action));
     this.lastAction = structuredClone(action);
-    if (!this._skipClearFuture) {
+    const nextFuture = this.futureActions[this.futureActions.length - 1];
+    if (sameAction(action, nextFuture)) {
+      this.futureActions.pop();
+    } else if (!this._skipClearFuture) {
       this.futureActions = [];
     }
     this._skipClearFuture = false;
@@ -170,6 +185,27 @@ export class GameSession {
       this.futureActions.push(action);
     }
     return ok;
+  }
+
+  lineActions() {
+    return [
+      ...this.actions.map((action) => structuredClone(action)),
+      ...this.futureActions.slice().reverse().map((action) => structuredClone(action)),
+    ];
+  }
+
+  jumpToPly(ply) {
+    const line = this.lineActions();
+    const nextPly = Math.max(0, Math.min(Number(ply) || 0, line.length));
+    if (nextPly === this.actions.length) {
+      return false;
+    }
+    const current = line.slice(0, nextPly);
+    const future = line.slice(nextPly).reverse().map((action) => structuredClone(action));
+    this.rebuildFromActions(current, { preserveFuture: false });
+    this.futureActions = future;
+    this.notify();
+    return true;
   }
 
   rebuildFromActions(actions, { preserveFuture = false } = {}) {

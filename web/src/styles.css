@@ -1807,6 +1807,18 @@ body {
   align-items: center;
   gap: 5px;
   min-width: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 1px 2px;
+  cursor: pointer;
+}
+
+.moves-card__move:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .moves-card__move--future {

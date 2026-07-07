@@ -17,6 +17,8 @@ const playback = {
   speed: 1,
 };
 
+let movesListScrollTop = null;
+
 function stopAutoplay() {
   if (playback.timerId != null) {
     clearInterval(playback.timerId);
@@ -41,6 +43,10 @@ function startAutoplay(controller) {
 
 export function renderSidebar(container, state, controller) {
   const showReview = state.uiMode === 'replay';
+  const currentMovesList = container.querySelector('[data-moves-list]');
+  if (currentMovesList) {
+    movesListScrollTop = currentMovesList.scrollTop;
+  }
 
   container.innerHTML = `
     <div class="sidebar-stack">
@@ -81,7 +87,8 @@ function moveLabelsForState(state) {
   if (state.uiMode === 'replay') {
     return state.replay?.algebraic ?? [];
   }
-  return (state.actions ?? []).map((action) => toAlgebraic(action));
+  const future = (state.futureActions ?? []).slice().reverse();
+  return [...(state.actions ?? []), ...future].map((action) => toAlgebraic(action));
 }
 
 function renderMovesCard(state) {
@@ -104,8 +111,8 @@ function renderMovesCard(state) {
     : movePairs.map((p) =>
         `<div class="moves-card__pair">
           <span class="moves-card__num">${p.num}.</span>
-          ${renderMoveCell(p.white, classifications[p.whitePly], p.whitePly >= visiblePly)}
-          ${renderMoveCell(p.black, classifications[p.blackPly], p.blackPly >= visiblePly)}
+          ${renderMoveCell(p.white, p.whitePly, classifications[p.whitePly], p.whitePly >= visiblePly)}
+          ${renderMoveCell(p.black, p.blackPly, classifications[p.blackPly], p.blackPly >= visiblePly)}
         </div>`,
       ).join('');
 
@@ -137,7 +144,7 @@ function renderMovesCard(state) {
   `;
 }
 
-function renderMoveCell(move, classification, isFuture) {
+function renderMoveCell(move, ply, classification, isFuture) {
   if (!move) {
     return '<span class="moves-card__move"></span>';
   }
@@ -145,18 +152,25 @@ function renderMoveCell(move, classification, isFuture) {
   const label = classification?.label ?? '...';
   const title = classification?.bestMove ? `Best: ${classification.bestMove}` : label;
   return (
-    '<span class="moves-card__move' + (isFuture ? ' moves-card__move--future' : '') + '">' +
+    '<button type="button" class="moves-card__move' + (isFuture ? ' moves-card__move--future' : '') + '" data-move-ply="' + (ply + 1) + '" title="Go to move ' + (ply + 1) + '">' +
       '<span class="moves-card__move-text">' + escHtml(move) + '</span>' +
       (classification
         ? '<span class="move-class move-class--' + escHtml(cls) + '" title="' + escHtml(title) + '">' + escHtml(label) + '</span>'
         : '') +
-    '</span>'
+    '</button>'
   );
 }
 
 function wireMovesCard(container, state, controller) {
   const list = container.querySelector('[data-moves-list]');
-  if (list) list.scrollTop = list.scrollHeight;
+  if (list) {
+    if (movesListScrollTop != null) {
+      list.scrollTop = movesListScrollTop;
+    }
+    list.addEventListener('scroll', () => {
+      movesListScrollTop = list.scrollTop;
+    });
+  }
 
   container.querySelector('[data-action="load-moves"]')?.addEventListener('click', () => {
     openLoadNotationDialog(controller);
@@ -175,6 +189,12 @@ function wireMovesCard(container, state, controller) {
     });
     btn.textContent = 'OK';
     setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+  });
+
+  container.querySelectorAll('[data-move-ply]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      controller.setMoveListPly?.(Number(btn.dataset.movePly));
+    });
   });
 }
 

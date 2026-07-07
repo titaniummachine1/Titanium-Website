@@ -88,6 +88,7 @@ function renderPlayerCards(state) {
 
 function controlsKey(state) {
   return JSON.stringify({
+    uiMode: state.uiMode,
     canUndo: state.actions.length > 0,
     canRedo: state.canRedo,
     winner: state.winner,

@@ -342,7 +342,7 @@ export class AppController {
       uiMode: 'play',
       analysisEngine: {
         unlimited: true,
-        wallClockSeconds: 3,
+        wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
         titaniumNet: 'hard',
       },
@@ -497,7 +497,7 @@ export class AppController {
 
   setAnalysisEngineSetting(key, value) {
     if (!this.settings.analysisEngine) {
-      this.settings.analysisEngine = { unlimited: true, wallClockSeconds: 3, cores: defaultAnalysisThreadCount(), titaniumNet: 'hard' };
+      this.settings.analysisEngine = { unlimited: true, wallClockSeconds: 5, cores: defaultAnalysisThreadCount(), titaniumNet: 'hard' };
     }
     this.settings.analysisEngine = { ...this.settings.analysisEngine, [key]: value };
     this._analysisPositionKey = null; // force a re-search with the new setting
@@ -748,6 +748,7 @@ export class AppController {
       lmrVizError: this.lmrVizError,
       showLmrHint: this.showLmrHint && this.settings.showLmrVision,
       canRedo: snapshot.canRedo,
+      futureActions: snapshot.futureActions ?? [],
       enginesPaused: this.enginesPaused,
       replay: this.replay
         ? {
@@ -834,7 +835,7 @@ export class AppController {
     if (!this.settings.analysisEngine) {
       this.settings.analysisEngine = {
         unlimited: true,
-        wallClockSeconds: 3,
+        wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
         titaniumNet: 'hard',
       };
@@ -2023,6 +2024,34 @@ export class AppController {
       return;
     }
     this.setReplayIndex(this.replay.index + delta);
+  }
+
+  setMoveListPly(ply) {
+    const nextPly = Math.max(0, Math.round(Number(ply) || 0));
+    if (this.replay) {
+      this.setReplayIndex(nextPly);
+      return;
+    }
+    const lineLength = this.session.lineActions?.().length ?? this.session.actions.length;
+    if (this.aiThinking) {
+      this._cancelActiveAiSearch();
+    }
+    const moved = this.session.jumpToPly?.(nextPly);
+    if (!moved) {
+      return;
+    }
+    this._moveRequestSeq += 1;
+    this.aiThinking = false;
+    this.thinkingPlayerType = null;
+    this.thinkingSeatIndex = null;
+    this.liveSearch = null;
+    this.searchInfoBySeat = [null, null];
+    if (nextPly < lineLength && this.settings.uiMode === 'play') {
+      this.enginesPaused = true;
+    }
+    this.handleCatPositionChanged({ clearViz: true });
+    this._syncAnalysisSessionActive();
+    this.onChange?.();
   }
 
   exportReplayCode() {
