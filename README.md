@@ -1,9 +1,9 @@
-# Titanium Quoridor Website
+# Titanium Corridor Website
 
 Website, scraped references, vendored JS engines (ACE v7/v8/v10), and
-benchmark material for the Titanium Quoridor project.
+benchmark material for the Titanium Corridor project.
 
-Repo: [github.com/titaniummachine1/Titanium-Quoridor-Website](https://github.com/titaniummachine1/Titanium-Quoridor-Website)
+Repo: [github.com/titaniummachine1/Titanium-Corridor-Website](https://github.com/titaniummachine1/Titanium-Corridor-Website)
 
 The Rust engine is not copied into this repo. Local builds use the canonical
 workspace sibling at `../engine`; the website loads threaded WASM built from
@@ -12,12 +12,12 @@ that engine.
 Clone the website normally:
 
 ```bash
-git clone https://github.com/titaniummachine1/Titanium-Quoridor-Website.git
+git clone https://github.com/titaniummachine1/Titanium-Corridor-Website.git
 ```
 
 ## Live site (GitHub Pages)
 
-**URL:** https://titaniummachine1.github.io/Titanium-Quoridor-Website/
+**URL:** https://titaniummachine1.github.io/Titanium-Corridor-Website/
 
 Pushes to `main` auto-deploy via `.github/workflows/deploy-pages.yml`.
 
@@ -42,7 +42,7 @@ cd web && npm run build:pages && npm run preview:pages
 On GitHub Pages:
 
 - **Titanium** — Rust engine compiled to **WebAssembly** (built in CI from `engine/`)
-- **JS engines** — Gorisanson MCTS, Ace v8 (HTML extract), Quoridor v3 αβ
+- **JS engines** — Gorisanson MCTS, Ace v8 (HTML extract), reference v3 αβ
 - **Remote** — Ishtar / Ka (WebSocket)
 
 Locally and on GitHub Pages, **Titanium** and **ACE Rust** run as **WebAssembly** in the browser (no server, no spawned processes). Only **remote** engines (Ishtar / Ka) use WebSocket servers.
