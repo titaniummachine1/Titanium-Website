@@ -3,7 +3,6 @@ import { normalizeRootMoveToken } from '../lib/liveBestMove.js';
 import { analysisResultToEvalState } from './analysisEngineSession.js';
 
 const MAX_REVIEW_WORKERS = 12;
-const MAX_REVIEW_JOB_ATTEMPTS = 3;
 const REVIEW_JOB_TIMEOUT_GRACE_MS = 15_000;
 
 function clampWorkerCount(value, totalJobs) {
@@ -333,25 +332,7 @@ export class ReviewAnalysisSession {
     this._clearJobTimer(index);
     const message = err?.message ?? String(err ?? 'Review search failed');
     const attempts = this.positions[index]?.attempts ?? 0;
-    if (attempts >= MAX_REVIEW_JOB_ATTEMPTS) {
-      if (replaceClient) {
-        this._replaceClient(workerIndex);
-      } else {
-        void this.clients[workerIndex]?.cancelSearch();
-      }
-      this.positions[index] = {
-        ...this.positions[index],
-        status: 'error',
-        error: message,
-        liveEval: null,
-        workerIndex: null,
-      };
-      this._running = Math.max(0, this._running - 1);
-      this._publish(true);
-      queueMicrotask(() => this._runWorker(workerIndex, token));
-      return;
-    }
-    if (replaceClient) {
+    if (replaceClient || attempts > 1) {
       this._replaceClient(workerIndex);
     } else {
       void this.clients[workerIndex]?.cancelSearch();
@@ -370,7 +351,8 @@ export class ReviewAnalysisSession {
     this.status = this.paused ? 'paused' : 'running';
     this._publish(true);
     if (!this.paused) {
-      queueMicrotask(() => this._runWorker(workerIndex, token));
+      const retryDelayMs = Math.min(5_000, Math.max(250, attempts * 750));
+      setTimeout(() => this._runWorker(workerIndex, token), retryDelayMs);
     }
   }
 
@@ -424,6 +406,22 @@ export class ReviewAnalysisSession {
 
   _finishIfIdle(token) {
     if (token !== this._token || this.paused || this._running > 0 || this._queue.length > 0) {
+      return;
+    }
+    const unfinished = this.positions.filter((p) => p?.status !== 'done');
+    if (unfinished.length > 0) {
+      for (const position of unfinished) {
+        position.status = 'pending';
+        position.workerIndex = null;
+        if (!this._queue.includes(position.index)) {
+          this._queue.push(position.index);
+        }
+      }
+      this.status = 'running';
+      this._publish(true);
+      for (let i = 0; i < this.clients.length; i += 1) {
+        this._runWorker(i, token);
+      }
       return;
     }
     this.status = 'complete';
