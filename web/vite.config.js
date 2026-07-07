@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const ghPages = mode === 'ghpages';
   return {
     root: '.',
-    base: ghPages ? '/Titanium-Quoridor-Website/' : '/',
+    base: ghPages ? '/Titanium-Website/' : '/',
     plugins: ghPages ? [] : [titaniumProxyPlugin()],
     server: {
       port: 5173,

@@ -28,7 +28,7 @@ jobs:
       - name: Checkout engine
         uses: actions/checkout@v4
         with:
-          repository: titaniummachine1/titanium-quoridor
+          repository: titaniummachine1/titanium-engine
           ref: main
           path: engine
 

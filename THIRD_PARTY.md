@@ -11,7 +11,7 @@ their **original licenses** from upstream authors:
 | `_vendor/`        | Various open-source Quoridor projects | See each subdirectory        |
 | `web/src/vendor/` | Bundled reference engines             | See file headers             |
 
-The canonical Rust engine is [titanium-quoridor](https://github.com/titaniummachine1/titanium-quoridor)
+The canonical Rust engine is [titanium-engine](https://github.com/titaniummachine1/titanium-engine)
 (GPL-3.0-or-later) and is built from the workspace sibling `../engine`, not
 copied into this repo. When distributing a combined product, comply with GPL for
 Titanium-original parts and respect upstream licenses for vendored code.

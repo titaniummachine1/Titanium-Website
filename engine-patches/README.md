@@ -1,16 +1,16 @@
 # Engine patches: Titanium movegen V11 + ACE v11
 
-> **Status: applied** — merged to [titanium-quoridor `main`](https://github.com/titaniummachine1/titanium-quoridor/commit/da75d4a) (`da75d4a`). Patches kept here for history / `git am` replay.
+> **Status: applied** — merged to [titanium-engine `main`](https://github.com/titaniummachine1/titanium-engine/commit/da75d4a) (`da75d4a`). Patches kept here for history / `git am` replay.
 
 This directory carries engine work that belongs in the
-[titanium-quoridor](https://github.com/titaniummachine1/titanium-quoridor)
+[titanium-engine](https://github.com/titaniummachine1/titanium-engine)
 repository. This session could only push to the website repository, so the
 changes ship here as a `git format-patch` series.
 
 ## Apply
 
 ```sh
-cd ../engine                   # the canonical titanium-quoridor checkout
+cd ../engine                   # the canonical titanium-engine checkout
 git checkout -b movegen-v11
 git am ../engine-patches/000*.patch
 cargo test --lib               # 118 passed, 0 failed

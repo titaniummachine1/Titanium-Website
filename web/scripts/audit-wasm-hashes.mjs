@@ -4,7 +4,7 @@
  * Usage:
  *   node scripts/audit-wasm-hashes.mjs
  *   node scripts/audit-wasm-hashes.mjs --dev http://localhost:5173 --preview http://localhost:4173
- *   node scripts/audit-wasm-hashes.mjs --deployed https://user.github.io/Titanium-Quoridor-Website/
+ *   node scripts/audit-wasm-hashes.mjs --deployed https://user.github.io/Titanium-Website/
  */
 
 import { createHash } from 'node:crypto';
@@ -28,7 +28,7 @@ function parseArgs(argv) {
   const out = {
     dev: 'http://localhost:5173',
     preview: 'http://localhost:4173',
-    deployed: process.env.DEPLOYED_SITE_URL ?? 'https://titaniummachine1.github.io/Titanium-Quoridor-Website/',
+    deployed: process.env.DEPLOYED_SITE_URL ?? 'https://titaniummachine1.github.io/Titanium-Website/',
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
