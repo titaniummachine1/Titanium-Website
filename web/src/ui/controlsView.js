@@ -16,7 +16,7 @@ export function renderSiteHeader(container, state, controller) {
   container.innerHTML = `
     <div class="site-header__inner">
       <div class="site-header__row site-header__row--title">
-        <h1 class="app-title">Titanium Corridor</h1>
+        <h1 class="app-title">Titanium</h1>
         <div class="mode-tabs mode-tabs--header">
           <button type="button" class="mode-tab ${isPlay ? 'mode-tab--active' : ''}" data-ui-mode="play">Play</button>
           <button type="button" class="mode-tab ${uiMode === 'analysis' ? 'mode-tab--active' : ''}" data-ui-mode="analysis">Analysis</button>

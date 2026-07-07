@@ -1,9 +1,9 @@
-# Titanium Corridor Website
+# Titanium Website
 
 Website, scraped references, vendored JS engines (ACE v7/v8/v10), and
-benchmark material for the Titanium Corridor project.
+benchmark material for the Titanium project.
 
-Repo: [github.com/titaniummachine1/Titanium-Corridor-Website](https://github.com/titaniummachine1/Titanium-Corridor-Website)
+Repo: [github.com/titaniummachine1/Titanium-Website](https://github.com/titaniummachine1/Titanium-Website)
 
 The Rust engine is not copied into this repo. Local builds use the canonical
 workspace sibling at `../engine`; the website loads threaded WASM built from
@@ -12,12 +12,12 @@ that engine.
 Clone the website normally:
 
 ```bash
-git clone https://github.com/titaniummachine1/Titanium-Corridor-Website.git
+git clone https://github.com/titaniummachine1/Titanium-Website.git
 ```
 
 ## Live site (GitHub Pages)
 
-**URL:** https://titaniummachine1.github.io/Titanium-Corridor-Website/
+**URL:** https://titaniummachine1.github.io/Titanium-Website/
 
 Pushes to `main` auto-deploy via `.github/workflows/deploy-pages.yml`.
 
