@@ -3,6 +3,8 @@ import { normalizeRootMoveToken } from '../lib/liveBestMove.js';
 import { analysisResultToEvalState } from './analysisEngineSession.js';
 
 const MAX_REVIEW_WORKERS = 12;
+const MAX_REVIEW_JOB_ATTEMPTS = 3;
+const REVIEW_JOB_TIMEOUT_GRACE_MS = 15_000;
 
 function clampWorkerCount(value, totalJobs) {
   const n = Math.max(1, Math.round(Number(value) || 1));
@@ -117,6 +119,7 @@ export class ReviewAnalysisSession {
     this._running = 0;
     this._workerCount = 0;
     this._lastPublish = 0;
+    this._jobTimers = new Map();
   }
 
   snapshot() {
@@ -142,7 +145,7 @@ export class ReviewAnalysisSession {
       if (seeded?.eval) {
         return { ...seeded, status: 'done', eval: { ...seeded.eval } };
       }
-      return { index, status: 'pending', eval: null, error: null, depth: null, nodes: null };
+      return { index, status: 'pending', eval: null, error: null, depth: null, nodes: null, attempts: 0 };
     });
     this._queue = this.positions
       .filter((p) => p.status !== 'done')
@@ -169,6 +172,7 @@ export class ReviewAnalysisSession {
     this.paused = true;
     this.status = 'paused';
     this._token += 1;
+    this._clearAllJobTimers();
     for (const position of this.positions) {
       if (position.status === 'running') {
         position.status = 'pending';
@@ -210,6 +214,7 @@ export class ReviewAnalysisSession {
     this.status = 'idle';
     this._queue = [];
     this._running = 0;
+    this._clearAllJobTimers();
     for (const client of this.clients) {
       void client.cancelSearch();
       if (destroyClients) {
@@ -252,13 +257,16 @@ export class ReviewAnalysisSession {
     const position = this.positions[index];
     const actions = this.actions.slice(0, index);
     const playerToMove = index % 2 === 0 ? 1 : 2;
-    const wallClockSeconds = Math.max(0.1, Number(this.settings.wallClockSeconds) || 3);
+    const wallClockSeconds = Math.max(0.1, Number(this.settings.wallClockSeconds) || 5);
     let latestInfo = null;
 
     position.status = 'running';
     position.error = null;
+    position.workerIndex = workerIndex;
+    position.attempts = (position.attempts ?? 0) + 1;
     this._running += 1;
     this._publish();
+    this._armJobTimer(workerIndex, token, index, wallClockSeconds);
 
     client.onInfo = (info) => {
       if (token !== this._token || this.positions[index]?.status !== 'running') {
@@ -297,26 +305,128 @@ export class ReviewAnalysisSession {
     if (token !== this._token) {
       return;
     }
+    this._clearJobTimer(index);
     const evalState = latestInfoToEval(latestInfo, playerToMove);
+    if (!evalState) {
+      this._retryJob(workerIndex, token, index, err ?? new Error('No eval returned'));
+      return;
+    }
     this.positions[index] = {
       ...this.positions[index],
-      status: evalState ? 'done' : 'error',
+      status: 'done',
       eval: evalState,
       liveEval: null,
-      error: evalState ? null : (err?.message ?? String(err ?? 'No eval')),
+      error: null,
       depth: evalState?.depth ?? this.positions[index]?.depth ?? null,
       nodes: latestInfo?.nodes ?? this.positions[index]?.nodes ?? null,
+      workerIndex: null,
     };
     this._running = Math.max(0, this._running - 1);
     this._publish(true);
     queueMicrotask(() => this._runWorker(workerIndex, token));
   }
 
+  _retryJob(workerIndex, token, index, err, { replaceClient = false } = {}) {
+    if (token !== this._token) {
+      return;
+    }
+    this._clearJobTimer(index);
+    const message = err?.message ?? String(err ?? 'Review search failed');
+    const attempts = this.positions[index]?.attempts ?? 0;
+    if (attempts >= MAX_REVIEW_JOB_ATTEMPTS) {
+      if (replaceClient) {
+        this._replaceClient(workerIndex);
+      } else {
+        void this.clients[workerIndex]?.cancelSearch();
+      }
+      this.positions[index] = {
+        ...this.positions[index],
+        status: 'error',
+        error: message,
+        liveEval: null,
+        workerIndex: null,
+      };
+      this._running = Math.max(0, this._running - 1);
+      this._publish(true);
+      queueMicrotask(() => this._runWorker(workerIndex, token));
+      return;
+    }
+    if (replaceClient) {
+      this._replaceClient(workerIndex);
+    } else {
+      void this.clients[workerIndex]?.cancelSearch();
+    }
+    this.positions[index] = {
+      ...this.positions[index],
+      status: 'pending',
+      error: message,
+      liveEval: null,
+      workerIndex: null,
+    };
+    this._running = Math.max(0, this._running - 1);
+    if (!this._queue.includes(index)) {
+      this._queue.unshift(index);
+    }
+    this.status = this.paused ? 'paused' : 'running';
+    this._publish(true);
+    if (!this.paused) {
+      queueMicrotask(() => this._runWorker(workerIndex, token));
+    }
+  }
+
+  _replaceClient(workerIndex) {
+    const old = this.clients[workerIndex];
+    old?.destroy?.();
+    this.clients[workerIndex] = new TitaniumWasmEngineClient({ engineMode: 'titanium-v16', cores: 1 });
+  }
+
+  _armJobTimer(workerIndex, token, index, wallClockSeconds) {
+    this._clearJobTimer(index);
+    const timeoutMs = Math.max(
+      30_000,
+      Math.round(wallClockSeconds * 1000) + REVIEW_JOB_TIMEOUT_GRACE_MS,
+    );
+    const timer = setTimeout(() => {
+      const position = this.positions[index];
+      if (
+        token !== this._token ||
+        this.paused ||
+        position?.status !== 'running' ||
+        position.workerIndex !== workerIndex
+      ) {
+        return;
+      }
+      this._retryJob(
+        workerIndex,
+        token,
+        index,
+        new Error(`Review search timed out at ply ${index}`),
+        { replaceClient: true },
+      );
+    }, timeoutMs);
+    this._jobTimers.set(index, timer);
+  }
+
+  _clearJobTimer(index) {
+    const timer = this._jobTimers.get(index);
+    if (timer != null) {
+      clearTimeout(timer);
+      this._jobTimers.delete(index);
+    }
+  }
+
+  _clearAllJobTimers() {
+    for (const timer of this._jobTimers.values()) {
+      clearTimeout(timer);
+    }
+    this._jobTimers.clear();
+  }
+
   _finishIfIdle(token) {
     if (token !== this._token || this.paused || this._running > 0 || this._queue.length > 0) {
       return;
     }
-    this.status = this.positions.some((p) => p.status === 'error') ? 'error' : 'complete';
+    this.status = 'complete';
     this._publish(true);
   }
 

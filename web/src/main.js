@@ -206,6 +206,11 @@ document.addEventListener('keydown', function(event) {
 
   if (event.key === 'ArrowRight') {
     const state = controller.getState();
+    if (state.replay && state.replay.index < state.replay.total) {
+      event.preventDefault();
+      controller.replayStep?.(1);
+      return;
+    }
     if (state.canRedo) {
       event.preventDefault();
       controller.redo?.();
