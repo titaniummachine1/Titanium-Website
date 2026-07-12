@@ -439,6 +439,7 @@ export class AppController {
     this._moveRequestSeq = 0;
     this._gameGeneration = 0;
     this._thinkAiSettings = null;
+    this._clockTickId = null;
     this._illegalRetriesByPly = {};
     this._maxIllegalRetries = 2;
     /** Skip onSessionChange → onChange while applyEngineMove is mid-apply (snapshot not ready). */
@@ -1304,6 +1305,25 @@ export class AppController {
           : `${seconds}.${tenths}`,
       };
     });
+  }
+
+  _startClockTicker() {
+    if (this._clockTickId != null) {
+      return;
+    }
+    this._clockTickId = setInterval(() => {
+      if (!this.aiThinking) {
+        clearInterval(this._clockTickId);
+        this._clockTickId = null;
+        return;
+      }
+      const seat = this.thinkingSeatIndex;
+      const playerType = seat != null ? this.settings.players[seat] : null;
+      const ai = seat != null ? this.settings.playerAiSettings[seat] : null;
+      if (seat != null && isTitaniumEngine(playerType, this.engineConfigs) && ai?.wholeGameTime !== false) {
+        this.onChange?.();
+      }
+    }, 100);
   }
 
   setPlayerVisitsBudget(playerNum, visits, { silent = false } = {}) {
@@ -3444,6 +3464,7 @@ export class AppController {
     this.thinkingPlayerType = playerType;
     this.thinkingSeatIndex = seatIndex;
     this._thinkStartedAt = performance.now();
+    this._startClockTicker();
     this.engineErrors[seatIndex] = null;
     this.engineStatus[seatIndex] = 'searching';
     this.searchInfoBySeat[seatIndex] = { depthLog: [] };
