@@ -365,14 +365,44 @@ self.onmessage = async (event) => {
     }
     await handleSearch(data);
   } catch (err) {
-    const message =
+    const baseMessage =
       err?.message ??
       (err instanceof WebAssembly.RuntimeError ? 'WASM runtime error (engine panic)' : String(err));
+    const panic =
+      typeof titaniumWasm.last_panic === 'function' ? titaniumWasm.last_panic() : '';
+    const history = Array.isArray(data.algebraicMoves) ? data.algebraicMoves : [];
+    const position = history.length ? history.join(' ') : '(start)';
+    const details = [
+      `engine=${engineMode}`,
+      `commit=${buildMeta.git_commit ?? 'unknown'}`,
+      `wasm=${String(buildMeta.wasm_sha256 ?? 'unknown').slice(0, 16)}`,
+      `threads=${data.threads ?? 1}`,
+      `timeMs=${data.timeMs ?? 'unset'}`,
+      `maxNodes=${data.maxNodes ?? 'unset'}`,
+      `maxDepth=${data.maxDepth ?? 'unset'}`,
+      `cat=${catLmrCeiling}`,
+      `position="${position}"`,
+    ];
+    if (panic) {
+      details.push(`panic="${panic}"`);
+    }
+    const message = `${baseMessage} | ${details.join(' | ')}`;
     self.postMessage({
       type: 'error',
       seq: data.seq,
       message,
-      stack: err?.stack,
+      stack: err?.stack ?? null,
+      diagnostics: {
+        engineMode,
+        buildMeta,
+        requestedThreads: data.threads ?? 1,
+        timeMs: data.timeMs,
+        maxNodes: data.maxNodes,
+        maxDepth: data.maxDepth,
+        catLmrCeiling,
+        position,
+        panic,
+      },
     });
   }
 };
