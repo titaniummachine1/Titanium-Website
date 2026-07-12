@@ -1254,7 +1254,7 @@ export class AppController {
         ? sum + Math.max(0, entry.thinkMs)
         : sum;
     }, 0);
-    const remainingMs = Math.max(50, totalMs - usedMs);
+    const remainingMs = Math.max(0, totalMs - usedMs);
     const ownMovesPlayed = this.session.actions.reduce(
       (count, _action, plyIndex) => count + (plyIndex % 2 === seatIndex ? 1 : 0),
       0,
@@ -1263,7 +1263,7 @@ export class AppController {
     // Spend slightly above the even-share rate so unused opening time becomes
     // useful in the middlegame, while reserving at least 75% for later moves.
     const moveBudgetMs = Math.max(
-      50,
+      1,
       Math.min(remainingMs * 0.25, (remainingMs / expectedMovesLeft) * 1.35),
     );
     return {
@@ -1321,9 +1321,36 @@ export class AppController {
       const playerType = seat != null ? this.settings.players[seat] : null;
       const ai = seat != null ? this.settings.playerAiSettings[seat] : null;
       if (seat != null && isTitaniumEngine(playerType, this.engineConfigs) && ai?.wholeGameTime !== false) {
+        const remainingMs = this._gameClockStates()[seat]?.remainingMs ?? 0;
+        if (remainingMs <= 0) {
+          this._flagTitaniumOnTime(seat);
+          return;
+        }
         this.onChange?.();
       }
     }, 100);
+  }
+
+  _flagTitaniumOnTime(seatIndex) {
+    if (!this.aiThinking || this.thinkingSeatIndex !== seatIndex) {
+      return;
+    }
+    this._moveRequestSeq += 1; // discard a late worker result
+    this._gameGeneration += 1;
+    this._activeAiAbort?.abort();
+    this._activeAiAbort = null;
+    this.destroyEngineForSeat(seatIndex); // hard-stop a synchronous WASM search
+    this.aiThinking = false;
+    this.thinkingPlayerType = null;
+    this.thinkingSeatIndex = null;
+    this.liveSearch = null;
+    this._thinkStartedAt = null;
+    this.engineStatus[seatIndex] = 'flagged';
+    this.engineErrors[seatIndex] = null;
+    if (this.session.forfeitOnTime(seatIndex + 1)) {
+      this.maybeSubmitFinishedGame();
+    }
+    this.onChange?.();
   }
 
   setPlayerVisitsBudget(playerNum, visits, { silent = false } = {}) {
@@ -3299,7 +3326,11 @@ export class AppController {
       this.handleCatPositionChanged();
       const plyNum = this.session.actions.length;
       const si = siBeforeMove;
-      const thinkMs = resolveThinkMs(si, this._thinkStartedAt);
+      // Game clocks use elapsed wall time, including worker and message
+      // overhead—not the engine's self-reported search-only duration.
+      const thinkMs = this._thinkStartedAt != null
+        ? Math.round(performance.now() - this._thinkStartedAt)
+        : resolveThinkMs(si, null);
       this._thinkStartedAt = null;
       const moveLabel = this.session.actionToLabel(action);
       this._thinkAiSettings = null;
@@ -3489,6 +3520,10 @@ export class AppController {
     const isFreshGame = moveHistory.length === 0;
     const requestAiSettings = this._managedClockSettings(seatIndex, aiSettings);
     this._thinkAiSettings = { ...requestAiSettings };
+    if (aiSettings?.wholeGameTime !== false && requestAiSettings.wholeGameRemainingSeconds <= 0) {
+      this._flagTitaniumOnTime(seatIndex);
+      return;
+    }
 
     if (this._activeAiAbort) {
       this._activeAiAbort.abort();

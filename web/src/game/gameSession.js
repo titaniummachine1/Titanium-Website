@@ -187,6 +187,17 @@ export class GameSession {
     return ok;
   }
 
+  /** End a game because `playerNum` ran out of time. */
+  forfeitOnTime(playerNum) {
+    if (this.winner != null || this.isDraw || (playerNum !== 1 && playerNum !== 2)) {
+      return false;
+    }
+    this.winner = playerNum === 1 ? 2 : 1;
+    this.lastAction = null;
+    this.notify();
+    return true;
+  }
+
   lineActions() {
     return [
       ...this.actions.map((action) => structuredClone(action)),
