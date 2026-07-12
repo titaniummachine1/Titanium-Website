@@ -26,11 +26,27 @@ export const TIME_TO_MOVE_PRESETS = [
 ];
 
 export const WALL_CLOCK_RANGE = {
-  min: 0.5,
-  max: 60,
-  step: 0.5,
-  defaultSeconds: 10,
+  min: 0.25,
+  max: 600,
+  step: 1,
+  sliderSteps: 1000,
+  defaultSeconds: 60,
 };
+
+export function wallClockFromSlider(position) {
+  const t = Math.max(0, Math.min(1, Number(position) / WALL_CLOCK_RANGE.sliderSteps));
+  const raw = WALL_CLOCK_RANGE.min * Math.pow(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min, t);
+  const quantum = raw < 1 ? 0.01 : raw < 10 ? 0.1 : raw < 60 ? 0.5 : raw < 180 ? 1 : 5;
+  return Math.max(WALL_CLOCK_RANGE.min, Math.min(WALL_CLOCK_RANGE.max, Math.round(raw / quantum) * quantum));
+}
+
+export function wallClockSliderPosition(seconds) {
+  const value = Math.max(WALL_CLOCK_RANGE.min, Math.min(WALL_CLOCK_RANGE.max, Number(seconds) || WALL_CLOCK_RANGE.defaultSeconds));
+  return Math.round(
+    (Math.log(value / WALL_CLOCK_RANGE.min) / Math.log(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min)) *
+      WALL_CLOCK_RANGE.sliderSteps,
+  );
+}
 
 /** Upper cap for the thread slider when logical CPU count is unknown or very high. */
 export const THREADS_HARD_MAX = 8;
@@ -383,6 +399,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
     return {
       titaniumNet: TITANIUM_NET_HARD,
       wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
+      wholeGameTime: true,
       visitsBudget: UNLIMITED_VISITS,
       cores: defaultThreadCount(),
     };

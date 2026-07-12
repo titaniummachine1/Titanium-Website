@@ -1370,6 +1370,7 @@ body {
 }
 
 .player-card__main {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1765,6 +1766,19 @@ body {
   font-size: 0.7rem;
   padding: 2px 8px;
   opacity: 0.8;
+}
+
+.player-card__clock {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Roboto Mono', monospace;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .moves-card__copy:hover { opacity: 1; }
 

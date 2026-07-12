@@ -154,17 +154,13 @@ export function compactPlayerConfigSummary(ui, snap = null) {
   }
 
   if (ui.isTitanium) {
-    const tierLabel =
-      ui.playerType === PlayerType.TitaniumV16
-        ? catLmrCeilingLabel({ titaniumNet: ui.titaniumNet })
-        : titaniumNetLabel({ titaniumNet: ui.titaniumNet });
     const runtimeThreads = threadRuntimeSummary(snap);
     const threads = runtimeThreads
       ? ` · ${runtimeThreads}`
       : ui.isTitanium && ui.cores > 1
         ? ` · ${ui.cores} threads`
         : '';
-    return `${engine} · ${tierLabel} · ${formatTimeSummary(ui.wallClockSeconds)}${threads}`;
+    return `${engine}${threads}`;
   }
 
   return `${engine} · ${formatTimeSummary(ui.wallClockSeconds)}`;
@@ -341,6 +337,7 @@ function derivePlayerCardView(state, seatIndex) {
     nodesLine,
     thinkMs,
     showPlayNow,
+    clockText: state.gameClocks?.[seatIndex]?.label ?? '',
     selectedWorkerNodes: snap?.selectedWorkerNodes,
     totalNodesAcrossWorkers: snap?.totalNodesAcrossWorkers,
     nodeSource: snap?.nodeSource,
@@ -425,6 +422,8 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
     }
     statsEl.innerHTML = parts.join('');
   }
+  const clockEl = card.querySelector('[data-player-card-clock]');
+  if (clockEl) clockEl.textContent = view.clockText;
 
   const playBtn = card.querySelector('[data-action="play-now"]');
   if (view.showPlayNow && !playBtn) {
@@ -533,6 +532,7 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
             ${view.livePvMove ? `<div class="player-card__bestmove" data-player-card-pv="1">pv <strong>${escHtml(view.livePvMove)}</strong></div>` : ''}
           </div>
         </div>
+        ${view.clockText ? `<div class="player-card__clock" data-player-card-clock>${escHtml(view.clockText)}</div>` : ''}
         <div class="player-card__right">
           <div class="player-card__stats">
             ${view.scoreDisplay ? `<span class="player-card__score${view.isMate ? ' player-card__score--mate' : ''}">${escHtml(view.scoreDisplay)}</span>` : ''}

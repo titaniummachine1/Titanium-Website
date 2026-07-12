@@ -720,6 +720,7 @@ export class AppController {
       analysisEngineActive: this.analysisSession.isActive() || this.reviewAnalysis.status === 'running',
       analysisEvalDepth: resolvedEval?.depth ?? this.analysisEval?.depth ?? null,
       analysisEvalError: this.analysisEvalError,
+      gameClocks: this._gameClockStates(),
       reviewAnalysis: {
         ...this.reviewAnalysis,
         visiblePosition: this.replay
@@ -1078,6 +1079,7 @@ export class AppController {
         : (current?.strengthLevel ?? StrengthLevel.Alpha),
       timeToMove: current?.timeToMove ?? TimeToMove.Short,
       wallClockSeconds: current?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds,
+      wholeGameTime: current?.wholeGameTime !== false,
       visitsBudget: clampVisits(current?.visitsBudget ?? LOCAL_VISITS_RANGE.default),
       visitsSliderPosition: sliderPositionFromVisits(
         current?.visitsBudget ?? LOCAL_VISITS_RANGE.default,
@@ -1225,6 +1227,83 @@ export class AppController {
     if (!silent) {
       this._afterLivePlayerSettingChange(playerNum);
     }
+  }
+
+  setPlayerWholeGameTime(playerNum, enabled, { silent = false } = {}) {
+    const index = playerNum - 1;
+    const current = this.settings.playerAiSettings[index] ?? {};
+    this.rememberPlayerAiSettings(playerNum, {
+      ...current,
+      wholeGameTime: Boolean(enabled),
+    });
+    if (!silent) {
+      this._afterLivePlayerSettingChange(playerNum);
+    }
+  }
+
+  _managedClockSettings(seatIndex, aiSettings) {
+    const playerType = this.settings.players[seatIndex];
+    if (!isTitaniumEngine(playerType, this.engineConfigs) || aiSettings?.wholeGameTime === false) {
+      return { ...aiSettings };
+    }
+    const totalMs = Math.max(250, Number(aiSettings?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000);
+    const usedMs = this.moveThinkLog.reduce((sum, entry) => {
+      const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
+      return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
+        ? sum + Math.max(0, entry.thinkMs)
+        : sum;
+    }, 0);
+    const remainingMs = Math.max(50, totalMs - usedMs);
+    const ownMovesPlayed = this.session.actions.reduce(
+      (count, _action, plyIndex) => count + (plyIndex % 2 === seatIndex ? 1 : 0),
+      0,
+    );
+    const expectedMovesLeft = Math.max(4, 24 - ownMovesPlayed);
+    // Spend slightly above the even-share rate so unused opening time becomes
+    // useful in the middlegame, while reserving at least 75% for later moves.
+    const moveBudgetMs = Math.max(
+      50,
+      Math.min(remainingMs * 0.25, (remainingMs / expectedMovesLeft) * 1.35),
+    );
+    return {
+      ...aiSettings,
+      wallClockSeconds: moveBudgetMs / 1000,
+      wholeGameTotalSeconds: totalMs / 1000,
+      wholeGameRemainingSeconds: remainingMs / 1000,
+      wholeGameExpectedMovesLeft: expectedMovesLeft,
+    };
+  }
+
+  _gameClockStates() {
+    return [0, 1].map((seatIndex) => {
+      const playerType = this.settings.players[seatIndex];
+      const ai = this.settings.playerAiSettings[seatIndex] ?? {};
+      if (!isTitaniumEngine(playerType, this.engineConfigs) || ai.wholeGameTime === false) {
+        return null;
+      }
+      const totalMs = Math.max(250, Number(ai.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000);
+      let usedMs = this.moveThinkLog.reduce((sum, entry) => {
+        const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
+        return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
+          ? sum + Math.max(0, entry.thinkMs)
+          : sum;
+      }, 0);
+      if (this.aiThinking && this.thinkingSeatIndex === seatIndex && this._thinkStartedAt != null) {
+        usedMs += Math.max(0, performance.now() - this._thinkStartedAt);
+      }
+      const remainingMs = Math.max(0, totalMs - usedMs);
+      const totalSeconds = remainingMs / 1000;
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = Math.floor(totalSeconds % 60);
+      const tenths = Math.floor((totalSeconds % 1) * 10);
+      return {
+        totalMs,
+        remainingMs,
+        label: minutes > 0
+          ? `${minutes}:${String(seconds).padStart(2, '0')}`
+          : `${seconds}.${tenths}`,
+      };
+    });
   }
 
   setPlayerVisitsBudget(playerNum, visits, { silent = false } = {}) {
@@ -3387,7 +3466,8 @@ export class AppController {
     const gameGeneration = this._gameGeneration;
     const moveHistory = this.session.actions;
     const isFreshGame = moveHistory.length === 0;
-    this._thinkAiSettings = { ...aiSettings };
+    const requestAiSettings = this._managedClockSettings(seatIndex, aiSettings);
+    this._thinkAiSettings = { ...requestAiSettings };
 
     if (this._activeAiAbort) {
       this._activeAiAbort.abort();
@@ -3454,7 +3534,7 @@ export class AppController {
       request: {
         history: moveHistory,
         sideToMove: requestPlayerToMove,
-        aiSettings,
+        aiSettings: requestAiSettings,
         signal: capturedSignal,
         gameSnapshot: this.session.getEngineSnapshot(),
         isFreshGame,

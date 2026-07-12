@@ -82,7 +82,7 @@ const tiSummary = compactPlayerConfigSummary({
   wallClockSeconds: 3,
 });
 assert(
-  tiSummary.includes('Titanium v16') && tiSummary.includes('CAT 1000') && tiSummary.includes('3'),
+  tiSummary === 'Titanium v16',
   tiSummary,
 );
 
@@ -95,9 +95,7 @@ const ti16Summary = compactPlayerConfigSummary({
   wallClockSeconds: 5,
 });
 assert(
-  ti16Summary.includes('Titanium v16') &&
-    ti16Summary.includes('CAT 1000') &&
-    ti16Summary.includes('5'),
+  ti16Summary === 'Titanium v16',
   ti16Summary,
 );
 const tiFallbackSummary = compactPlayerConfigSummary(

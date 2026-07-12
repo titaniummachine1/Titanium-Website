@@ -33,6 +33,9 @@ import {
   analysisThreadsMax,
   defaultAnalysisThreadCount,
   clampAnalysisCores,
+  WALL_CLOCK_RANGE,
+  wallClockFromSlider,
+  wallClockSliderPosition,
 } from '../lib/timeControl.js';
 
 const UI_MODE_TABS = [
@@ -62,13 +65,13 @@ const ACE_V13_TIERS = [
   { label: 'MoveGen+', id: 2 },
 ];
 
-const DEFAULT_WALL_CLOCK    = 5;
+const DEFAULT_WALL_CLOCK    = WALL_CLOCK_RANGE.defaultSeconds;
 const DEFAULT_TIME_TO_MOVE  = TimeToMove.Short;
 const DEFAULT_ACE_TIER      = 0;
 const DEFAULT_CORES         = defaultThreadCount();
-const WALL_CLOCK_MIN        = 0.5;
-const WALL_CLOCK_MAX        = 60;
-const WALL_CLOCK_STEP       = 0.5;
+const ANALYSIS_TIME_MIN     = 0.5;
+const ANALYSIS_TIME_MAX     = 60;
+const ANALYSIS_TIME_STEP    = 0.5;
 const CORES_MIN             = 1;
 const PATH_BIAS_MIN         = -30;
 const PATH_BIAS_MAX         = 30;
@@ -95,8 +98,10 @@ function escHtml(s) {
 }
 
 function formatTime(seconds) {
-  if (seconds < 1) return seconds + ' s';
-  return (Number.isInteger(seconds) ? seconds : seconds.toFixed(1)) + ' s';
+  if (seconds < 1) return seconds.toFixed(2).replace(/0$/, '') + ' s';
+  if (seconds < 60) return (Number.isInteger(seconds) ? seconds : seconds.toFixed(1)) + ' s';
+  const minutes = seconds / 60;
+  return (Number.isInteger(minutes) ? minutes : minutes.toFixed(1)) + ' min';
 }
 
 function formatPercent(value) {
@@ -151,6 +156,7 @@ function loadPrefs(state) {
     return {
       players:     saved.players     ?? [...defaultPlayers],
       wallClock:   saved.wallClock   ?? [DEFAULT_WALL_CLOCK, DEFAULT_WALL_CLOCK],
+      wholeGameTime: saved.wholeGameTime ?? [true, true],
       timeToMove:  saved.timeToMove  ?? [DEFAULT_TIME_TO_MOVE, DEFAULT_TIME_TO_MOVE],
       aceStrength: saved.aceStrength ?? [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: saved.remoteStrength ?? [StrengthLevel.Alpha, StrengthLevel.Alpha],
@@ -167,6 +173,7 @@ function loadPrefs(state) {
     return {
       players:     [...defaultPlayers],
       wallClock:   [DEFAULT_WALL_CLOCK, DEFAULT_WALL_CLOCK],
+      wholeGameTime: [true, true],
       timeToMove:  [DEFAULT_TIME_TO_MOVE, DEFAULT_TIME_TO_MOVE],
       aceStrength: [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: [StrengthLevel.Alpha, StrengthLevel.Alpha],
@@ -243,6 +250,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     uiMode: state.uiMode ?? 'play',
     players:     [...prefs.players],
     wallClock:   [...prefs.wallClock],
+    wholeGameTime: [...prefs.wholeGameTime],
     timeToMove:  [...prefs.timeToMove],
     aceStrength: [...prefs.aceStrength],
     remoteStrength: [...prefs.remoteStrength],
@@ -370,6 +378,7 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
     savePrefs({
       players:     selections.players,
       wallClock:   selections.wallClock,
+      wholeGameTime: selections.wholeGameTime,
       timeToMove:  selections.timeToMove,
       aceStrength: selections.aceStrength,
       remoteStrength: selections.remoteStrength,
@@ -457,7 +466,7 @@ function renderAnalysisEngineSection(selections) {
         '<span class="player-dialog__time-val" data-analysis-time-label>' + formatTime(selections.analysisWallClock) + '</span>' +
       '</label>' +
       '<input type="range" class="player-dialog__time-slider" data-analysis-time-slider' +
-      ' min="' + WALL_CLOCK_MIN + '" max="' + WALL_CLOCK_MAX + '" step="' + WALL_CLOCK_STEP + '" value="' + selections.analysisWallClock + '">' +
+      ' min="' + ANALYSIS_TIME_MIN + '" max="' + ANALYSIS_TIME_MAX + '" step="' + ANALYSIS_TIME_STEP + '" value="' + selections.analysisWallClock + '">' +
     '</div>' +
     '<div class="player-dialog__field">' +
       '<label class="player-dialog__label">' + workerLabel + ' (device max ' + analysisThreadsMax() + '): ' +
@@ -604,7 +613,7 @@ function renderEngineControls(seat, selections) {
   if (cat === 'titanium') {
     return renderTitaniumNetControls(seat, selections) +
            renderCoresSlider(seat, selections) +
-           renderTimeSlider(seat, selections, 'Thinking time');
+           renderTimeSlider(seat, selections, 'Thinking time', true);
   }
 
   if (cat === 'ace-v13') {
@@ -700,15 +709,20 @@ function renderCoresSlider(seat, selections) {
   );
 }
 
-function renderTimeSlider(seat, selections, labelText) {
+function renderTimeSlider(seat, selections, labelText, supportsWholeGame = false) {
   const wc = selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK;
+  const wholeGame = supportsWholeGame && selections.wholeGameTime[seat] !== false;
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">' + escHtml(labelText) + ': ' +
+      '<label class="player-dialog__label">' + escHtml(wholeGame ? 'Whole game time' : labelText) + ': ' +
         '<span class="player-dialog__time-val" data-time-label="' + seat + '">' + formatTime(wc) + '</span>' +
       '</label>' +
       '<input type="range" class="player-dialog__time-slider" data-time-slider="' + seat + '"' +
-      ' min="' + WALL_CLOCK_MIN + '" max="' + WALL_CLOCK_MAX + '" step="' + WALL_CLOCK_STEP + '" value="' + wc + '">' +
+      ' min="0" max="' + WALL_CLOCK_RANGE.sliderSteps + '" step="1" value="' + wallClockSliderPosition(wc) + '">' +
+      (supportsWholeGame ? '<label class="player-dialog__option-row">' +
+        '<input type="checkbox" data-whole-game-time="' + seat + '"' + (wholeGame ? ' checked' : '') + '>' +
+        ' Whole game time (engine manages this clock)' +
+      '</label>' : '') +
     '</div>'
   );
 }
@@ -875,9 +889,15 @@ function wireEngineControls(overlay, seat, selections) {
   const label  = host.querySelector('[data-time-label="' + seat + '"]');
   if (slider) {
     slider.addEventListener('input', () => {
-      const v = Number(slider.value);
+      const v = wallClockFromSlider(slider.value);
       selections.wallClock[seat] = v;
       if (label) label.textContent = formatTime(v);
+    });
+  }
+  const wholeGame = host.querySelector('[data-whole-game-time="' + seat + '"]');
+  if (wholeGame) {
+    wholeGame.addEventListener('change', () => {
+      selections.wholeGameTime[seat] = wholeGame.checked;
     });
   }
 
@@ -963,6 +983,7 @@ function buildAiSettings(playerType, selections, seat) {
     return {
       titaniumNet:      migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD),
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
+      wholeGameTime: selections.wholeGameTime[seat] !== false,
       visitsBudget:     0,
       cores:            clampCores(selections.cores[seat] ?? DEFAULT_CORES),
     };
