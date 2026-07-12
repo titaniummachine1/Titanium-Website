@@ -171,6 +171,9 @@ export function compactPlayerConfigSummary(ui, snap = null) {
 }
 
 function shortEngineName(playerType) {
+  if (playerType === PlayerType.TitaniumV17) {
+    return 'Titanium v17';
+  }
   if (playerType === PlayerType.TitaniumV16) {
     return 'Titanium v16';
   }

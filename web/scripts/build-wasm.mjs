@@ -1,5 +1,7 @@
 /**
- * Compile monorepo engine (Rust) → web/src/wasm/titanium for GitHub Pages.
+ * Compile monorepo engine (Rust) → web/src/wasm/* for GitHub Pages.
+ * v16: embed-tables (fast cold start, larger wasm).
+ * v17: runtime pawn LUT built on first load (smaller wasm download).
  */
 
 import { createHash } from 'node:crypto';
@@ -17,7 +19,6 @@ import { fileURLToPath } from 'node:url';
 const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const monorepoEngine = path.resolve(webDir, '..', '..', 'engine');
 const checkoutEngine = path.resolve(webDir, '..', 'engine');
-const outDir = path.join(webDir, 'src', 'wasm', 'titanium');
 const publicWasmDir = path.join(webDir, 'public', 'wasm');
 
 const engineDir = existsSync(path.join(monorepoEngine, 'Cargo.toml'))
@@ -64,99 +65,13 @@ if (exportResult.status !== 0) {
 
 const { RUSTFLAGS: _dropNativeRustflags, ...hostEnv } = process.env;
 const threadedWasm = process.env.TITANIUM_WASM_THREADS !== '0';
-const wasmFeatures = threadedWasm ? 'wasm-threads,embed-tables' : 'wasm,embed-tables';
-const env = {
-  ...hostEnv,
-  WASM_BINDGEN: wasmBindgen,
-  GIT_COMMIT_HASH: commit,
-  WASM_BUILD_TIMESTAMP: buildTimestamp,
-  ...(threadedWasm
-    ? {
-        RUSTFLAGS:
-          // max-memory 256MB: the threaded build holds the main thread's local TT
-          // (~26MB at TT_BITS=20) AND a shared lazy-SMP TT (~36MB of per-entry
-          // RwLocks) simultaneously. The old 64MB cap overflowed during the first
-          // threaded search's shared-TT allocation → handle_alloc_error abort
-          // (surfaced as a bare wasm `unreachable`). 256MB gives headroom for 8
-          // threads. (Shared memory reserves this as virtual address space only.)
-          '-C target-feature=+atomics,+bulk-memory,+simd128 -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=268435456 -C link-arg=--export=__heap_base -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base',
-      }
-    : {}),
-};
+const threadedRustflags =
+  '-C target-feature=+atomics,+bulk-memory,+simd128 -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=268435456 -C link-arg=--export=__heap_base -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base';
 
-const wasmPackArgs = [
-    'build',
-    '--release',
-    '--target',
-    'web',
-    '--out-dir',
-    outDir,
-    '--out-name',
-    'titanium',
-    '--',
-    '--no-default-features',
-    '--features',
-    wasmFeatures,
-];
-if (threadedWasm) {
-  wasmPackArgs.push('-Z', 'build-std=panic_abort,std');
-}
-const wasmPackCommand = threadedWasm ? 'rustup' : 'wasm-pack';
-const wasmPackCommandArgs = threadedWasm
-  ? ['run', 'nightly', 'wasm-pack', ...wasmPackArgs]
-  : wasmPackArgs;
-
-if (threadedWasm) {
-  console.log('[build:wasm] threaded wasm: enabled (wasm-bindgen-rayon + SharedArrayBuffer)');
-}
-
-const result = spawnSync(wasmPackCommand, wasmPackCommandArgs, {
-  cwd: engineDir,
-  stdio: 'inherit',
-  env,
-});
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
-}
-
-const wasmPath = path.join(outDir, 'titanium_bg.wasm');
-const wasmSha256 = sha256File(wasmPath);
-const weightSrc = path.join(engineDir, 'src', 'titanium');
-const weightsDir = path.join(webDir, 'public', 'weights');
-mkdirSync(weightsDir, { recursive: true });
-mkdirSync(publicWasmDir, { recursive: true });
-
-const liveWeightsPath = path.join(weightSrc, 'net_weights.bin');
-const weightsLiveSha256 = sha256File(liveWeightsPath);
-
-const buildMeta = {
-  engine_version: 'titanium-v16',
-  git_commit: commit,
-  build_timestamp: buildTimestamp,
-  wasm_sha256: wasmSha256,
-  wasm_bytes: readFileSync(wasmPath).byteLength,
-  weights_live_sha256: weightsLiveSha256,
-  features: wasmFeatures,
-  wasm_threads: threadedWasm,
-  engine_dir: engineDir,
-};
-
-const metaJson = JSON.stringify(buildMeta, null, 2);
-writeFileSync(path.join(outDir, 'build-meta.json'), metaJson);
-writeFileSync(path.join(publicWasmDir, 'build-meta.json'), metaJson);
-
-// Cache-bust WASM fetch in glue (dev + unbundled paths).
-const gluePath = path.join(outDir, 'titanium.js');
-let glue = readFileSync(gluePath, 'utf8');
-const wasmBust = wasmSha256.slice(0, 16);
-glue = glue.replace(
-  "module_or_path = new URL('titanium_bg.wasm', import.meta.url);",
-  `module_or_path = new URL('titanium_bg.wasm?v=${wasmBust}', import.meta.url);`,
-);
-writeFileSync(gluePath, glue);
-
-if (threadedWasm) {
+function patchRayonHelpers(outDir) {
+  if (!threadedWasm) {
+    return;
+  }
   const snippetRoot = path.join(outDir, 'snippets');
   const helperDirs = existsSync(snippetRoot)
     ? readdirSync(snippetRoot).filter((name) => name.startsWith('wasm-bindgen-rayon-'))
@@ -181,7 +96,102 @@ if (threadedWasm) {
   }
 }
 
-console.log(`[build:wasm] wasm sha256: ${wasmSha256}`);
-console.log(`[build:wasm] commit: ${commit}`);
+function buildVariant({ engineVersion, outSubdir, wasmFeatures, lutMode }) {
+  const outDir = path.join(webDir, 'src', 'wasm', outSubdir);
+  const env = {
+    ...hostEnv,
+    WASM_BINDGEN: wasmBindgen,
+    GIT_COMMIT_HASH: commit,
+    WASM_BUILD_TIMESTAMP: buildTimestamp,
+    ...(threadedWasm ? { RUSTFLAGS: threadedRustflags } : {}),
+  };
+  const wasmPackArgs = [
+    'build',
+    '--release',
+    '--target',
+    'web',
+    '--out-dir',
+    outDir,
+    '--out-name',
+    'titanium',
+    '--',
+    '--no-default-features',
+    '--features',
+    wasmFeatures,
+  ];
+  if (threadedWasm) {
+    wasmPackArgs.push('-Z', 'build-std=panic_abort,std');
+  }
+  const wasmPackCommand = threadedWasm ? 'rustup' : 'wasm-pack';
+  const wasmPackCommandArgs = threadedWasm
+    ? ['run', 'nightly', 'wasm-pack', ...wasmPackArgs]
+    : wasmPackArgs;
 
+  console.log(`[build:wasm] ${engineVersion}: features=${wasmFeatures} lut=${lutMode}`);
+  const result = spawnSync(wasmPackCommand, wasmPackCommandArgs, {
+    cwd: engineDir,
+    stdio: 'inherit',
+    env,
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+
+  const wasmPath = path.join(outDir, 'titanium_bg.wasm');
+  const wasmSha256 = sha256File(wasmPath);
+  const liveWeightsPath = path.join(engineDir, 'src', 'titanium', 'net_weights.bin');
+  const weightsLiveSha256 = sha256File(liveWeightsPath);
+
+  const buildMeta = {
+    engine_version: engineVersion,
+    git_commit: commit,
+    build_timestamp: buildTimestamp,
+    wasm_sha256: wasmSha256,
+    wasm_bytes: readFileSync(wasmPath).byteLength,
+    weights_live_sha256: weightsLiveSha256,
+    features: wasmFeatures,
+    wasm_threads: threadedWasm,
+    lut_mode: lutMode,
+    engine_dir: engineDir,
+  };
+
+  const metaJson = JSON.stringify(buildMeta, null, 2);
+  writeFileSync(path.join(outDir, 'build-meta.json'), metaJson);
+  if (outSubdir === 'titanium') {
+    mkdirSync(publicWasmDir, { recursive: true });
+    writeFileSync(path.join(publicWasmDir, 'build-meta.json'), metaJson);
+  }
+
+  const gluePath = path.join(outDir, 'titanium.js');
+  let glue = readFileSync(gluePath, 'utf8');
+  const wasmBust = wasmSha256.slice(0, 16);
+  glue = glue.replace(
+    "module_or_path = new URL('titanium_bg.wasm', import.meta.url);",
+    `module_or_path = new URL('titanium_bg.wasm?v=${wasmBust}', import.meta.url);`,
+  );
+  writeFileSync(gluePath, glue);
+  patchRayonHelpers(outDir);
+  console.log(`[build:wasm] ${engineVersion} wasm sha256: ${wasmSha256} (${buildMeta.wasm_bytes} bytes)`);
+  return buildMeta;
+}
+
+if (threadedWasm) {
+  console.log('[build:wasm] threaded wasm: enabled (wasm-bindgen-rayon + SharedArrayBuffer)');
+}
+
+const variants = [
+  {
+    id: 'v16',
+    engineVersion: 'titanium-v16',
+    outSubdir: 'titanium',
+    wasmFeatures: threadedWasm ? 'wasm-threads,embed-tables' : 'wasm,embed-tables',
+    lutMode: 'embedded',
+  },
+];
+
+for (const variant of variants) {
+  buildVariant(variant);
+}
+
+console.log(`[build:wasm] commit: ${commit}`);
 process.exit(0);

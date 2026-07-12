@@ -1673,7 +1673,9 @@ export class AppController {
         const ai = this.settings.playerAiSettings[seat] ?? {};
         const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
         const catLmrCeiling =
-          playerType === PlayerType.TitaniumV16 ? resolveCatLmrCeiling(ai) : 800;
+          playerType === PlayerType.TitaniumV16 || playerType === PlayerType.TitaniumV17
+            ? resolveCatLmrCeiling(ai)
+            : 800;
         const threads = resolveCores(ai);
         tasks.push(
           engine.prewarm(mode, catLmrCeiling, threads).catch((err) => {
@@ -2291,8 +2293,8 @@ export class AppController {
     if (isTitaniumEngine(playerType, this.engineConfigs)) {
       const backend = HAS_NATIVE_TITANIUM_LAZY_SMP ? 'native' : 'wasm';
       const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
-      const cat =
-        playerType === PlayerType.TitaniumV16
+        const cat =
+        playerType === PlayerType.TitaniumV16 || playerType === PlayerType.TitaniumV17
           ? `|cat${resolveCatLmrCeiling(ai)}`
           : '';
       const cores = `|c${resolveCores(ai)}`;

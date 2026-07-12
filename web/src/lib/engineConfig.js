@@ -41,8 +41,10 @@ const PlayerType = {
   Human: 'human',
   GorisansonMCTS: 'gorisanson-mcts',
   QuoridorV3: 'quoridor-v3',
-  /** Titanium v16 uses CAT attention LMR; difficulty selects the CAT ceiling. */
+  /** Titanium v16 — CAT LMR; embedded pawn LUT (larger wasm, instant cold start). */
   TitaniumV16: 'titanium-v16',
+  /** Titanium v17 — current strongest; runtime pawn LUT on first load (smaller wasm). */
+  TitaniumV17: 'titanium-v17',
   /** Unified ACE v10 — strength slider picks JS / Rust / MoveGen+ / PMC tier */
   AceV10: 'ace-v10',
   /** Unified ACE v13 — strength slider picks JS / Rust / MoveGen+ (no EME) */

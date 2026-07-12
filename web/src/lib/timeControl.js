@@ -134,8 +134,10 @@ export function migrateTitaniumNet(net) {
 
 export function resolveTitaniumEngineMode(aiSettings, playerType, engineConfigs) {
   void aiSettings;
-  void playerType;
   void engineConfigs;
+  if (playerType === PlayerType.TitaniumV17) {
+    return 'titanium-v17';
+  }
   return 'titanium-v16';
 }
 
@@ -319,6 +321,7 @@ export function isLocalEngine(playerType, engineConfigs) {
 export function isTitaniumEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.TitaniumV16 ||
+    playerType === PlayerType.TitaniumV17 ||
     getEngineConfig(playerType, engineConfigs)?.kind === 'titanium'
   );
 }

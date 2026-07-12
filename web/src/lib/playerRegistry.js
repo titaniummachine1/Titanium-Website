@@ -31,7 +31,16 @@ const TITANIUM_V16_ENGINE = {
   key: PlayerType.TitaniumV16,
   engineMode: 'titanium-v16',
   tooltip:
-    'Titanium v16 - v15 Hard weights + CAT-attention LMR. Easy/Medium/Hard sets the attention ceiling (500/800/1000 cm); cold walls search at depth 1.',
+    'Titanium v16 — embedded pawn LUT, instant cold start. Easy/Medium/Hard sets CAT ceiling (500/800/1000 cm).',
+};
+
+const TITANIUM_V17_ENGINE = {
+  kind: 'titanium',
+  name: 'Titanium v17',
+  key: PlayerType.TitaniumV17,
+  engineMode: 'titanium-v17',
+  tooltip:
+    'Titanium v17 — current strongest (SF history, q-search, CAT LMR, lazy top-N, ACE LMP/RFP). Pawn LUT builds on first load (~1–2s).',
 };
 
 const ZERO_INK_ENGINE = {
@@ -66,6 +75,7 @@ export function getAllEngineConfigs() {
   }));
   return [
     GORISANSON_ENGINE,
+    TITANIUM_V17_ENGINE,
     TITANIUM_V16_ENGINE,
     ACE_V13_ENGINE,
     ZERO_INK_ENGINE,
@@ -87,6 +97,12 @@ export function getPlayerOptionGroups() {
           label: 'Gorisanson (JS, original)',
           disabled: false,
           tooltip: GORISANSON_ENGINE.tooltip,
+        },
+        {
+          value: PlayerType.TitaniumV17,
+          label: TITANIUM_V17_ENGINE.name,
+          disabled: false,
+          tooltip: TITANIUM_V17_ENGINE.tooltip,
         },
         {
           value: PlayerType.TitaniumV16,
@@ -178,6 +194,7 @@ const SEARCH_STOP_LABELS = {
   'ace-v13-js': 'ACE v13 JS',
   'ace-v13': 'ACE v13 Rust',
   'ace-v13-ti': 'ACE v13 MoveGen+',
+  'titanium-v17': 'Titanium v17',
   'titanium-v16': 'Titanium v16',
   zeroink: 'zero.ink',
   mcts: 'MCTS',
@@ -230,6 +247,8 @@ function buildSearchDepthHeader(header, { live }) {
     header.mode === 'ace-v13-js' ||
     header.mode === 'ace-v13' ||
     header.mode === 'ace-v13-ti' ||
+    header.stoppedBy === 'titanium-v17' ||
+    header.mode === 'titanium-v17' ||
     header.stoppedBy === 'titanium-v16' ||
     header.mode === 'titanium-v16' ||
     header.playerLabel?.includes('Titanium') ||

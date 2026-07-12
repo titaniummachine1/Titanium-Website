@@ -21,6 +21,12 @@ export default defineConfig(({ mode }) => {
         allow: [rootDir, path.resolve(rootDir, '..')],
       },
     },
+    preview: {
+      headers: {
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+      },
+    },
     worker: {
       format: 'es',
     },
@@ -30,6 +36,7 @@ export default defineConfig(({ mode }) => {
         input: {
           main: path.resolve(rootDir, 'index.html'),
           bench: path.resolve(rootDir, 'bench.html'),
+          smoke: path.resolve(rootDir, 'smoke.html'),
         },
       },
     },

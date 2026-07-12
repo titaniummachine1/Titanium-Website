@@ -8,7 +8,9 @@ import wasmUrl from '../wasm/titanium/titanium_bg.wasm?url';
 import buildMeta from '../wasm/titanium/build-meta.json';
 
 const { WasmEngine } = titaniumWasm;
-const WASM_THREAD_STACK_SIZE = 4 << 20;
+// v17's expanded search history makes construction/search frames larger than
+// the old 4 MiB worker stack. Keep one generous stack for every profile.
+const WASM_THREAD_STACK_SIZE = 16 << 20;
 
 let initPromise = null;
 let threadPoolPromise = null;
@@ -78,7 +80,10 @@ function ensureEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) 
     }
   }
   const tier = tierForEngineMode(engineMode, catLmrCeiling);
-  const engine = new WasmEngine(tier);
+  const engine =
+    engineMode === 'titanium-v17' && typeof WasmEngine.new_v17 === 'function'
+      ? WasmEngine.new_v17(tier)
+      : new WasmEngine(tier);
   engines.set(key, engine);
   return engine;
 }

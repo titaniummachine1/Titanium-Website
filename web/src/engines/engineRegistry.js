@@ -61,6 +61,21 @@ export const ENGINE_REGISTRY = new Map([
     },
   ],
   [
+    PlayerType.TitaniumV17,
+    {
+      id: PlayerType.TitaniumV17,
+      displayName: 'Titanium v17',
+      backend: EngineBackendKind.LOCAL_WASM,
+      capabilities: {
+        remoteSync: false,
+        livePv: true,
+        playNow: true,
+        abort: true,
+      },
+      controls: { timeSlider: true, nodes: true, strength: true },
+    },
+  ],
+  [
     PlayerType.TitaniumV16,
     {
       id: PlayerType.TitaniumV16,

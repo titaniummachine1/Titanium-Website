@@ -10,6 +10,8 @@
     "audit:wasm": "node scripts/audit-wasm-hashes.mjs",
     "bench:browser": "node scripts/run-browser-bench.mjs",
     "bench:threads": "node scripts/run-browser-bench.mjs --url \"http://localhost:5173/bench.html?auto=1&timeSec=5&runs=1&net=easy&threads=8&requireThreaded=1&moves=e2%20e8%20a3h%20g6h%20b3v\"",
+    "test:engine-smoke": "node scripts/run-engine-smoke.mjs",
+    "smoke:engines": "node scripts/run-engine-smoke.mjs --start-dev",
     "build:pages": "npm run build:wasm && vite build --mode ghpages",
     "preview": "vite preview",
     "preview:pages": "vite preview --mode ghpages",

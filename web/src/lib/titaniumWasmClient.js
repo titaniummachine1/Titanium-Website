@@ -489,7 +489,9 @@ export class TitaniumWasmEngineClient {
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
     const engineMode = this.config?.engineMode ?? 'titanium-v16';
     const catLmrCeiling =
-      engineMode === 'titanium-v16' ? resolveCatLmrCeiling(aiSettings) : 800;
+      engineMode === 'titanium-v16' || engineMode === 'titanium-v17'
+        ? resolveCatLmrCeiling(aiSettings)
+        : 800;
 
     if (this.pendingRequest) {
       throw new Error('Titanium WASM search already in flight');
