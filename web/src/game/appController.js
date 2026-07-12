@@ -477,8 +477,7 @@ export class AppController {
     return (
       this.settings.uiMode === 'play' &&
       this.aiThinking &&
-      this.thinkingSeatIndex != null &&
-      Boolean(this.liveSearch || this.searchInfoBySeat[this.thinkingSeatIndex])
+      this.thinkingSeatIndex != null
     );
   }
 
@@ -591,9 +590,17 @@ export class AppController {
     ) {
       return null;
     }
+    const active = this.searchInfoBySeat[this.thinkingSeatIndex] ?? null;
+    const live = this.liveSearch ?? null;
+    const depthLog = active?.depthLog?.length
+      ? active.depthLog
+      : (live?.depthLog ?? []);
+    // This merge order deliberately matches playerCard.thinkingTelemetry():
+    // the eval bar and the active engine card must consume one payload.
     const payload = {
-      ...(this.searchInfoBySeat[this.thinkingSeatIndex] ?? {}),
-      ...this.liveSearch,
+      ...(live ?? {}),
+      ...(active ?? {}),
+      depthLog,
     };
     const evalState = searchPayloadToEvalState(payload, this.session.playerToMove);
     if (!evalState) {
@@ -684,10 +691,21 @@ export class AppController {
       source: 'review-pending',
       pending: true,
     };
+    const playPendingEvalState = {
+      p1: 0.5,
+      margin: 0,
+      playerToMove: snapshot.playerToMove,
+      pv: [],
+      rootMoves: [],
+      source: 'play-pending',
+      pending: true,
+    };
     const resolvedEval =
       this.settings.uiMode === 'replay'
         ? (cachedEval ?? reviewPendingEvalState)
-        : (livePlayEval ?? latestCompletedPlayEval ?? liveAnalysisEval ?? cachedEval ?? distanceEvalState);
+        : this.settings.uiMode === 'play' && this.aiThinking
+          ? (livePlayEval ?? playPendingEvalState)
+          : (latestCompletedPlayEval ?? liveAnalysisEval ?? cachedEval ?? distanceEvalState);
 
     return {
       ...snapshot,

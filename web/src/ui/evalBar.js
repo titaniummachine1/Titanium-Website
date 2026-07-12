@@ -29,7 +29,7 @@ export function renderEvalBar(container, props) {
   // analysis session has one; fall back to the coarse distance margin only
   // before the first search result arrives.
   const hasRootScore = Number.isFinite(evalData?.rootScore);
-  const pending = evalData?.source === 'review-pending';
+  const pending = evalData?.pending === true;
   const scoreLabel = pending
     ? '...'
     : hasRootScore
