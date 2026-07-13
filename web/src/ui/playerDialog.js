@@ -36,6 +36,7 @@ import {
   WALL_CLOCK_RANGE,
   wallClockFromSlider,
   wallClockSliderPosition,
+  supportsWholeGameTime,
 } from '../lib/timeControl.js';
 
 const UI_MODE_TABS = [
@@ -618,7 +619,12 @@ function renderEngineControls(seat, selections) {
 
   if (cat === 'ace-v13') {
     return renderAceTierControls(seat, selections, playerType) +
-           renderTimeSlider(seat, selections, 'Thinking time');
+           renderTimeSlider(
+             seat,
+             selections,
+             'Thinking time',
+             supportsWholeGameTime(playerType, getAllEngineConfigs()),
+           );
   }
 
   // Gorisanson, QuoridorV3, etc.
@@ -993,6 +999,7 @@ function buildAiSettings(playerType, selections, seat) {
     return {
       strengthLevel:    selections.aceStrength[seat] ?? DEFAULT_ACE_TIER,
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
+      wholeGameTime:    selections.wholeGameTime[seat] !== false,
     };
   }
 

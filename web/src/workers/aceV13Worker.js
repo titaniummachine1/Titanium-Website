@@ -149,6 +149,7 @@ self.onmessage = (ev) => {
 
     const timeMs = Math.max(50, Number(data.timeMs) || 4000);
     const maxDepth = Math.min(30, Math.max(1, Number(data.maxDepth) || 30));
+    postMessage({ type: 'search-started' });
     const result = ace.thinkStreaming(timeMs, maxDepth, false);
     const algebraicMove = aceMoveToAlgebraic(result.move);
 

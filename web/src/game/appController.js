@@ -274,6 +274,7 @@ import {
   TITANIUM_NET_HARD,
   migrateTitaniumNet,
   allocateWholeGameTime,
+  supportsWholeGameTime,
 } from '../lib/timeControl.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { ponderCandidateSlots } from '../lib/enginePonder.js';
@@ -1245,7 +1246,7 @@ export class AppController {
 
   _managedClockSettings(seatIndex, aiSettings) {
     const playerType = this.settings.players[seatIndex];
-    if (!isTitaniumEngine(playerType, this.engineConfigs) || aiSettings?.wholeGameTime === false) {
+    if (!supportsWholeGameTime(playerType, this.engineConfigs) || aiSettings?.wholeGameTime === false) {
       return { ...aiSettings };
     }
     const totalMs = Math.max(250, Number(aiSettings?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000);
@@ -1279,7 +1280,7 @@ export class AppController {
     return [0, 1].map((seatIndex) => {
       const playerType = this.settings.players[seatIndex];
       const ai = this.settings.playerAiSettings[seatIndex] ?? {};
-      if (!isTitaniumEngine(playerType, this.engineConfigs) || ai.wholeGameTime === false) {
+      if (!supportsWholeGameTime(playerType, this.engineConfigs) || ai.wholeGameTime === false) {
         return null;
       }
       const totalMs = Math.max(250, Number(ai.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000);
@@ -1320,10 +1321,10 @@ export class AppController {
       const seat = this.thinkingSeatIndex;
       const playerType = seat != null ? this.settings.players[seat] : null;
       const ai = seat != null ? this.settings.playerAiSettings[seat] : null;
-      if (seat != null && isTitaniumEngine(playerType, this.engineConfigs) && ai?.wholeGameTime !== false) {
+      if (seat != null && supportsWholeGameTime(playerType, this.engineConfigs) && ai?.wholeGameTime !== false) {
         const remainingMs = this._gameClockStates()[seat]?.remainingMs ?? 0;
         if (remainingMs <= 0) {
-          this._flagTitaniumOnTime(seat);
+          this._flagEngineOnTime(seat);
           return;
         }
         this.onChange?.();
@@ -1331,7 +1332,7 @@ export class AppController {
     }, 100);
   }
 
-  _flagTitaniumOnTime(seatIndex) {
+  _flagEngineOnTime(seatIndex) {
     if (!this.aiThinking || this.thinkingSeatIndex !== seatIndex) {
       return;
     }
@@ -3522,7 +3523,7 @@ export class AppController {
     const requestAiSettings = this._managedClockSettings(seatIndex, aiSettings);
     this._thinkAiSettings = { ...requestAiSettings };
     if (aiSettings?.wholeGameTime !== false && requestAiSettings.wholeGameRemainingSeconds <= 0) {
-      this._flagTitaniumOnTime(seatIndex);
+      this._flagEngineOnTime(seatIndex);
       return;
     }
 

@@ -328,6 +328,14 @@ export function isAceV13Family(playerType, engineConfigs) {
   );
 }
 
+/** Engines with a reliable wall-clock stop and a search-start notification. */
+export function supportsWholeGameTime(playerType, engineConfigs) {
+  return (
+    isTitaniumEngine(playerType, engineConfigs) ||
+    isAceV13Family(playerType, engineConfigs)
+  );
+}
+
 export function isAceFamily(playerType, engineConfigs) {
   return (
     isAceV8Family(playerType, engineConfigs) ||
@@ -448,6 +456,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
     return {
       strengthLevel: 0,
       wallClockSeconds: ACE_WALL_CLOCK_DEFAULT,
+      wholeGameTime: isAceV13Family(playerType, engineConfigs),
     };
   }
   if (isLocalEngine(playerType, engineConfigs)) {

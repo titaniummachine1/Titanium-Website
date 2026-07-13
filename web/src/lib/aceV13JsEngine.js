@@ -31,6 +31,13 @@ export class AceV13JsEngineClient {
         pending.onError?.(new Error(data.message ?? 'ACE v13 worker error'));
         return;
       }
+      if (data.type === 'search-started') {
+        if (pending.started == null) {
+          pending.started = performance.now();
+          pending.onSearchStart?.();
+        }
+        return;
+      }
       if (data.type === 'progress') {
         pending.onInfo?.({
           thinking: true,
@@ -47,7 +54,7 @@ export class AceV13JsEngineClient {
         return;
       }
       if (data.type === 'bestmove') {
-        const elapsed = performance.now() - pending.started;
+        const elapsed = pending.started == null ? 0 : performance.now() - pending.started;
         this.setStatus('idle');
         pending.onInfo?.({
           time: elapsed,
@@ -146,7 +153,7 @@ export class AceV13JsEngineClient {
     this.startRequest(next);
   }
 
-  startRequest({ aiSettings, moveHistory, isFreshGame }) {
+  startRequest({ aiSettings, moveHistory, isFreshGame, onSearchStart }) {
     if (isFreshGame) {
       this.algebraicMoves = [];
     } else if (moveHistory?.length) {
@@ -156,11 +163,11 @@ export class AceV13JsEngineClient {
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? ACE_WALL_CLOCK_DEFAULT) * 1000);
 
     this.setStatus('searching');
-    const started = performance.now();
     this.ensureWorker();
 
     this.pendingRequest = {
-      started,
+      started: null,
+      onSearchStart,
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => {
         this.pendingRequest = null;

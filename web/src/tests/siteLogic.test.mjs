@@ -24,7 +24,11 @@ import {
   finishedGamePayload,
   finishedGameSignature,
 } from '../lib/trainingSubmit.js';
-import { allocateWholeGameTime } from '../lib/timeControl.js';
+import {
+  allocateWholeGameTime,
+  supportsWholeGameTime,
+} from '../lib/timeControl.js';
+import { getAllEngineConfigs } from '../lib/playerRegistry.js';
 
 let passed = 0;
 let failed = 0;
@@ -289,6 +293,14 @@ const flaggedClock = allocateWholeGameTime({
   ownMovesPlayed: 22,
 });
 assertEqual(flaggedClock.moveBudgetMs, 0, 'expired clock allocates no search time');
+assert(
+  supportsWholeGameTime(PlayerType.TitaniumV17, getAllEngineConfigs()),
+  'Titanium supports whole-game allocation',
+);
+assert(
+  supportsWholeGameTime(PlayerType.AceV13, getAllEngineConfigs()),
+  'ACE v13 supports whole-game allocation',
+);
 
 console.log('\n════════════════════════════════');
 console.log(`TOTAL: ${passed + failed} tests — passed ${passed}, failed ${failed}`);
