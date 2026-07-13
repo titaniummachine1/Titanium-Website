@@ -273,6 +273,7 @@ import {
   defaultCoreCount,
   TITANIUM_NET_HARD,
   migrateTitaniumNet,
+  allocateWholeGameTime,
 } from '../lib/timeControl.js';
 import { playerColorName } from '../lib/playerColors.js';
 import { ponderCandidateSlots } from '../lib/enginePonder.js';
@@ -1254,24 +1255,23 @@ export class AppController {
         ? sum + Math.max(0, entry.thinkMs)
         : sum;
     }, 0);
-    const remainingMs = Math.max(0, totalMs - usedMs);
     const ownMovesPlayed = this.session.actions.reduce(
       (count, _action, plyIndex) => count + (plyIndex % 2 === seatIndex ? 1 : 0),
       0,
     );
-    const expectedMovesLeft = Math.max(4, 24 - ownMovesPlayed);
-    // Spend slightly above the even-share rate so unused opening time becomes
-    // useful in the middlegame, while reserving at least 75% for later moves.
-    const moveBudgetMs = Math.max(
-      1,
-      Math.min(remainingMs * 0.25, (remainingMs / expectedMovesLeft) * 1.35),
-    );
+    const {
+      remainingMs,
+      moveBudgetMs,
+      expectedMovesLeft,
+      handoffReserveMs,
+    } = allocateWholeGameTime({ totalMs, usedMs, ownMovesPlayed });
     return {
       ...aiSettings,
       wallClockSeconds: moveBudgetMs / 1000,
       wholeGameTotalSeconds: totalMs / 1000,
       wholeGameRemainingSeconds: remainingMs / 1000,
       wholeGameExpectedMovesLeft: expectedMovesLeft,
+      wholeGameHandoffReserveMs: handoffReserveMs,
     };
   }
 
@@ -3494,8 +3494,9 @@ export class AppController {
     this.aiThinking = true;
     this.thinkingPlayerType = playerType;
     this.thinkingSeatIndex = seatIndex;
-    this._thinkStartedAt = performance.now();
-    this._startClockTicker();
+    // Initialization, thread-pool startup, and position synchronization are
+    // free. The Titanium worker starts this clock immediately before go().
+    this._thinkStartedAt = null;
     this.engineErrors[seatIndex] = null;
     this.engineStatus[seatIndex] = 'searching';
     this.searchInfoBySeat[seatIndex] = { depthLog: [] };
@@ -3597,6 +3598,19 @@ export class AppController {
         positionKey: requestPositionKey,
         requestSeq,
         gameGeneration,
+        onSearchStart: () => {
+          if (
+            gameGeneration === this._gameGeneration &&
+            requestSeq === this._moveRequestSeq &&
+            this.aiThinking &&
+            this.thinkingSeatIndex === seatIndex &&
+            this._thinkStartedAt == null
+          ) {
+            this._thinkStartedAt = performance.now();
+            this._startClockTicker();
+            this.onChange?.();
+          }
+        },
       },
     }).catch((err) => {
       if (capturedSignal.aborted || isAbortError(err)) {

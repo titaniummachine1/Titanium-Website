@@ -18,6 +18,7 @@ async function requestLocalMove({ engineEntry, controller, request }) {
     requestSeq: request.requestSeq,
     signal: request.signal,
     onLiveUpdate: request.onLiveUpdate,
+    onSearchStart: request.onSearchStart,
   });
 }
 

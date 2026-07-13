@@ -33,6 +33,40 @@ export const WALL_CLOCK_RANGE = {
   defaultSeconds: 60,
 };
 
+/**
+ * Allocate one timed engine search from a whole-game clock.
+ *
+ * The engine receives less than the displayed remaining clock so worker
+ * messaging and deadline cleanup cannot flag an otherwise completed move.
+ * As the clock gets low, preserve at least eight plausible moves instead of
+ * spending a quarter of the clock on each of the final four turns.
+ */
+export function allocateWholeGameTime({ totalMs, usedMs, ownMovesPlayed }) {
+  const total = Math.max(250, Number(totalMs) || 0);
+  const used = Math.max(0, Number(usedMs) || 0);
+  const remainingMs = Math.max(0, total - used);
+  const expectedMovesLeft = Math.max(8, 24 - Math.max(0, Number(ownMovesPlayed) || 0));
+  const remainingFraction = remainingMs / total;
+  const spendFactor = remainingFraction <= 0.1 ? 0.75 : remainingFraction <= 0.25 ? 1 : 1.35;
+  const shareCap = remainingFraction <= 0.1 ? 0.1 : 0.2;
+  const grossBudgetMs = Math.min(
+    remainingMs * shareCap,
+    (remainingMs / expectedMovesLeft) * spendFactor,
+  );
+  const handoffReserveMs = Math.min(300, Math.max(50, grossBudgetMs * 0.05));
+  const moveBudgetMs = remainingMs > 0
+    ? Math.max(1, grossBudgetMs - handoffReserveMs)
+    : 0;
+
+  return {
+    totalMs: total,
+    remainingMs,
+    moveBudgetMs,
+    expectedMovesLeft,
+    handoffReserveMs,
+  };
+}
+
 export function wallClockFromSlider(position) {
   const t = Math.max(0, Math.min(1, Number(position) / WALL_CLOCK_RANGE.sliderSteps));
   const raw = WALL_CLOCK_RANGE.min * Math.pow(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min, t);

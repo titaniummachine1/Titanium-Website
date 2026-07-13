@@ -265,6 +265,7 @@ async function handleSearch(eventData) {
     };
   }
 
+  self.postMessage({ type: 'search-started', seq });
   const searchT0 = performance.now();
   let searchResult;
   const helperStartsBefore =

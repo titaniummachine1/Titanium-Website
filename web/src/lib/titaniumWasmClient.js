@@ -228,7 +228,13 @@ export class TitaniumWasmEngineClient {
       return;
     }
 
+    if (data.type === 'search-started') {
+      this._markSearchStarted(pending);
+      return;
+    }
+
     if (data.type === 'info') {
+      this._markSearchStarted(pending);
       pending.finalMeta = {
         ...(pending.finalMeta ?? {}),
         ...this._mergeInfo(data),
@@ -271,6 +277,7 @@ export class TitaniumWasmEngineClient {
     }
 
     if (data.type === 'bestmove') {
+      this._markSearchStarted(pending);
       pending.finalMeta = {
         ...(pending.finalMeta ?? {}),
         ...this._mergeInfo(data),
@@ -298,11 +305,19 @@ export class TitaniumWasmEngineClient {
     }
   }
 
+  _markSearchStarted(pending) {
+    if (pending.started != null) {
+      return;
+    }
+    pending.started = performance.now();
+    pending.onSearchStart?.();
+  }
+
   _finishSearch(pending, bestmove) {
     const meta = pending.finalMeta ?? {};
     const searchDepth = bestmove.depth ?? meta.searchDepth;
     const nodeFields = enrichNodeFields(meta);
-    const elapsed = performance.now() - pending.started;
+    const elapsed = pending.started == null ? 0 : performance.now() - pending.started;
     const depthLog = synthesizeDepthLog(meta, {
       searchDepth,
       nodes: nodeFields.nodes,
@@ -473,8 +488,8 @@ export class TitaniumWasmEngineClient {
     void this.startRequest(next);
   }
 
-  async startRequest({ aiSettings, moveHistory, isFreshGame }) {
-    const retryParams = { aiSettings, moveHistory, isFreshGame };
+  async startRequest({ aiSettings, moveHistory, isFreshGame, onSearchStart }) {
+    const retryParams = { aiSettings, moveHistory, isFreshGame, onSearchStart };
     if (isFreshGame) {
       this.algebraicMoves = [];
     } else if (moveHistory?.length) {
@@ -503,15 +518,15 @@ export class TitaniumWasmEngineClient {
       this.setStatus('connecting');
     }
 
-    const started = performance.now();
     const seq = ++this._requestSeq;
     const pending = {
       seq,
-      started,
+      started: null,
       initMs: 0,
       timeMs,
       finalMeta: {},
       retryParams,
+      onSearchStart,
       onInfo: (info) => this.onInfo?.(info),
       onBestMove: (action) => this.onBestMove?.(action),
       onError: (err) => {

@@ -24,6 +24,7 @@ import {
   finishedGamePayload,
   finishedGameSignature,
 } from '../lib/trainingSubmit.js';
+import { allocateWholeGameTime } from '../lib/timeControl.js';
 
 let passed = 0;
 let failed = 0;
@@ -263,6 +264,31 @@ assertEqual(
   284214,
   'enrichNodeFields exposes aggregate nodes',
 );
+
+console.log('\n[timeControl] whole-game clock allocation');
+const openingClock = allocateWholeGameTime({
+  totalMs: 600_000,
+  usedMs: 0,
+  ownMovesPlayed: 0,
+});
+assert(openingClock.moveBudgetMs < 34_000, '10-minute opening budget keeps handoff reserve');
+assertEqual(openingClock.expectedMovesLeft, 24, 'opening plans for 24 own moves');
+
+const lowClock = allocateWholeGameTime({
+  totalMs: 600_000,
+  usedMs: 590_000,
+  ownMovesPlayed: 22,
+});
+assertEqual(lowClock.expectedMovesLeft, 8, 'low clock preserves at least eight moves');
+assert(lowClock.moveBudgetMs < 1_000, 'last ten seconds spends under one second per move');
+assert(lowClock.handoffReserveMs >= 50, 'worker handoff always has a reserve');
+
+const flaggedClock = allocateWholeGameTime({
+  totalMs: 600_000,
+  usedMs: 600_000,
+  ownMovesPlayed: 22,
+});
+assertEqual(flaggedClock.moveBudgetMs, 0, 'expired clock allocates no search time');
 
 console.log('\n════════════════════════════════');
 console.log(`TOTAL: ${passed + failed} tests — passed ${passed}, failed ${failed}`);
