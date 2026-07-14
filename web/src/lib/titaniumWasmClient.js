@@ -502,6 +502,50 @@ export class TitaniumWasmEngineClient {
     this.algebraicMoves = [];
   }
 
+  /**
+   * Hard recovery after a worker trap/crash: kill the worker, rebuild WASM,
+   * and replay the full move list to the current position.
+   */
+  async recoverFromDesync({
+    moveHistory,
+    isFreshGame,
+    aiSettings,
+  } = {}) {
+    this.queuedRequest = null;
+    this.pendingRequest = null;
+    this.terminateWorkers();
+    this.algebraicMoves =
+      isFreshGame || !moveHistory?.length
+        ? []
+        : moveHistory.map((action) =>
+            typeof action === 'string' ? action : toAlgebraic(action),
+          );
+
+    const engineMode = this.config?.engineMode ?? this._lastEngineMode ?? 'titanium-v17';
+    const catLmrCeiling =
+      engineMode === 'titanium-v16' || engineMode === 'titanium-v17'
+        ? resolveCatLmrCeiling(aiSettings ?? {})
+        : 800;
+    this._lastEngineMode = engineMode;
+    this._lastCatLmrCeiling = catLmrCeiling;
+    this.threads = this._degradeToSingleThread
+      ? 1
+      : resolveTitaniumSearchCores(aiSettings ?? {});
+
+    this.setStatus('connecting');
+    await this.initWorkers(engineMode, { catLmrCeiling, threads: this.threads });
+    if (this.worker) {
+      this.worker.postMessage({
+        op: 'sync',
+        algebraicMoves: this.algebraicMoves,
+        engineMode,
+        catLmrCeiling,
+        threads: this.threads,
+      });
+    }
+    this.setStatus('idle');
+  }
+
   makeMoves(actions) {
     for (const action of actions) {
       const alg = toAlgebraic(action);

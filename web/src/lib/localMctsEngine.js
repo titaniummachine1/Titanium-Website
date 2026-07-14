@@ -212,6 +212,20 @@ export class LocalMctsEngineClient {
     this.algebraicMoves = [];
   }
 
+  /** Terminate the worker and warm a fresh instance at the current position. */
+  async recoverFromDesync({ moveHistory, isFreshGame } = {}) {
+    this.cancelSearch();
+    this.algebraicMoves =
+      isFreshGame || !moveHistory?.length
+        ? []
+        : moveHistory.map((action) =>
+            typeof action === 'string' ? action : toAlgebraic(action),
+          );
+    this.setStatus('connecting');
+    await this.initWorkers();
+    this.setStatus('idle');
+  }
+
   /** Echo one committed ply for session bookkeeping (Gorisanson replays on search). */
   echoCommittedMove(action, positionKey, historyLength, moveHistory = null) {
     void positionKey;

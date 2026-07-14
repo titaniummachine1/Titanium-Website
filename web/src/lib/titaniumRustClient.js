@@ -95,6 +95,20 @@ export class TitaniumEngineClient {
     this.sessionOp({ op: 'reset' }).catch(() => {});
   }
 
+  /** Abort any search and replay the full position onto the native session. */
+  async recoverFromDesync({ moveHistory, isFreshGame } = {}) {
+    await this.cancelSearch();
+    const history =
+      isFreshGame || !moveHistory?.length
+        ? []
+        : moveHistory.map((action) => toAlgebraic(action));
+    this.appliedPlies = 0;
+    await this.enqueueSync(() =>
+      this.syncMovesToSession(history, { forceFull: true }),
+    );
+    this.setStatus('idle');
+  }
+
   /** Echo one committed ply onto the warm native session (incremental makemove). */
   echoCommittedMove(action, positionKey, historyLength, moveHistory = null) {
     void positionKey;

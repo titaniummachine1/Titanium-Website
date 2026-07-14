@@ -3820,21 +3820,27 @@ export class AppController {
     if (this.session.winner != null || this.session.isDraw) {
       return;
     }
-    const engine = this.getEngineForSeat(seatIndex);
     const positionKey = this.currentPositionKey();
+    const aiSettings =
+      this.settings.playerAiSettings[seatIndex] ??
+      defaultPlayerAiSettings(
+        this.settings.players[seatIndex],
+        this.engineConfigs,
+      );
+    const recoveryCtx = {
+      moveHistory: this.session.actions,
+      gameSnapshot: this.session.getEngineSnapshot(),
+      isFreshGame: this.session.actions.length === 0,
+      positionKey,
+      aiSettings,
+    };
     try {
+      const engine = this.getEngineForSeat(seatIndex);
       if (engine?.recoverFromDesync) {
-        await engine.recoverFromDesync({
-          moveHistory: this.session.actions,
-          gameSnapshot: this.session.getEngineSnapshot(),
-          isFreshGame: this.session.actions.length === 0,
-          positionKey,
-        });
-      } else if (engine?.hardReset) {
-        engine.hardReset();
+        await engine.recoverFromDesync(recoveryCtx);
       }
     } catch (err) {
-      console.warn("Engine resync before retry failed", err);
+      console.warn("Engine restart before retry failed", err);
     }
     if (!this._engineRecoveryActive || this._engineRecoverySeat !== seatIndex) {
       return;

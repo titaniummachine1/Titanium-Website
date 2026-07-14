@@ -160,6 +160,23 @@ export class AceRustWasmEngineClient {
     this.algebraicMoves = [];
   }
 
+  /** Kill the worker and reset move history to the current game position. */
+  async recoverFromDesync({ moveHistory, isFreshGame } = {}) {
+    this.queuedRequest = null;
+    this.pendingRequest = null;
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    this.algebraicMoves =
+      isFreshGame || !moveHistory?.length
+        ? []
+        : moveHistory.map((action) =>
+            typeof action === 'string' ? action : toAlgebraic(action),
+          );
+    this.setStatus('idle');
+  }
+
   makeMoves(actions) {
     for (const action of actions) {
       const alg = toAlgebraic(action);
