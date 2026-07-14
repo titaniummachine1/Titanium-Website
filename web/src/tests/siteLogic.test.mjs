@@ -641,6 +641,35 @@ assertEqual(engineFailureBackoffMs(1), 250, "retry backoff attempt 1");
 assertEqual(engineFailureBackoffMs(3), 1000, "retry backoff attempt 3");
 assertEqual(engineFailureBackoffMs(10), 30_000, "retry backoff capped at 30s");
 
+console.log("\n[eval] placeholder rootScore must not mask depth score");
+import {
+  resolveDisplayScore,
+  mergeThinkSnapshots,
+} from "../lib/searchTelemetry.js";
+
+assertEqual(
+  resolveDisplayScore({
+    rootScore: 0,
+    depthLog: [{ depth: 10, score: 524, nodes: 1000, pv: "g3h" }],
+  }),
+  524,
+  "depth log beats bootstrap rootScore 0",
+);
+const merged = mergeThinkSnapshots(
+  {
+    depthLog: [{ depth: 10, score: 524, nodes: 50000, pv: "g3h" }],
+    rootScore: 524,
+    score: 524,
+    nodes: 50000,
+  },
+  {
+    rootScore: 0,
+    depthLog: [],
+    nodes: 0,
+  },
+);
+assertEqual(merged.rootScore, 524, "incoming bootstrap 0 does not erase prior eval");
+
 console.log("\n════════════════════════════════");
 console.log(
   `TOTAL: ${passed + failed} tests — passed ${passed}, failed ${failed}`,

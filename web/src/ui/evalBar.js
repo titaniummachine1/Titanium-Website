@@ -39,7 +39,7 @@ export function renderEvalBar(container, props) {
       ? formatEngineScore(evalData.rootScore)
       : winRateLabel
         ? winRateLabel
-        : (margin > 0 ? `+${margin}` : String(margin));
+        : (margin > 0 ? `+${margin}` : margin < 0 ? String(margin) : '=');
 
   container.className = 'eval-panel' + (visible ? ' eval-panel--visible' : '');
 

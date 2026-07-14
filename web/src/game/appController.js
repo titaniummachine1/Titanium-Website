@@ -62,10 +62,12 @@ import { createTitaniumLegalityRuntime } from "../lib/titaniumLegalityRuntime.js
 import { validateMoveLegality } from "../lib/validateMoveLegality.js";
 import { isAbortError } from "../lib/engineAbort.js";
 import { formatEngineFailureMessage, engineFailureBackoffMs } from "../lib/engineFailureReport.js";
+import { TITANIUM_MATE_VALUE } from "../lib/engineScore.js";
 import { resolveDisplayNodes } from "../lib/searchNodes.js";
 import {
   mergeThinkSnapshots,
   thinkSnapshotToSearchPayload,
+  resolveDisplayScore,
 } from "../lib/searchTelemetry.js";
 import { getEngineEntryForPlayer } from "../engines/engineRegistry.js";
 import { requestEngineMove } from "../engines/requestEngineMove.js";
@@ -128,18 +130,7 @@ function deepestDepthEntry(depthLog) {
 }
 
 function scoreFromDepthLog(depthLog, rootScore, rootWinRate) {
-  if (Number.isFinite(Number(rootScore))) {
-    return Number(rootScore);
-  }
-  // MCTS win% lives in rootWinRate / card UI — never promote depthLog 0..100 to cp eval.
-  if (rootWinRate != null && Number.isFinite(Number(rootWinRate))) {
-    return null;
-  }
-  const deep = deepestDepthEntry(depthLog);
-  if (deep?.score != null && Number.isFinite(Number(deep.score))) {
-    return deep.score;
-  }
-  return null;
+  return resolveDisplayScore({ depthLog, rootScore, rootWinRate });
 }
 
 function sanitizeSearchPayloadForEngine(payload, playerType, engineConfigs) {
@@ -271,6 +262,67 @@ function pvArrayFromPayload(payload) {
   return [];
 }
 
+function terminalEvalState(snapshot) {
+  if (snapshot.isDraw) {
+    return {
+      p1: 0.5,
+      margin: 0,
+      rootScore: 0,
+      evalKind: "score",
+      playerToMove: snapshot.playerToMove,
+      pv: [],
+      rootMoves: [],
+      source: "terminal",
+    };
+  }
+  if (snapshot.winner === 1) {
+    return {
+      p1: 0.99,
+      margin: 99,
+      rootScore: TITANIUM_MATE_VALUE,
+      evalKind: "score",
+      playerToMove: snapshot.playerToMove,
+      pv: [],
+      rootMoves: [],
+      source: "terminal",
+    };
+  }
+  if (snapshot.winner === 2) {
+    return {
+      p1: 0.01,
+      margin: -99,
+      rootScore: -TITANIUM_MATE_VALUE,
+      evalKind: "score",
+      playerToMove: snapshot.playerToMove,
+      pv: [],
+      rootMoves: [],
+      source: "terminal",
+    };
+  }
+  return null;
+}
+
+function distanceEvalState(snapshot, distanceEval) {
+  let rootScore = null;
+  if (distanceEval.whiteDist === 0) {
+    rootScore = TITANIUM_MATE_VALUE;
+  } else if (distanceEval.blackDist === 0) {
+    rootScore = -TITANIUM_MATE_VALUE;
+  }
+  return {
+    p1: distanceEval.p1,
+    margin: distanceEval.margin,
+    whiteDist: distanceEval.whiteDist,
+    blackDist: distanceEval.blackDist,
+    rootScore,
+    evalKind: rootScore != null ? "score" : "distance",
+    playerToMove: snapshot.playerToMove,
+    pv: [],
+    rootMoves: [],
+    source: "distance",
+  };
+}
+
 function searchPayloadToEvalState(payload, playerToMove) {
   if (!payload) {
     return null;
@@ -279,11 +331,15 @@ function searchPayloadToEvalState(payload, playerToMove) {
     Number.isFinite(payload.whiteDist) && Number.isFinite(payload.blackDist);
   const margin = hasDist ? payload.blackDist - payload.whiteDist : 0;
   const deep = deepestDepthEntry(payload.depthLog);
-  const scoreCandidate = payload.rootScore ?? payload.score ?? deep?.score;
+  const scoreCandidate = resolveDisplayScore({
+    depthLog: payload.depthLog,
+    rootScore: payload.rootScore,
+    score: payload.score,
+    rootWinRate: payload.rootWinRate,
+  });
   const hasScore =
     payload.evalKind === "score" ||
-    (payload.evalKind !== "winrate" &&
-      Number.isFinite(Number(scoreCandidate)));
+    (payload.evalKind !== "winrate" && scoreCandidate != null);
   const hasWinRate =
     !hasScore &&
     (payload.evalKind === "winrate" ||
@@ -812,16 +868,11 @@ export class AppController {
     const livePlayEval = this._liveEngineEvalState(positionKey);
     const latestCompletedPlayEval = this._latestCompletedEngineEvalState();
     const cachedEval = this._cachedEvalState(positionKey);
-    const distanceEvalState = {
-      p1: distanceEval.p1,
-      margin: distanceEval.margin,
-      whiteDist: distanceEval.whiteDist,
-      blackDist: distanceEval.blackDist,
-      playerToMove: snapshot.playerToMove,
-      pv: [],
-      rootMoves: [],
-      source: "distance",
-    };
+    const distanceEvalStateForSnapshot = distanceEvalState(
+      snapshot,
+      distanceEval,
+    );
+    const terminalEval = terminal ? terminalEvalState(snapshot) : null;
     const reviewPendingEvalState = {
       p1: 0.5,
       margin: 0,
@@ -842,15 +893,19 @@ export class AppController {
       source: "play-pending",
       pending: true,
     };
-    const resolvedEval =
-      this.settings.uiMode === "replay"
+    const resolvedEval = terminal
+      ? (terminalEval ??
+          liveAnalysisEval ??
+          cachedEval ??
+          distanceEvalStateForSnapshot)
+      : this.settings.uiMode === "replay"
         ? (cachedEval ?? reviewPendingEvalState)
         : this.settings.uiMode === "play" && this.aiThinking
           ? (livePlayEval ?? playPendingEvalState)
           : (latestCompletedPlayEval ??
             liveAnalysisEval ??
             cachedEval ??
-            distanceEvalState);
+            distanceEvalStateForSnapshot);
 
     return {
       ...snapshot,

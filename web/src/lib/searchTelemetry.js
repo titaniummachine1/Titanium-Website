@@ -7,6 +7,37 @@ function deepestDepthEntry(depthLog) {
   );
 }
 
+function finiteScore(value) {
+  if (value == null || !Number.isFinite(Number(value))) {
+    return null;
+  }
+  return Number(value);
+}
+
+/**
+ * Best centipawn score for UI. Engines often emit rootScore=0 before the first
+ * depth line — never let that mask a real iterative score from depthLog.
+ */
+export function resolveDisplayScore({
+  depthLog,
+  rootScore,
+  score,
+  rootWinRate,
+} = {}) {
+  if (rootWinRate != null && Number.isFinite(Number(rootWinRate))) {
+    return null;
+  }
+  const deepScore = finiteScore(deepestDepthEntry(depthLog)?.score);
+  const root = finiteScore(rootScore);
+  const flat = finiteScore(score);
+  const candidates = [deepScore, root, flat].filter((v) => v != null);
+  const nonZero = candidates.find((v) => v !== 0);
+  if (nonZero != null) {
+    return nonZero;
+  }
+  return candidates[0] ?? null;
+}
+
 /** Whether a think snapshot has anything worth showing on the player card / eval bar. */
 export function thinkSnapHasDisplay(snap) {
   if (!snap) return false;
@@ -39,35 +70,42 @@ export function mergeThinkSnapshots(previous, incoming) {
   const incomingNodes = resolveDisplayNodes(incoming);
   const previousNodes = resolveDisplayNodes(previous);
 
-  const incomingScore =
-    incoming.rootScore ??
-    incoming.score ??
-    inDeep?.score ??
-    null;
-  const hasIncomingScore = Number.isFinite(Number(incomingScore));
+  const mergedDepthLog = incoming.depthLog?.length
+    ? incoming.depthLog
+    : previous.depthLog;
+  const mergedScore =
+    resolveDisplayScore({
+      depthLog: mergedDepthLog,
+      rootScore: incoming.rootScore ?? previous.rootScore,
+      score: incoming.score ?? previous.score,
+    }) ??
+    resolveDisplayScore({
+      depthLog: incoming.depthLog,
+      rootScore: incoming.rootScore,
+      score: incoming.score,
+    }) ??
+    resolveDisplayScore({
+      depthLog: previous.depthLog,
+      rootScore: previous.rootScore,
+      score: previous.score,
+    });
+  const incomingCp = resolveDisplayScore({
+    depthLog: incoming.depthLog,
+    rootScore: incoming.rootScore,
+    score: incoming.score,
+  });
+  const hasIncomingCp = incomingCp != null && incomingCp !== 0;
 
   return {
     ...previous,
     ...incoming,
-    depthLog: incoming.depthLog?.length ? incoming.depthLog : previous.depthLog,
+    depthLog: mergedDepthLog,
     rootMoves: incoming.rootMoves?.length ? incoming.rootMoves : previous.rootMoves,
-    rootWinRate: hasIncomingScore
+    rootWinRate: hasIncomingCp
       ? null
       : (incoming.rootWinRate ?? previous.rootWinRate),
-    score:
-      inDeep?.score ??
-      incoming.score ??
-      incoming.rootScore ??
-      previous.score ??
-      previous.rootScore ??
-      null,
-    rootScore:
-      inDeep?.score ??
-      incoming.rootScore ??
-      incoming.score ??
-      previous.rootScore ??
-      previous.score ??
-      null,
+    score: mergedScore,
+    rootScore: mergedScore,
     depth:
       inDeep?.depth ??
       incoming.depth ??
@@ -99,12 +137,18 @@ export function mergeThinkSnapshots(previous, incoming) {
 /** Build a live-search shaped payload for board hints / eval merge. */
 export function thinkSnapshotToSearchPayload(snap) {
   if (!snap) return null;
+  const resolvedScore = resolveDisplayScore({
+    depthLog: snap.depthLog,
+    rootScore: snap.rootScore,
+    score: snap.score,
+    rootWinRate: snap.rootWinRate,
+  });
   return {
     depthLog: snap.depthLog ?? [],
     rootMoves: snap.rootMoves ?? [],
     rootWinRate: snap.rootWinRate ?? null,
-    rootScore: snap.score ?? snap.rootScore ?? null,
-    score: snap.score ?? snap.rootScore ?? null,
+    rootScore: resolvedScore,
+    score: resolvedScore,
     searchDepth: snap.depth ?? snap.searchDepth ?? null,
     depth: snap.depth ?? snap.searchDepth ?? null,
     pv: snap.pv ?? deepestDepthEntry(snap.depthLog)?.pv ?? "",
