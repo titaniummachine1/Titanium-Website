@@ -320,7 +320,7 @@ function buildGenmoveArgs(moves, options) {
       args.push('--threads', String(threads));
     }
     if (engine === 'titanium-v16') {
-      args.push('--book', 'play');
+      args.push('--book', 'order');
       const bookDb = path.join(
         monorepoRoot,
         'training',

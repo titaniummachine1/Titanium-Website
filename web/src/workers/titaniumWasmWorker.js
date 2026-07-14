@@ -401,8 +401,8 @@ async function handleSearch(eventData) {
     fallbackReason,
     stopReason,
     searchWallMs,
-    stoppedBy: engineMode,
-    mode: engineMode,
+    stoppedBy: stopReason ?? engineMode,
+    mode: stopReason ?? engineMode,
     catLmrCeiling:
       engineMode === 'titanium-v16' || engineMode === 'titanium-v17' ? catLmrCeiling : undefined,
     nodeSource: 'bestmove_final',
