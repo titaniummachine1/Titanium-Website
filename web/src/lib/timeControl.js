@@ -5,24 +5,24 @@
  * Local (Gorisanson): wall-clock + visit-budget sliders.
  */
 
-import { PlayerType, StrengthLevel, TimeToMove } from './engineConfig.js';
-import { aceDisplayName } from './aceTier.js';
+import { PlayerType, StrengthLevel, TimeToMove } from "./engineConfig.js";
+import { aceDisplayName } from "./aceTier.js";
 
 /** Scraped StrengthLevel slider — legacy label, kept for remote UI parity. */
 export const STRENGTH_LEVEL_PRESETS = [
-  { id: StrengthLevel.Beginner, label: 'Beg.' },
-  { id: StrengthLevel.Intermediate, label: 'Inter.' },
-  { id: StrengthLevel.Advanced, label: 'Adv.' },
-  { id: StrengthLevel.Expert, label: 'Expert' },
-  { id: StrengthLevel.Alpha, label: 'Alpha' },
+  { id: StrengthLevel.Beginner, label: "Beg." },
+  { id: StrengthLevel.Intermediate, label: "Inter." },
+  { id: StrengthLevel.Advanced, label: "Adv." },
+  { id: StrengthLevel.Expert, label: "Expert" },
+  { id: StrengthLevel.Alpha, label: "Alpha" },
 ];
 
 /** Scraped timeToMove slider — drives visit count on cloud engines. */
 export const TIME_TO_MOVE_PRESETS = [
-  { id: TimeToMove.Intuition, label: 'Immediate' },
-  { id: TimeToMove.Short, label: 'Short' },
-  { id: TimeToMove.Medium, label: 'Medium' },
-  { id: TimeToMove.Long, label: 'Long' },
+  { id: TimeToMove.Intuition, label: "Immediate" },
+  { id: TimeToMove.Short, label: "Short" },
+  { id: TimeToMove.Medium, label: "Medium" },
+  { id: TimeToMove.Long, label: "Long" },
 ];
 
 export const WALL_CLOCK_RANGE = {
@@ -33,30 +33,58 @@ export const WALL_CLOCK_RANGE = {
   defaultSeconds: 60,
 };
 
+/** Baseline whole-game move horizon for clock spreading (per side). */
+export const WHOLE_GAME_PLAN_MOVES = 30;
+
+/**
+ * Remaining own-move horizon for budget math.
+ * Floor: (30 − plies already played). Raised when the minimum remaining plies
+ * (PV length + leaf min race when main line is known, else engine/board race)
+ * says the game still has more plies to play.
+ */
+export function resolveExpectedMovesLeft({
+  ownMovesPlayed = 0,
+  distanceToWin = null,
+} = {}) {
+  const played = Math.max(0, Number(ownMovesPlayed) || 0);
+  const planTail = Math.max(1, WHOLE_GAME_PLAN_MOVES - played);
+  const dist = Number(distanceToWin);
+  const distFloor = Number.isFinite(dist) && dist > 0 ? Math.ceil(dist) : 0;
+  return Math.max(planTail, distFloor, 1);
+}
+
 /**
  * Allocate one timed engine search from a whole-game clock.
  *
  * The engine receives less than the displayed remaining clock so worker
  * messaging and deadline cleanup cannot flag an otherwise completed move.
- * As the clock gets low, preserve at least eight plausible moves instead of
- * spending a quarter of the clock on each of the final four turns.
+ * Spread uses {@link resolveExpectedMovesLeft}: 30-move baseline, bumped by
+ * PV length + leaf race (or engine/board race) when the position needs more.
  */
-export function allocateWholeGameTime({ totalMs, usedMs, ownMovesPlayed }) {
+export function allocateWholeGameTime({
+  totalMs,
+  usedMs,
+  ownMovesPlayed,
+  distanceToWin = null,
+}) {
   const total = Math.max(250, Number(totalMs) || 0);
   const used = Math.max(0, Number(usedMs) || 0);
   const remainingMs = Math.max(0, total - used);
-  const expectedMovesLeft = Math.max(8, 24 - Math.max(0, Number(ownMovesPlayed) || 0));
+  const expectedMovesLeft = resolveExpectedMovesLeft({
+    ownMovesPlayed,
+    distanceToWin,
+  });
   const remainingFraction = remainingMs / total;
-  const spendFactor = remainingFraction <= 0.1 ? 0.75 : remainingFraction <= 0.25 ? 1 : 1.35;
+  const spendFactor =
+    remainingFraction <= 0.1 ? 0.75 : remainingFraction <= 0.25 ? 1 : 1.35;
   const shareCap = remainingFraction <= 0.1 ? 0.1 : 0.2;
   const grossBudgetMs = Math.min(
     remainingMs * shareCap,
     (remainingMs / expectedMovesLeft) * spendFactor,
   );
   const handoffReserveMs = Math.min(300, Math.max(50, grossBudgetMs * 0.05));
-  const moveBudgetMs = remainingMs > 0
-    ? Math.max(1, grossBudgetMs - handoffReserveMs)
-    : 0;
+  const moveBudgetMs =
+    remainingMs > 0 ? Math.max(1, grossBudgetMs - handoffReserveMs) : 0;
 
   return {
     totalMs: total,
@@ -67,17 +95,78 @@ export function allocateWholeGameTime({ totalMs, usedMs, ownMovesPlayed }) {
   };
 }
 
+/**
+ * Mid-think refresh: never grant more search time than the opening budget, but
+ * tighten when a deeper PV/dist says the game will run longer.
+ */
+export function tightenThinkAllocation(
+  previousBudgetMs,
+  { moveBudgetMs, handoffReserveMs, ...rest } = {},
+) {
+  const prev = Math.max(0, Number(previousBudgetMs) || 0);
+  const next = Math.max(0, Number(moveBudgetMs) || 0);
+  const tightened =
+    prev > 0 && next > 0 ? Math.min(prev, next) : prev > 0 ? prev : next;
+  const handoff = Math.max(0, Number(handoffReserveMs) || 0);
+  return {
+    ...rest,
+    moveBudgetMs: tightened,
+    handoffReserveMs: handoff,
+  };
+}
+
+/**
+ * Wall time to deduct from a whole-game bank after a think completes.
+ * Per-move budgets cap WASM movetime only — never under-charge the bank.
+ */
+export function chargeThinkMsForSeat({
+  wallThinkMs,
+  moveBudgetMs = 0,
+  handoffMs = 0,
+  usesWholeGameClock = false,
+} = {}) {
+  if (wallThinkMs == null || !Number.isFinite(Number(wallThinkMs))) {
+    return null;
+  }
+  const wall = Math.max(0, Math.round(Number(wallThinkMs)));
+  const budget = Math.max(0, Math.round(Number(moveBudgetMs) || 0));
+  const handoff = Math.max(0, Math.round(Number(handoffMs) || 0));
+  if (usesWholeGameClock) {
+    return wall;
+  }
+  if (budget > 0) {
+    return Math.min(wall, budget + handoff);
+  }
+  return wall;
+}
+
 export function wallClockFromSlider(position) {
-  const t = Math.max(0, Math.min(1, Number(position) / WALL_CLOCK_RANGE.sliderSteps));
-  const raw = WALL_CLOCK_RANGE.min * Math.pow(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min, t);
-  const quantum = raw < 1 ? 0.01 : raw < 10 ? 0.1 : raw < 60 ? 0.5 : raw < 180 ? 1 : 5;
-  return Math.max(WALL_CLOCK_RANGE.min, Math.min(WALL_CLOCK_RANGE.max, Math.round(raw / quantum) * quantum));
+  const t = Math.max(
+    0,
+    Math.min(1, Number(position) / WALL_CLOCK_RANGE.sliderSteps),
+  );
+  const raw =
+    WALL_CLOCK_RANGE.min *
+    Math.pow(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min, t);
+  const quantum =
+    raw < 1 ? 0.01 : raw < 10 ? 0.1 : raw < 60 ? 0.5 : raw < 180 ? 1 : 5;
+  return Math.max(
+    WALL_CLOCK_RANGE.min,
+    Math.min(WALL_CLOCK_RANGE.max, Math.round(raw / quantum) * quantum),
+  );
 }
 
 export function wallClockSliderPosition(seconds) {
-  const value = Math.max(WALL_CLOCK_RANGE.min, Math.min(WALL_CLOCK_RANGE.max, Number(seconds) || WALL_CLOCK_RANGE.defaultSeconds));
+  const value = Math.max(
+    WALL_CLOCK_RANGE.min,
+    Math.min(
+      WALL_CLOCK_RANGE.max,
+      Number(seconds) || WALL_CLOCK_RANGE.defaultSeconds,
+    ),
+  );
   return Math.round(
-    (Math.log(value / WALL_CLOCK_RANGE.min) / Math.log(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min)) *
+    (Math.log(value / WALL_CLOCK_RANGE.min) /
+      Math.log(WALL_CLOCK_RANGE.max / WALL_CLOCK_RANGE.min)) *
       WALL_CLOCK_RANGE.sliderSteps,
   );
 }
@@ -90,8 +179,11 @@ export const DEFAULT_THREAD_COUNT = 8;
 
 /** Max threads in the UI — machine logical CPUs, capped at 8; 8 if unknown. */
 export function threadsSliderMax() {
-  if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0) {
-    return Math.max(1, Math.min(navigator.hardwareConcurrency, THREADS_HARD_MAX));
+  if (typeof navigator !== "undefined" && navigator.hardwareConcurrency > 0) {
+    return Math.max(
+      1,
+      Math.min(navigator.hardwareConcurrency, THREADS_HARD_MAX),
+    );
   }
   return THREADS_HARD_MAX;
 }
@@ -111,8 +203,11 @@ export function defaultThreadCount() {
 export const ANALYSIS_THREADS_SAFETY_CAP = 32;
 
 export function analysisThreadsMax() {
-  if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0) {
-    return Math.max(1, Math.min(navigator.hardwareConcurrency, ANALYSIS_THREADS_SAFETY_CAP));
+  if (typeof navigator !== "undefined" && navigator.hardwareConcurrency > 0) {
+    return Math.max(
+      1,
+      Math.min(navigator.hardwareConcurrency, ANALYSIS_THREADS_SAFETY_CAP),
+    );
   }
   return THREADS_HARD_MAX;
 }
@@ -167,28 +262,32 @@ export function resolveCores(aiSettings) {
 }
 
 /** Titanium difficulty tiers (NNUE weight sets). */
-export const TITANIUM_NET_EASY = 'easy';
-export const TITANIUM_NET_MEDIUM = 'medium';
-export const TITANIUM_NET_HARD = 'hard';
+export const TITANIUM_NET_EASY = "easy";
+export const TITANIUM_NET_MEDIUM = "medium";
+export const TITANIUM_NET_HARD = "hard";
 
 /** @deprecated Use TITANIUM_NET_* — kept for saved-prefs migration. */
 export const TITANIUM_NET_LIVE = TITANIUM_NET_MEDIUM;
 export const TITANIUM_NET_FROZEN = TITANIUM_NET_EASY;
 
 export function migrateTitaniumNet(net) {
-  if (net === 'frozen' || net === TITANIUM_NET_EASY) return TITANIUM_NET_EASY;
-  if (net === 'live' || net === TITANIUM_NET_MEDIUM) return TITANIUM_NET_MEDIUM;
-  if (net === 'hard' || net === TITANIUM_NET_HARD) return TITANIUM_NET_HARD;
+  if (net === "frozen" || net === TITANIUM_NET_EASY) return TITANIUM_NET_EASY;
+  if (net === "live" || net === TITANIUM_NET_MEDIUM) return TITANIUM_NET_MEDIUM;
+  if (net === "hard" || net === TITANIUM_NET_HARD) return TITANIUM_NET_HARD;
   return TITANIUM_NET_HARD;
 }
 
-export function resolveTitaniumEngineMode(aiSettings, playerType, engineConfigs) {
+export function resolveTitaniumEngineMode(
+  aiSettings,
+  playerType,
+  engineConfigs,
+) {
   void aiSettings;
   void engineConfigs;
   if (playerType === PlayerType.TitaniumV17) {
-    return 'titanium-v17';
+    return "titanium-v17";
   }
-  return 'titanium-v16';
+  return "titanium-v16";
 }
 
 /** v16 CAT LMR ceiling (cm) from Easy/Medium/Hard difficulty. */
@@ -205,9 +304,9 @@ export function catLmrCeilingLabel(aiSettings) {
 
 export function titaniumNetLabel(aiSettings) {
   const net = migrateTitaniumNet(aiSettings?.titaniumNet ?? TITANIUM_NET_HARD);
-  if (net === TITANIUM_NET_EASY) return 'Easy';
-  if (net === TITANIUM_NET_MEDIUM) return 'Medium';
-  return 'Hard';
+  if (net === TITANIUM_NET_EASY) return "Easy";
+  if (net === TITANIUM_NET_MEDIUM) return "Medium";
+  return "Hard";
 }
 
 /** Default think budget for legacy Quoridor v3 client (removed from UI, kept for imports). */
@@ -248,7 +347,9 @@ export function clampVisits(visits) {
 
 /** Node budget for workers — 0 means unlimited (time-only). */
 export function resolveMaxNodes(visitsBudget) {
-  return isUnlimitedVisits(visitsBudget) ? UNLIMITED_VISITS : clampVisits(visitsBudget);
+  return isUnlimitedVisits(visitsBudget)
+    ? UNLIMITED_VISITS
+    : clampVisits(visitsBudget);
 }
 
 /** Map slider position (0 … sliderSteps) → visit count. */
@@ -284,11 +385,11 @@ export function normalizePlayerType(playerType) {
     return PlayerType.AceV13;
   }
   if (
-    playerType === 'titanium' ||
-    playerType === 'titanium-minimax' ||
-    playerType === 'titanium-v15-frozen'
+    playerType === "titanium" ||
+    playerType === "titanium-minimax" ||
+    playerType === "titanium-v15-frozen"
   ) {
-    return PlayerType.TitaniumV16;
+    return PlayerType.TitaniumV17;
   }
   // Retired ACE/Quoridor variants migrate to the current Titanium line.
   if (
@@ -299,7 +400,7 @@ export function normalizePlayerType(playerType) {
     playerType === PlayerType.QuoridorV3 ||
     playerType === PlayerType.AceV10
   ) {
-    return PlayerType.TitaniumV16;
+    return PlayerType.TitaniumV17;
   }
   return playerType;
 }
@@ -308,7 +409,7 @@ export function isAceV8Family(playerType, engineConfigs) {
   const normalized = normalizePlayerType(playerType);
   return (
     normalized === PlayerType.AceV8 ||
-    getEngineConfig(normalized, engineConfigs)?.kind === 'ace-v8-family'
+    getEngineConfig(normalized, engineConfigs)?.kind === "ace-v8-family"
   );
 }
 
@@ -316,7 +417,7 @@ export function isAceV10Family(playerType, engineConfigs) {
   const normalized = normalizePlayerType(playerType);
   return (
     normalized === PlayerType.AceV10 ||
-    getEngineConfig(normalized, engineConfigs)?.kind === 'ace-v10-family'
+    getEngineConfig(normalized, engineConfigs)?.kind === "ace-v10-family"
   );
 }
 
@@ -324,16 +425,42 @@ export function isAceV13Family(playerType, engineConfigs) {
   const normalized = normalizePlayerType(playerType);
   return (
     normalized === PlayerType.AceV13 ||
-    getEngineConfig(normalized, engineConfigs)?.kind === 'ace-v13-family'
+    getEngineConfig(normalized, engineConfigs)?.kind === "ace-v13-family"
   );
+}
+
+export function isGorisansonEngine(playerType, engineConfigs) {
+  return (
+    playerType === PlayerType.GorisansonMCTS ||
+    getEngineConfig(playerType, engineConfigs)?.kind === "local"
+  ) && playerType === PlayerType.GorisansonMCTS;
 }
 
 /** Engines with a reliable wall-clock stop and a search-start notification. */
 export function supportsWholeGameTime(playerType, engineConfigs) {
   return (
     isTitaniumEngine(playerType, engineConfigs) ||
-    isAceV13Family(playerType, engineConfigs)
+    isAceV13Family(playerType, engineConfigs) ||
+    isGorisansonEngine(playerType, engineConfigs)
   );
+}
+
+/** Seat shows a running clock in play (human bank/per-move or engine whole-game). */
+export function hasSeatClock(playerType, engineConfigs, aiSettings) {
+  if (playerType === PlayerType.Human) {
+    return aiSettings != null && Number(aiSettings.wallClockSeconds) > 0;
+  }
+  return (
+    supportsWholeGameTime(playerType, engineConfigs) &&
+    aiSettings?.wholeGameTime !== false
+  );
+}
+
+export function defaultHumanClockSettings() {
+  return {
+    wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
+    wholeGameTime: true,
+  };
 }
 
 export function isAceFamily(playerType, engineConfigs) {
@@ -356,45 +483,48 @@ export function getEngineConfig(playerType, engineConfigs) {
 export function isZeroInkEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.ZeroInk ||
-    getEngineConfig(playerType, engineConfigs)?.kind === 'zeroink'
+    getEngineConfig(playerType, engineConfigs)?.kind === "zeroink"
   );
 }
 
 export function isRemoteEngine(playerType, engineConfigs) {
   const kind = getEngineConfig(playerType, engineConfigs)?.kind;
   // zero.ink is remote but uses time presets only (no Beg→Alpha strength slider).
-  return kind === 'remote' || kind === 'zeroink';
+  return kind === "remote" || kind === "zeroink";
 }
 
 /** Ka / Ishtar cloud engines — strength + thinking mode. */
 export function isCloudRemoteEngine(playerType, engineConfigs) {
-  return isRemoteEngine(playerType, engineConfigs) && !isZeroInkEngine(playerType, engineConfigs);
+  return (
+    isRemoteEngine(playerType, engineConfigs) &&
+    !isZeroInkEngine(playerType, engineConfigs)
+  );
 }
 
 export function isLocalEngine(playerType, engineConfigs) {
   const kind = getEngineConfig(playerType, engineConfigs)?.kind;
-  return kind === 'local' || kind === 'quoridor-v3';
+  return kind === "local" || kind === "quoridor-v3";
 }
 
 export function isTitaniumEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.TitaniumV16 ||
     playerType === PlayerType.TitaniumV17 ||
-    getEngineConfig(playerType, engineConfigs)?.kind === 'titanium'
+    getEngineConfig(playerType, engineConfigs)?.kind === "titanium"
   );
 }
 
 export function isQuoridorV3Engine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.QuoridorV3 ||
-    getEngineConfig(playerType, engineConfigs)?.kind === 'quoridor-v3'
+    getEngineConfig(playerType, engineConfigs)?.kind === "quoridor-v3"
   );
 }
 
 export function isAceV8JsEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.AceV8Js ||
-    getEngineConfig(playerType, engineConfigs)?.kind === 'ace-v8-js'
+    getEngineConfig(playerType, engineConfigs)?.kind === "ace-v8-js"
   );
 }
 
@@ -408,12 +538,12 @@ export const isAceV7Engine = isAceEngine;
 export function isLocalMctsEngine(playerType, engineConfigs) {
   const kind = getEngineConfig(playerType, engineConfigs)?.kind;
   return (
-    kind === 'local' ||
-    kind === 'titanium' ||
-    kind === 'quoridor-v3' ||
-    kind === 'ace-v8-family' ||
-    kind === 'ace-v10-family' ||
-    kind === 'ace-v13-family'
+    kind === "local" ||
+    kind === "titanium" ||
+    kind === "quoridor-v3" ||
+    kind === "ace-v8-family" ||
+    kind === "ace-v10-family" ||
+    kind === "ace-v13-family"
   );
 }
 
@@ -429,13 +559,16 @@ export function formatMaxDepth(depth) {
 
 /** Higher UCT = more exploration — weaker play (mirrors strength tiers). */
 export function uctFromStrengthLevel(strengthLevel) {
-  const level = Math.min(4, Math.max(0, Number(strengthLevel ?? StrengthLevel.Alpha)));
+  const level = Math.min(
+    4,
+    Math.max(0, Number(strengthLevel ?? StrengthLevel.Alpha)),
+  );
   return [0.55, 0.45, 0.35, 0.28, 0.2][level];
 }
 
 export function defaultPlayerAiSettings(playerType, engineConfigs) {
   if (playerType === PlayerType.Human) {
-    return null;
+    return defaultHumanClockSettings();
   }
   if (isTitaniumEngine(playerType, engineConfigs)) {
     return {
@@ -449,7 +582,9 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
   if (isQuoridorV3Engine(playerType, engineConfigs)) {
     return {
       wallClockSeconds: QUORIDOR_V3_WALL_CLOCK_DEFAULT,
-      visitsBudget: visitsFromSliderPosition(Math.round(LOCAL_VISITS_RANGE.sliderSteps * 0.45)),
+      visitsBudget: visitsFromSliderPosition(
+        Math.round(LOCAL_VISITS_RANGE.sliderSteps * 0.45),
+      ),
     };
   }
   if (isAceFamily(playerType, engineConfigs)) {
@@ -457,6 +592,13 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
       strengthLevel: 0,
       wallClockSeconds: ACE_WALL_CLOCK_DEFAULT,
       wholeGameTime: isAceV13Family(playerType, engineConfigs),
+    };
+  }
+  if (isGorisansonEngine(playerType, engineConfigs)) {
+    return {
+      wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
+      wholeGameTime: true,
+      visitsBudget: LOCAL_VISITS_RANGE.default,
     };
   }
   if (isLocalEngine(playerType, engineConfigs)) {
@@ -489,11 +631,13 @@ export function formatWallClock(seconds) {
 export function formatVisits(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) {
-    return '?';
+    return "?";
   }
   if (v >= 1_000_000_000) {
     const billions = v / 1_000_000_000;
-    return billions >= 10 ? `${Math.round(billions)}B` : `${billions.toFixed(1)}B`;
+    return billions >= 10
+      ? `${Math.round(billions)}B`
+      : `${billions.toFixed(1)}B`;
   }
   if (v >= 1_000_000) {
     return `${(v / 1_000_000).toFixed(1)}M`;
@@ -506,43 +650,59 @@ export function formatVisits(n) {
 
 export function formatVisitsCap(n) {
   if (isUnlimitedVisits(n)) {
-    return 'unlimited';
+    return "unlimited";
   }
   return `≤${formatVisits(clampVisits(n))}`;
 }
 
 function strengthLevelLabel(level) {
-  return STRENGTH_LEVEL_PRESETS.find((preset) => preset.id === level)?.label ?? 'Alpha';
+  return (
+    STRENGTH_LEVEL_PRESETS.find((preset) => preset.id === level)?.label ??
+    "Alpha"
+  );
 }
 
 function timeToMoveLabel(timeMode) {
-  return TIME_TO_MOVE_PRESETS.find((preset) => preset.id === timeMode)?.label ?? 'Short';
+  return (
+    TIME_TO_MOVE_PRESETS.find((preset) => preset.id === timeMode)?.label ??
+    "Short"
+  );
 }
 
-export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) {
+export function describePlayerAiSettings(
+  playerType,
+  aiSettings,
+  engineConfigs,
+) {
   if (playerType === PlayerType.Human || !aiSettings) {
-    return '';
+    return "";
   }
   const config = getEngineConfig(playerType, engineConfigs);
   if (!config) {
-    return '';
+    return "";
   }
 
   if (isLocalMctsEngine(playerType, engineConfigs)) {
-    const time = formatWallClock(aiSettings.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds);
-    const cap = formatVisitsCap(aiSettings.visitsBudget ?? LOCAL_VISITS_RANGE.default);
+    const time = formatWallClock(
+      aiSettings.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds,
+    );
+    const cap = formatVisitsCap(
+      aiSettings.visitsBudget ?? LOCAL_VISITS_RANGE.default,
+    );
     if (isTitaniumEngine(playerType, engineConfigs)) {
       const tier =
         playerType === PlayerType.TitaniumV16
           ? catLmrCeilingLabel(aiSettings)
           : `${titaniumNetLabel(aiSettings)} NNUE`;
-      const budgetLabel = 'nodes';
+      const budgetLabel = "nodes";
       const cores = resolveCores(aiSettings);
-      const threads = cores > 1 ? ` · ${cores} threads` : '';
+      const threads = cores > 1 ? ` · ${cores} threads` : "";
       return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${tier}${threads}`;
     }
     if (isQuoridorV3Engine(playerType, engineConfigs)) {
-      const depthCap = formatMaxDepth(maxDepthFromVisitsBudget(aiSettings.visitsBudget));
+      const depthCap = formatMaxDepth(
+        maxDepthFromVisitsBudget(aiSettings.visitsBudget),
+      );
       return `${config.name}: ${time} · ${depthCap}`;
     }
     if (isAceFamily(playerType, engineConfigs)) {
@@ -562,7 +722,9 @@ export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) 
     const timeMode = aiSettings.timeToMove ?? TimeToMove.Short;
     const visits = config.visits[timeMode];
     const parallelism = config.settings?.parallelism?.[timeMode];
-    const strength = strengthLevelLabel(aiSettings.strengthLevel ?? StrengthLevel.Alpha);
+    const strength = strengthLevelLabel(
+      aiSettings.strengthLevel ?? StrengthLevel.Alpha,
+    );
     const time = timeToMoveLabel(timeMode);
     let text = `${config.name}: ${strength} · ${time} (~${visits.toLocaleString()} visits)`;
     if (parallelism) {
@@ -574,11 +736,19 @@ export function describePlayerAiSettings(playerType, aiSettings, engineConfigs) 
   return config.name;
 }
 
-export function describeAiSettingsForPlayers(players, playerAiSettings, engineConfigs) {
+export function describeAiSettingsForPlayers(
+  players,
+  playerAiSettings,
+  engineConfigs,
+) {
   const lines = players
     .map((playerType, index) =>
-      describePlayerAiSettings(playerType, playerAiSettings[index], engineConfigs),
+      describePlayerAiSettings(
+        playerType,
+        playerAiSettings[index],
+        engineConfigs,
+      ),
     )
     .filter(Boolean);
-  return lines.length ? lines.join(' · ') : 'No AI selected.';
+  return lines.length ? lines.join(" · ") : "No AI selected.";
 }

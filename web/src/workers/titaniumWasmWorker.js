@@ -23,6 +23,10 @@ let threadPoolWorkers = 0;
  * @type {Map<string, import('../wasm/titanium/titanium.js').WasmEngine>}
  */
 const engines = new Map();
+/** Moves already applied on the warm WASM engine (incremental session path). */
+const appliedHistory = [];
+/** Bumped to drop in-flight worker searches without tearing down WASM. */
+let activeSearchToken = 0;
 
 function canUseThreads() {
   return (
@@ -60,13 +64,13 @@ function tierForEngineMode(engineMode, catLmrCeiling) {
 }
 
 function engineCacheKey(engineMode, catLmrCeiling) {
-  if (engineMode === 'titanium-v16') {
+  if (engineMode === 'titanium-v16' || engineMode === 'titanium-v17') {
     return `${engineMode}@${catLmrCeiling ?? 800}`;
   }
   return engineMode;
 }
 
-function ensureEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) {
+function ensureEngineInstance(engineMode = 'titanium-v17', catLmrCeiling = 800) {
   const key = engineCacheKey(engineMode, catLmrCeiling);
   if (engines.has(key)) {
     return engines.get(key);
@@ -77,6 +81,7 @@ function ensureEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) 
     if (staleKey !== key) {
       engine.free?.();
       engines.delete(staleKey);
+      appliedHistory.length = 0;
     }
   }
   const tier = tierForEngineMode(engineMode, catLmrCeiling);
@@ -88,11 +93,12 @@ function ensureEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) 
   return engine;
 }
 
-function replaceEngineInstance(engineMode = 'titanium-v16', catLmrCeiling = 800) {
+function replaceEngineInstance(engineMode = 'titanium-v17', catLmrCeiling = 800) {
   const key = engineCacheKey(engineMode, catLmrCeiling);
   const stale = engines.get(key);
   stale?.free?.();
   engines.delete(key);
+  appliedHistory.length = 0;
   return ensureEngineInstance(engineMode, catLmrCeiling);
 }
 
@@ -128,7 +134,7 @@ async function ensureInit() {
   await initPromise;
 }
 
-async function ensureEngine(engineMode = 'titanium-v16', catLmrCeiling = 800, threads = 1) {
+async function ensureEngine(engineMode = 'titanium-v17', catLmrCeiling = 800, threads = 1) {
   await ensureInit();
   const engine = ensureEngineInstance(engineMode, catLmrCeiling);
   await ensureThreadPool(threads);
@@ -179,7 +185,64 @@ async function handleInit(engineMode, catLmrCeiling, threads = 1) {
   });
 }
 
+function syncEnginePosition(wasm, history, isFreshGame) {
+  const moves = history ?? [];
+  if (isFreshGame || moves.length === 0) {
+    wasm.reset();
+    appliedHistory.length = 0;
+    for (const mv of moves) {
+      if (!wasm.make_move(mv)) {
+        throw new Error(`WASM make_move failed after reset: ${mv}`);
+      }
+      appliedHistory.push(mv);
+    }
+    return;
+  }
+
+  let common = 0;
+  while (
+    common < appliedHistory.length &&
+    common < moves.length &&
+    appliedHistory[common] === moves[common]
+  ) {
+    common += 1;
+  }
+
+  if (common < appliedHistory.length) {
+    wasm.position(moves.join(' '));
+    appliedHistory.length = 0;
+    appliedHistory.push(...moves);
+    return;
+  }
+
+  for (let i = common; i < moves.length; i++) {
+    const mv = moves[i];
+    if (!wasm.make_move(mv)) {
+      wasm.position(moves.join(' '));
+      appliedHistory.length = 0;
+      appliedHistory.push(...moves);
+      return;
+    }
+    appliedHistory.push(mv);
+  }
+}
+
+async function handleSync(eventData) {
+  const {
+    algebraicMoves,
+    engineMode = 'titanium-v17',
+    catLmrCeiling = 800,
+    threads = 1,
+  } = eventData;
+  const canThread = canUseThreads();
+  const effectiveThreads = canThread ? Math.max(1, threads) : 1;
+  const wasm = await ensureEngine(engineMode, catLmrCeiling, effectiveThreads);
+  syncEnginePosition(wasm, algebraicMoves ?? [], false);
+}
+
 async function handleSearch(eventData) {
+  const searchToken = ++activeSearchToken;
+  const isStale = () => searchToken !== activeSearchToken;
   const {
     seq,
     algebraicMoves,
@@ -187,7 +250,7 @@ async function handleSearch(eventData) {
     maxNodes,
     maxDepth,
     isFreshGame,
-    engineMode = 'titanium-v16',
+    engineMode = 'titanium-v17',
     catLmrCeiling = 800,
     threads = 1,
     streamProgress = true,
@@ -199,14 +262,14 @@ async function handleSearch(eventData) {
   let effectiveThreads = canThread ? Math.max(1, threads) : 1;
   let fallbackReason = threadFallbackReason(threads);
   let wasm = await ensureEngine(engineMode, catLmrCeiling, effectiveThreads);
-  if (isFreshGame) {
-    wasm.reset();
+  if (isStale()) {
+    return;
   }
   const history = algebraicMoves ?? [];
-  if (history.length > 0) {
-    wasm.position(history.join(' '));
-  } else if (isFreshGame) {
-    wasm.reset();
+  syncEnginePosition(wasm, history, Boolean(isFreshGame));
+
+  if (isStale()) {
+    return;
   }
 
   let lastProgress = null;
@@ -266,6 +329,9 @@ async function handleSearch(eventData) {
   }
 
   self.postMessage({ type: 'search-started', seq });
+  if (isStale()) {
+    return;
+  }
   const searchT0 = performance.now();
   let searchResult;
   const helperStartsBefore =
@@ -284,11 +350,7 @@ async function handleSearch(eventData) {
       throw firstErr;
     }
     wasm = replaceEngineInstance(engineMode, catLmrCeiling);
-    if (isFreshGame) {
-      wasm.reset();
-    } else if (history.length > 0) {
-      wasm.position(history.join(' '));
-    }
+    syncEnginePosition(wasm, history, Boolean(isFreshGame));
     effectiveThreads = 1;
     fallbackReason = `threaded search retry: ${msg}`;
     searchResult = runSearch(wasm, 1);
@@ -299,6 +361,10 @@ async function handleSearch(eventData) {
     typeof titaniumWasm.helper_starts === 'function' ? titaniumWasm.helper_starts() : 0;
   const helperStarts =
     helperStartsTotal >= helperStartsBefore ? helperStartsTotal - helperStartsBefore : helperStartsTotal;
+
+  if (isStale()) {
+    return;
+  }
 
   if (!best || best === '(none)') {
     self.postMessage({
@@ -337,7 +403,8 @@ async function handleSearch(eventData) {
     searchWallMs,
     stoppedBy: engineMode,
     mode: engineMode,
-    catLmrCeiling: engineMode === 'titanium-v16' ? catLmrCeiling : undefined,
+    catLmrCeiling:
+      engineMode === 'titanium-v16' || engineMode === 'titanium-v17' ? catLmrCeiling : undefined,
     nodeSource: 'bestmove_final',
     totalNodes: lastProgress?.totalNodes,
     totalNodesAcrossWorkers: lastProgress?.totalNodesAcrossWorkers,
@@ -357,11 +424,19 @@ async function handleSearch(eventData) {
 
 self.onmessage = async (event) => {
   const data = event.data ?? {};
-  const engineMode = data.engineMode ?? 'titanium-v16';
+  const engineMode = data.engineMode ?? 'titanium-v17';
   const catLmrCeiling = data.catLmrCeiling ?? 800;
   try {
     if (data.op === 'init') {
       await handleInit(engineMode, catLmrCeiling, data.threads ?? 1);
+      return;
+    }
+    if (data.op === 'cancel') {
+      activeSearchToken += 1;
+      return;
+    }
+    if (data.op === 'sync') {
+      await handleSync(data);
       return;
     }
     await handleSearch(data);

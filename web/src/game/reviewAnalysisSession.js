@@ -151,7 +151,7 @@ export class ReviewAnalysisSession {
       .map((p) => p.index);
     this._workerCount = clampWorkerCount(settings?.cores, this._queue.length || total);
     this.clients = Array.from({ length: this._workerCount }, () =>
-      new TitaniumWasmEngineClient({ engineMode: 'titanium-v16', cores: 1 }),
+      new TitaniumWasmEngineClient({ engineMode: 'titanium-v17', cores: 1 }),
     );
     this.status = this._queue.length ? 'running' : 'complete';
     this.paused = false;

@@ -1,8 +1,7 @@
 /**
  * Compact player card — read-only during play.
  *
- * Shows: pawn icon, engine config summary, turn/thinking status,
- * live telemetry (score, depth, nodes, PV), and Play now when safe.
+ * Shows: pawn + color label, engine name, clock, live telemetry, Play now.
  *
  * Interactive engine settings live only in the unified player dialog.
  */
@@ -89,6 +88,38 @@ function formatNodesLine(snap) {
   return `${snap?.estimatedTotalNodes ? 'n~' : 'n'}${formatNodes(n)}`;
 }
 
+function formatTelemetryNodes(view) {
+  if (view.nodesLine) {
+    return view.nodesLine;
+  }
+  if (view.nodes > 0) {
+    return `n${formatNodes(view.nodes)}`;
+  }
+  return '';
+}
+
+function buildTelemetryHtml(view) {
+  const nodes = formatTelemetryNodes(view);
+  const hasEval = Boolean(view.scoreDisplay);
+  const hasDepth = view.depth != null;
+  if (!nodes && !hasEval && !hasDepth && view.thinkMs == null) {
+    return '';
+  }
+  const depthHtml = hasDepth
+    ? `<span class="player-card__telemetry-depth" title="Search depth">d${view.depth}</span>`
+    : '';
+  const evalHtml = hasEval
+    ? `<span class="player-card__telemetry-eval${view.isMate ? ' player-card__telemetry-eval--mate' : ''}">${escHtml(view.scoreDisplay)}</span>`
+    : '';
+  const nodesHtml = nodes
+    ? `<span class="player-card__telemetry-nodes">${escHtml(nodes)}</span>`
+    : '<span class="player-card__telemetry-nodes player-card__telemetry-nodes--empty"></span>';
+  const timeHtml = view.thinkMs != null
+    ? `<span class="player-card__telemetry-time">${escHtml(formatMs(view.thinkMs))}</span>`
+    : '';
+  return `${nodesHtml}${evalHtml}${depthHtml}${timeHtml}`;
+}
+
 function resolveDepth(snap) {
   if (!snap) return null;
   const deep = deepestEntry(snap.depthLog);
@@ -111,19 +142,6 @@ function formatTimeSummary(seconds) {
     return formatted.replace(/s$/, ' s');
   }
   return formatted;
-}
-
-/** Compact read-only config line for the card, e.g. "Ka · Alpha · Long". */
-function threadRuntimeSummary(snap) {
-  const requested = Number(snap?.requestedThreads);
-  const effective = Number(snap?.effectiveThreads);
-  if (!Number.isFinite(requested) || !Number.isFinite(effective) || effective < 1) {
-    return null;
-  }
-  if (requested > effective) {
-    return `${effective} thread${effective === 1 ? '' : 's'} fallback`;
-  }
-  return `${effective} thread${effective === 1 ? '' : 's'}`;
 }
 
 export function compactPlayerConfigSummary(ui, snap = null) {
@@ -154,13 +172,7 @@ export function compactPlayerConfigSummary(ui, snap = null) {
   }
 
   if (ui.isTitanium) {
-    const runtimeThreads = threadRuntimeSummary(snap);
-    const threads = runtimeThreads
-      ? ` · ${runtimeThreads}`
-      : ui.isTitanium && ui.cores > 1
-        ? ` · ${ui.cores} threads`
-        : '';
-    return `${engine}${threads}`;
+    return engine;
   }
 
   return `${engine} · ${formatTimeSummary(ui.wallClockSeconds)}`;
@@ -187,11 +199,12 @@ function shortEngineName(playerType) {
  * Reuses one DOM node across card re-renders (smooth animation) and stays
  * anchored to the pawn so it scrolls with the layout.
  */
-function updatePawnSpinner(container, active, seatIndex) {
+/** @param {'thinking' | 'loading' | null} mode */
+function updatePawnSpinner(container, mode, seatIndex) {
   const pawnEl = container.querySelector('.player-card__pawn');
   let spinner = container._pawnSpinner;
 
-  if (!active || !pawnEl) {
+  if (!mode || !pawnEl) {
     spinner?.remove();
     container._pawnSpinner = null;
     return;
@@ -204,6 +217,7 @@ function updatePawnSpinner(container, active, seatIndex) {
   }
 
   spinner.dataset.seat = String(seatIndex);
+  spinner.classList.toggle('pawn-spinner--loading', mode === 'loading');
   if (spinner.parentNode !== pawnEl) {
     pawnEl.appendChild(spinner);
   }
@@ -223,20 +237,20 @@ export function playerCardStructureKey(state, seatIndex) {
   const completedSnap = state.lastCompletedThinkBySeat?.[seatIndex];
   const activeSnap = thinkingTelemetry(state, seatIndex);
   const snap = activeSnap ?? completedSnap;
-  const bestMove = !isThinking ? completedSnap?.move ?? null : null;
+  const isLoading = isMyTurn && !isHuman && engineStatus === 'connecting';
 
   return JSON.stringify({
     seatIndex,
     playerType,
     isHuman,
     isThinking,
+    isLoading,
     isMyTurn,
     winner: state.winner,
     isDraw: state.isDraw,
     configSummary: compactPlayerConfigSummary(ui, snap),
     hasError,
     engineError: hasError ? engineError : '',
-    bestMove,
   });
 }
 
@@ -253,11 +267,13 @@ function derivePlayerCardView(state, seatIndex) {
   const hasError =
     !isHuman && typeof engineError === 'string' && engineError.length > 0;
 
+  const isThinkingThisSeat = state.aiThinking && state.thinkingSeatIndex === seatIndex;
   const liveSnap = thinkingTelemetry(state, seatIndex);
   const completedSnap = state.lastCompletedThinkBySeat?.[seatIndex];
-  const snap = liveSnap ?? completedSnap;
+  // While this seat thinks, show live telemetry; once the opponent thinks, freeze
+  // the last completed snapshot so Gorisanson/MCTS results stay visible.
+  const snap = isThinkingThisSeat ? (liveSnap ?? completedSnap) : completedSnap;
 
-  const bestMove = snap?.move ?? (liveSnap ? null : completedSnap?.move ?? null);
   const depth = resolveDepth(snap);
   const nodes = resolveNodes(snap);
   const nodesLine = formatNodesLine(snap);
@@ -265,33 +281,10 @@ function derivePlayerCardView(state, seatIndex) {
   const thinkMs = liveSnap?.elapsedMs ?? snap?.thinkMs ?? null;
   const rootWinRate = snap?.rootWinRate ?? null;
 
-  const livePvMove = isThinking
-    ? resolveLiveBestMoveKey({
-      ...state,
-      liveSearch: thinkingTelemetry(state, seatIndex) ?? state.liveSearch,
-      thinkingSeatIndex: seatIndex,
-      searchGeneration: state.searchGeneration,
-    })
-    : null;
-
-  let statusText = '';
-  if (state.winner) {
-    if (state.winner === seatIndex + 1) {
-      const plies = state.actions?.length ?? 0;
-      const moves = Math.ceil(plies / 2);
-      statusText = `Won in ${moves} move${moves === 1 ? '' : 's'}!`;
-    }
-  } else if (state.isDraw) {
-    statusText = 'Draw';
-  } else if (isMyTurn && !isHuman && engineStatus === 'connecting') {
-    statusText = 'Loading engine…';
-  } else if (isThinking) {
-    statusText = 'Thinking…';
-  } else if (isMyTurn && isHuman) {
-    statusText = 'Your turn';
-  } else if (isMyTurn) {
-    statusText = 'Waiting…';
-  }
+  const isLoading = isMyTurn && !isHuman && engineStatus === 'connecting';
+  const spinnerMode = hasError
+    ? null
+    : (isThinking ? 'thinking' : isLoading ? 'loading' : null);
 
   let scoreDisplay = '';
   const isMate = isMateScore(score);
@@ -327,9 +320,7 @@ function derivePlayerCardView(state, seatIndex) {
     hasError,
     engineError,
     configSummary: compactPlayerConfigSummary(ui, snap),
-    bestMove,
-    livePvMove,
-    statusText,
+    spinnerMode,
     scoreDisplay,
     isMate,
     depth,
@@ -356,71 +347,17 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
   card.classList.toggle('player-card--active', view.isMyTurn);
   card.classList.toggle('player-card--winner', state.winner === seatIndex + 1);
 
-  const statusEl = card.querySelector(`[data-player-card-status="${seatIndex}"]`);
-  if (view.statusText) {
-    if (statusEl) {
-      statusEl.textContent = view.statusText;
-      statusEl.classList.toggle('player-card__status--thinking', view.isThinking);
-    }
-  } else if (statusEl) {
-    statusEl.remove();
-  }
-
-  const infoEl = card.querySelector('.player-card__info');
-  let playedEl = infoEl?.querySelector('[data-player-card-played]');
-  if (view.bestMove && !view.isThinking) {
-    if (!playedEl && infoEl) {
-      playedEl = document.createElement('div');
-      playedEl.className = 'player-card__bestmove';
-      playedEl.dataset.playerCardPlayed = '1';
-      infoEl.appendChild(playedEl);
-    }
-    if (playedEl) {
-      playedEl.innerHTML = `played <strong>${escHtml(view.bestMove)}</strong>`;
-    }
-  } else if (playedEl) {
-    playedEl.remove();
-  }
-
-  let pvEl = infoEl?.querySelector('[data-player-card-pv]');
-  if (view.livePvMove) {
-    if (!pvEl && infoEl) {
-      pvEl = document.createElement('div');
-      pvEl.className = 'player-card__bestmove';
-      pvEl.dataset.playerCardPv = '1';
-      infoEl.appendChild(pvEl);
-    }
-    if (pvEl) {
-      pvEl.innerHTML = `pv <strong>${escHtml(view.livePvMove)}</strong>`;
-    }
-  } else if (pvEl) {
-    pvEl.remove();
-  }
-
-  const statsEl = card.querySelector('.player-card__stats');
+  const statsEl = card.querySelector('.player-card__telemetry');
   if (statsEl) {
-    const parts = [];
-    if (view.scoreDisplay) {
-      parts.push(
-        `<span class="player-card__score${view.isMate ? ' player-card__score--mate' : ''}">${escHtml(view.scoreDisplay)}</span>`,
-      );
+    statsEl.innerHTML = buildTelemetryHtml(view);
+  } else if (buildTelemetryHtml(view)) {
+    const center = card.querySelector('.player-card__center');
+    if (center) {
+      const telemetry = document.createElement('div');
+      telemetry.className = 'player-card__telemetry';
+      telemetry.innerHTML = buildTelemetryHtml(view);
+      center.appendChild(telemetry);
     }
-    if (view.depth != null) {
-      parts.push(
-        `<span class="player-card__stat"><span class="player-card__stat-label">d</span>${view.depth}</span>`,
-      );
-    }
-    if (view.nodesLine) {
-      parts.push(`<span class="player-card__stat">${escHtml(view.nodesLine)}</span>`);
-    } else if (view.nodes > 0) {
-      parts.push(
-        `<span class="player-card__stat"><span class="player-card__stat-label">n</span>${escHtml(formatNodes(view.nodes))}</span>`,
-      );
-    }
-    if (view.thinkMs != null) {
-      parts.push(`<span class="player-card__stat">${escHtml(formatMs(view.thinkMs))}</span>`);
-    }
-    statsEl.innerHTML = parts.join('');
   }
   const clockEl = card.querySelector('[data-player-card-clock]');
   if (clockEl) clockEl.textContent = view.clockText;
@@ -439,7 +376,7 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
     playBtn.remove();
   }
 
-  updatePawnSpinner(container, view.isThinking && !view.hasError, seatIndex);
+  updatePawnSpinner(container, view.spinnerMode, seatIndex);
   return true;
 }
 
@@ -464,36 +401,7 @@ function bindPlayerCardActions(container, state, seatIndex, controller) {
     .querySelector('[data-action="copy-engine-error"]')
     ?.addEventListener('click', (event) => {
       event.stopPropagation();
-      const btn = event.currentTarget;
-      const seat = Number(btn.getAttribute('data-seat'));
-      const message = String(state.engineErrors?.[seat] ?? '');
-      const flashCopied = () => {
-        btn.classList.add('pawn-icon__error--copied');
-        btn.textContent = '✓';
-      };
-      const fallbackCopy = () => {
-        try {
-          const ta = document.createElement('textarea');
-          ta.value = message;
-          ta.style.position = 'fixed';
-          ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-        } catch {
-          /* clipboard unavailable — error is still shown in the tooltip */
-        }
-      };
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(message).then(flashCopied, () => {
-          fallbackCopy();
-          flashCopied();
-        });
-      } else {
-        fallbackCopy();
-        flashCopied();
-      }
+      openLogsDialog(controller.getState());
     });
 }
 
@@ -515,37 +423,35 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
     spinner.remove();
   }
 
+  const telemetryHtml = buildTelemetryHtml(view);
+
   container.innerHTML = `
     <div class="player-card player-card--seat${seatIndex}${view.isMyTurn ? ' player-card--active' : ''}${state.winner === seatIndex + 1 ? ' player-card--winner' : ''}" data-player-card-seat="${seatIndex}">
       <div class="player-card__main">
         <div class="player-card__left">
-          <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}">${
+          <div class="player-card__token">
+            <div class="player-card__color player-card__color--seat${seatIndex}">${escHtml(view.colorName)}</div>
+            <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}">${
             view.hasError
-              ? `<button type="button" class="pawn-icon__error" data-action="copy-engine-error" data-seat="${seatIndex}" title="Engine error — click to copy:&#10;${escAttr(view.engineError)}" aria-label="Engine error, click to copy">!</button>`
+              ? `<button type="button" class="pawn-icon__error" data-action="copy-engine-error" data-seat="${seatIndex}" title="Engine error — click for full game logs:&#10;${escAttr(view.engineError)}" aria-label="Engine error, click for full game logs">!</button>`
               : ''
           }</div>
+          </div>
           <div class="player-card__info">
-            <div class="player-card__name">${escHtml(view.colorName)}</div>
             <div class="player-card__config">${escHtml(view.configSummary)}</div>
-            ${view.statusText ? `<div class="player-card__status${view.isThinking ? ' player-card__status--thinking' : ''}" data-player-card-status="${seatIndex}">${escHtml(view.statusText)}</div>` : ''}
-            ${view.bestMove && !view.isThinking ? `<div class="player-card__bestmove" data-player-card-played="1">played <strong>${escHtml(view.bestMove)}</strong></div>` : ''}
-            ${view.livePvMove ? `<div class="player-card__bestmove" data-player-card-pv="1">pv <strong>${escHtml(view.livePvMove)}</strong></div>` : ''}
           </div>
         </div>
-        ${view.clockText ? `<div class="player-card__clock" data-player-card-clock>${escHtml(view.clockText)}</div>` : ''}
+        <div class="player-card__center">
+          ${view.clockText ? `<div class="player-card__clock" data-player-card-clock>${escHtml(view.clockText)}</div>` : ''}
+          ${telemetryHtml ? `<div class="player-card__telemetry">${telemetryHtml}</div>` : ''}
+        </div>
         <div class="player-card__right">
-          <div class="player-card__stats">
-            ${view.scoreDisplay ? `<span class="player-card__score${view.isMate ? ' player-card__score--mate' : ''}">${escHtml(view.scoreDisplay)}</span>` : ''}
-            ${view.depth != null ? `<span class="player-card__stat"><span class="player-card__stat-label">d</span>${view.depth}</span>` : ''}
-            ${view.nodesLine ? `<span class="player-card__stat">${escHtml(view.nodesLine)}</span>` : view.nodes > 0 ? `<span class="player-card__stat"><span class="player-card__stat-label">n</span>${escHtml(formatNodes(view.nodes))}</span>` : ''}
-            ${view.thinkMs != null ? `<span class="player-card__stat">${escHtml(formatMs(view.thinkMs))}</span>` : ''}
-          </div>
           ${view.showPlayNow ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ''}
         </div>
       </div>
     </div>
   `;
 
-  updatePawnSpinner(container, view.isThinking && !view.hasError, seatIndex);
+  updatePawnSpinner(container, view.spinnerMode, seatIndex);
   bindPlayerCardActions(container, state, seatIndex, controller);
 }

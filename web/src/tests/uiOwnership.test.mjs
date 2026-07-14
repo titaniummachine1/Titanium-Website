@@ -35,7 +35,7 @@ assert(!playerCardSrc.includes('player-card__settings'), 'no settings panel mark
 assert(!playerCardSrc.includes('type="range"'), 'no range sliders in player card');
 assert(!playerCardSrc.includes('<select'), 'no select in player card');
 assert(playerCardSrc.includes('player-card__config'), 'has read-only config summary');
-assert(playerCardSrc.includes('data-player-card-status'), 'status scoped to card');
+assert(playerCardSrc.includes('player-card__color'), 'color label on pawn token');
 
 console.log('\n[ui] controls bar has no engine settings');
 const controlsSrc = readSrc('ui/gameControls.js');
@@ -110,7 +110,7 @@ const tiFallbackSummary = compactPlayerConfigSummary(
   },
   { requestedThreads: 8, effectiveThreads: 1 },
 );
-assert(tiFallbackSummary.includes('1 thread fallback'), tiFallbackSummary);
+assert(tiFallbackSummary === 'Titanium v16', tiFallbackSummary);
 
 assert(compactPlayerConfigSummary({ isHuman: true }) === 'Human', 'human summary');
 
@@ -119,11 +119,11 @@ assert(playerCardSrc.includes("'n~'"), 'estimated live node totals use n~ prefix
 assert(playerCardSrc.includes('estimatedTotalNodes'), 'card consumes estimatedTotalNodes flag');
 assert(controllerSrc.includes('estimatedTotalNodes: false'), 'completed searches clear estimate flag');
 
-console.log('\n[ui] thinking status markup stays inside player card template');
+console.log('\n[ui] color label sits above pawn in player card');
 assert(
-  playerCardSrc.indexOf('player-card__status') < playerCardSrc.indexOf('player-card__main')
-    || playerCardSrc.includes('player-card__info'),
-  'status nested under card info',
+  playerCardSrc.includes('player-card__color')
+    && playerCardSrc.includes('player-card__token'),
+  'color label stacked on pawn token',
 );
 assert(
   !playerCardSrc.includes('player-ai-settings'),

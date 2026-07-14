@@ -1,9 +1,27 @@
-import { GameSession } from './gameSession.js';
-import { naiveDistanceEval, parseAlgebraic, isWallAction, QuoridorBoard } from '../lib/gameLogic.js';
-import { decodeReplayCode, encodeReplayFromActions } from '../lib/replayCode.js';
-import { AnalysisEngineSession, analysisResultToEvalState } from './analysisEngineSession.js';
-import { ReviewAnalysisSession, classifyReviewMoves } from './reviewAnalysisSession.js';
-import { defaultAnalysisThreadCount } from '../lib/timeControl.js';
+import { GameSession } from "./gameSession.js";
+import {
+  naiveDistanceEval,
+  parseAlgebraic,
+  isWallAction,
+  QuoridorBoard,
+} from "../lib/gameLogic.js";
+import {
+  clockSearchHintFromState,
+  estimateConservativeGameDistance,
+} from "../lib/gameDistance.js";
+import {
+  decodeReplayCode,
+  encodeReplayFromActions,
+} from "../lib/replayCode.js";
+import {
+  AnalysisEngineSession,
+  analysisResultToEvalState,
+} from "./analysisEngineSession.js";
+import {
+  ReviewAnalysisSession,
+  classifyReviewMoves,
+} from "./reviewAnalysisSession.js";
+import { defaultAnalysisThreadCount } from "../lib/timeControl.js";
 import {
   LMR_AGGRESSION_DEFAULT,
   fetchCatSnapshot,
@@ -11,41 +29,49 @@ import {
   prewarmCatSnapshot,
   applyVisionTuning,
   getVisionTuning,
-} from '../lib/catHeatmap.js';
-import { buildLmrViz, fetchLmrSnapshot } from '../lib/lmrHeatmap.js';
-import { toAlgebraic } from '../lib/gameLogic.js';
-import { EngineClient } from '../lib/engineClient.js';
-import { GorisansonEngineClient } from '../lib/localMctsEngine.js';
-import { TitaniumEngineClient } from '../lib/titaniumRustClient.js';
-import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
-import { resolveOnBestMoveResult } from '../lib/onBestMoveResult.js';
-import { positionKeyFromActions, resolveLiveBestMoveKey, pvFirstMoveFromLiveSearch, coalesceRootMoves } from '../lib/liveBestMove.js';
-import { positionKeyFromHistory as historyPositionKey, SyncState } from '../lib/remoteSync.js';
+} from "../lib/catHeatmap.js";
+import { buildLmrViz, fetchLmrSnapshot } from "../lib/lmrHeatmap.js";
+import { toAlgebraic } from "../lib/gameLogic.js";
+import { EngineClient } from "../lib/engineClient.js";
+import { GorisansonEngineClient } from "../lib/localMctsEngine.js";
+import { TitaniumEngineClient } from "../lib/titaniumRustClient.js";
+import { TitaniumWasmEngineClient } from "../lib/titaniumWasmClient.js";
+import { resolveOnBestMoveResult } from "../lib/onBestMoveResult.js";
+import {
+  positionKeyFromActions,
+  resolveLiveBestMoveKey,
+  pvFirstMoveFromLiveSearch,
+  coalesceRootMoves,
+} from "../lib/liveBestMove.js";
+import {
+  positionKeyFromHistory as historyPositionKey,
+  SyncState,
+} from "../lib/remoteSync.js";
 import {
   buildDiagnosticContext,
   validateEngineMoveBeforeCommit,
   canonicalStateFromBoard,
   canonicalPositionKeyFromBoard,
   assertPostWallInvariants,
-} from '../lib/canonicalState.js';
-import { TitaniumLegalityOracle } from '../lib/titaniumLegalityOracle.js';
-import { createTitaniumLegalityRuntime } from '../lib/titaniumLegalityRuntime.js';
-import { validateMoveLegality } from '../lib/validateMoveLegality.js';
-import { isAbortError } from '../lib/engineAbort.js';
-import { resolveDisplayNodes } from '../lib/searchNodes.js';
-import { getEngineEntryForPlayer } from '../engines/engineRegistry.js';
-import { requestEngineMove } from '../engines/requestEngineMove.js';
-import { validateEngineResultIdentity } from '../engines/validateEngineResultIdentity.js';
-import { logAiRequestEvent } from '../engines/aiRequestLog.js';
-import { EngineBackendKind } from '../engines/engineBackend.js';
+} from "../lib/canonicalState.js";
+import { TitaniumLegalityOracle } from "../lib/titaniumLegalityOracle.js";
+import { createTitaniumLegalityRuntime } from "../lib/titaniumLegalityRuntime.js";
+import { validateMoveLegality } from "../lib/validateMoveLegality.js";
+import { isAbortError } from "../lib/engineAbort.js";
+import { resolveDisplayNodes } from "../lib/searchNodes.js";
+import { getEngineEntryForPlayer } from "../engines/engineRegistry.js";
+import { requestEngineMove } from "../engines/requestEngineMove.js";
+import { validateEngineResultIdentity } from "../engines/validateEngineResultIdentity.js";
+import { logAiRequestEvent } from "../engines/aiRequestLog.js";
+import { EngineBackendKind } from "../engines/engineBackend.js";
 import {
   finishedGamePayload,
   finishedGameSignature,
   submitFinishedGame,
-} from '../lib/trainingSubmit.js';
-import { AceV10JsEngineClient } from '../lib/aceV10JsEngine.js';
-import { AceV13JsEngineClient } from '../lib/aceV13JsEngine.js';
-import { AceRustWasmEngineClient } from '../lib/aceRustWasmClient.js';
+} from "../lib/trainingSubmit.js";
+import { AceV10JsEngineClient } from "../lib/aceV10JsEngine.js";
+import { AceV13JsEngineClient } from "../lib/aceV13JsEngine.js";
+import { AceRustWasmEngineClient } from "../lib/aceRustWasmClient.js";
 import {
   resolveAceTier,
   aceDisplayName,
@@ -53,10 +79,10 @@ import {
   migrateAceV10Strength,
   defaultAceCompareAiSettings,
   aceGenerationFromPlayerType,
-} from '../lib/aceTier.js';
-import { QuoridorV3EngineClient } from '../lib/quoridorV3Engine.js';
-import { ZeroInkEngineClient } from '../lib/zeroInkEngine.js';
-import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
+} from "../lib/aceTier.js";
+import { QuoridorV3EngineClient } from "../lib/quoridorV3Engine.js";
+import { ZeroInkEngineClient } from "../lib/zeroInkEngine.js";
+import { PlayerType, StrengthLevel, TimeToMove } from "../lib/engineConfig.js";
 import {
   STRENGTH_LEVEL_PRESETS,
   TIME_TO_MOVE_PRESETS,
@@ -65,7 +91,7 @@ import {
   flattenPlayerOptions,
   describeTimeBudget,
   describeActiveSearchInfo,
-} from '../lib/playerRegistry.js';
+} from "../lib/playerRegistry.js";
 
 const DEFAULT_CAT_VISION_SETTINGS = Object.freeze({
   showSquares: true,
@@ -75,7 +101,9 @@ const DEFAULT_CAT_VISION_SETTINGS = Object.freeze({
 });
 
 function mergeDepthLogs(existing, incoming) {
-  const byDepth = new Map((existing ?? []).map((entry) => [entry.depth, entry]));
+  const byDepth = new Map(
+    (existing ?? []).map((entry) => [entry.depth, entry]),
+  );
   for (const entry of incoming ?? []) {
     byDepth.set(entry.depth, entry);
   }
@@ -86,7 +114,9 @@ function deepestDepthEntry(depthLog) {
   if (!depthLog?.length) {
     return null;
   }
-  return depthLog.reduce((best, entry) => (entry.depth > (best?.depth ?? 0) ? entry : best));
+  return depthLog.reduce((best, entry) =>
+    entry.depth > (best?.depth ?? 0) ? entry : best,
+  );
 }
 
 function scoreFromDepthLog(depthLog, rootScore) {
@@ -108,7 +138,7 @@ function finalizeSearchInfo(info) {
     simulations: Number(info?.simulations) || nodes,
     searchDepth: info?.searchDepth ?? deep?.depth ?? null,
     rootScore: scoreFromDepthLog(depthLog, info?.rootScore),
-    pv: deep?.pv ?? info?.pv ?? '',
+    pv: deep?.pv ?? info?.pv ?? "",
   };
 }
 
@@ -168,7 +198,7 @@ function buildThinkSeatSnapshot({
     blackDist,
     score: deep?.score ?? rootScore ?? null,
     depth: deep?.depth ?? searchDepth ?? null,
-    pv: deep?.pv ?? '',
+    pv: deep?.pv ?? "",
     nodes: resolvedNodes,
     simulations: simulations ?? resolvedNodes,
     selectedWorkerNodes: selectedWorkerNodes ?? null,
@@ -179,7 +209,7 @@ function buildThinkSeatSnapshot({
     nodeSource: nodeSource ?? null,
     estimatedTotalNodes: estimatedTotalNodes ?? null,
     rootWinRate,
-    stoppedBy: stoppedBy ?? (live ? 'searching' : '?'),
+    stoppedBy: stoppedBy ?? (live ? "searching" : "?"),
     rootMoves: rootMoves ? [...rootMoves] : [],
     lmrProfile: lmrProfile ?? null,
     lmrReSearches: lmrReSearches ?? null,
@@ -198,11 +228,11 @@ function pvArrayFromPayload(payload) {
   if (Array.isArray(payload?.pv)) {
     return payload.pv.filter(Boolean).map(String);
   }
-  if (typeof payload?.pv === 'string') {
+  if (typeof payload?.pv === "string") {
     return payload.pv.trim().split(/\s+/).filter(Boolean);
   }
   const deep = deepestDepthEntry(payload?.depthLog);
-  if (typeof deep?.pv === 'string') {
+  if (typeof deep?.pv === "string") {
     return deep.pv.trim().split(/\s+/).filter(Boolean);
   }
   return [];
@@ -212,7 +242,8 @@ function searchPayloadToEvalState(payload, playerToMove) {
   if (!payload) {
     return null;
   }
-  const hasDist = Number.isFinite(payload.whiteDist) && Number.isFinite(payload.blackDist);
+  const hasDist =
+    Number.isFinite(payload.whiteDist) && Number.isFinite(payload.blackDist);
   const margin = hasDist ? payload.blackDist - payload.whiteDist : 0;
   const hasScore = Number.isFinite(Number(payload.rootScore ?? payload.score));
 
@@ -274,19 +305,25 @@ import {
   TITANIUM_NET_HARD,
   migrateTitaniumNet,
   allocateWholeGameTime,
+  chargeThinkMsForSeat,
+  tightenThinkAllocation,
   supportsWholeGameTime,
-} from '../lib/timeControl.js';
-import { playerColorName } from '../lib/playerColors.js';
-import { ponderCandidateSlots } from '../lib/enginePonder.js';
+  hasSeatClock,
+} from "../lib/timeControl.js";
+import { playerColorName } from "../lib/playerColors.js";
+import { ponderCandidateSlots } from "../lib/enginePonder.js";
 import {
   loadPersistedPlaySettings,
   savePersistedPlaySettings,
-} from '../lib/persistedPlaySettings.js';
-import { hasNativeTitaniumLazySmp } from '../lib/titaniumRuntime.js';
+} from "../lib/persistedPlaySettings.js";
+import { hasNativeTitaniumLazySmp } from "../lib/titaniumRuntime.js";
 
 const HAS_NATIVE_TITANIUM_LAZY_SMP = hasNativeTitaniumLazySmp();
 
 function isSavedSettingsValid(playerType, saved, engineConfigs) {
+  if (playerType === PlayerType.Human) {
+    return saved?.wallClockSeconds != null;
+  }
   if (isTitaniumEngine(playerType, engineConfigs)) {
     return saved.wallClockSeconds != null;
   }
@@ -311,11 +348,18 @@ export class AppController {
     this.engines = new Map();
     this.engineConfigs = getAllEngineConfigs();
 
-    const titaniumDefault = defaultPlayerAiSettings(PlayerType.TitaniumV16, this.engineConfigs);
+    const titaniumDefault = defaultPlayerAiSettings(
+      PlayerType.TitaniumV17,
+      this.engineConfigs,
+    );
+    const humanDefault = defaultPlayerAiSettings(
+      PlayerType.Human,
+      this.engineConfigs,
+    );
     const persisted = loadPersistedPlaySettings();
     const playDefaults = {
-      players: [PlayerType.Human, PlayerType.TitaniumV16],
-      playerAiSettings: [null, { ...titaniumDefault }],
+      players: [PlayerType.Human, PlayerType.TitaniumV17],
+      playerAiSettings: [humanDefault, { ...titaniumDefault }],
       playerAiSettingsMemory: [{}, {}],
     };
     const restored = persisted
@@ -341,19 +385,17 @@ export class AppController {
       pathBiasPercent: visionTuning.pathBiasPercent,
       lmrAggressionPercent: visionTuning.lmrAggressionPercent,
       showBestMoveHint: restored.showBestMoveHint !== false,
-      uiMode: 'play',
+      uiMode: "play",
       analysisEngine: {
         unlimited: true,
         wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
-        titaniumNet: 'hard',
+        titaniumNet: "hard",
       },
     };
     for (let seat = 0; seat < 2; seat++) {
       const playerType = this.settings.players[seat];
-      if (playerType !== PlayerType.Human) {
-        this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
-      }
+      this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
     }
 
     this.replay = null;
@@ -380,6 +422,8 @@ export class AppController {
     this.engineErrors = {};
     this.searchInfoBySeat = [null, null];
     this.moveThinkLog = [];
+    this._humanThinkStartedAt = null;
+    this._humanTimedOut = [false, false];
     this.settingsChangelog = [];
     this.initialBudgetHint = null;
     this.lastThinkBySeat = [null, null];
@@ -400,18 +444,21 @@ export class AppController {
     this.reviewSession.onUpdate = (result) => {
       this.reviewAnalysis = {
         ...result,
-        classifications: classifyReviewMoves(result.positions, this.replay?.algebraic ?? []),
+        classifications: classifyReviewMoves(
+          result.positions,
+          this.replay?.algebraic ?? [],
+        ),
       };
       if (this.replay) {
         for (let i = 0; i < result.positions.length; i += 1) {
           const position = result.positions[i];
-          if (position?.status !== 'done' || !position.eval) {
+          if (position?.status !== "done" || !position.eval) {
             continue;
           }
           const key = positionKeyFromActions(this.replay.actions.slice(0, i));
-          this._cacheEvalState('replay', key, {
+          this._cacheEvalState("replay", key, {
             ...position.eval,
-            source: 'review-batch',
+            source: "review-batch",
           });
         }
       }
@@ -428,7 +475,7 @@ export class AppController {
         if (evalState) {
           this._cacheEvalState(this._evalModeKey(), key, {
             ...evalState,
-            source: 'analysis-engine',
+            source: "analysis-engine",
           });
         }
       }
@@ -441,6 +488,7 @@ export class AppController {
     this._moveRequestSeq = 0;
     this._gameGeneration = 0;
     this._thinkAiSettings = null;
+    this._thinkClockLastDepth = null;
     this._clockTickId = null;
     this._illegalRetriesByPly = {};
     this._maxIllegalRetries = 2;
@@ -452,6 +500,7 @@ export class AppController {
     /** Serialize engine commits — concurrent applyEngineMove must not double-apply. */
     this._engineApplyChain = Promise.resolve();
     this._terminalOverlayDismissed = false;
+    this._gameHalted = false;
     this._submittedFinishedGames = new Set();
     this._lastDiagnostic = null;
     this.startupConfirmed = false;
@@ -478,7 +527,7 @@ export class AppController {
    */
   _hasBorrowablePlaySearch() {
     return (
-      this.settings.uiMode === 'play' &&
+      this.settings.uiMode === "play" &&
       this.aiThinking &&
       this.thinkingSeatIndex != null
     );
@@ -488,10 +537,10 @@ export class AppController {
     if (this._hasBorrowablePlaySearch()) {
       return false;
     }
-    if (this.settings.uiMode === 'analysis') {
+    if (this.settings.uiMode === "analysis") {
       return !this.enginesPaused;
     }
-    if (this.settings.uiMode === 'replay') {
+    if (this.settings.uiMode === "replay") {
       return false;
     }
     return this.enginesPaused;
@@ -499,11 +548,19 @@ export class AppController {
 
   setAnalysisEngineSetting(key, value) {
     if (!this.settings.analysisEngine) {
-      this.settings.analysisEngine = { unlimited: true, wallClockSeconds: 5, cores: defaultAnalysisThreadCount(), titaniumNet: 'hard' };
+      this.settings.analysisEngine = {
+        unlimited: true,
+        wallClockSeconds: 5,
+        cores: defaultAnalysisThreadCount(),
+        titaniumNet: "hard",
+      };
     }
-    this.settings.analysisEngine = { ...this.settings.analysisEngine, [key]: value };
+    this.settings.analysisEngine = {
+      ...this.settings.analysisEngine,
+      [key]: value,
+    };
     this._analysisPositionKey = null; // force a re-search with the new setting
-    if (this.settings.uiMode === 'replay' && this.replay) {
+    if (this.settings.uiMode === "replay" && this.replay) {
       this._startReviewAnalysis();
     }
     this.onChange?.();
@@ -521,21 +578,27 @@ export class AppController {
   }
 
   _syncAnalysisPositionIfNeeded(positionKey) {
-    if (!this.analysisSession.isActive() || positionKey === this._analysisPositionKey) {
+    if (
+      !this.analysisSession.isActive() ||
+      positionKey === this._analysisPositionKey
+    ) {
       return;
     }
     this._analysisPositionKey = positionKey;
     this.analysisEval = null;
     this.analysisEvalError = null;
-    this.analysisSession.setPosition(this.session.actions, this.settings.analysisEngine);
+    this.analysisSession.setPosition(
+      this.session.actions,
+      this.settings.analysisEngine,
+    );
   }
 
   _evalModeKey() {
-    return this.settings.uiMode === 'replay'
-      ? 'replay'
-      : this.settings.uiMode === 'analysis'
-        ? 'analysis'
-        : 'play';
+    return this.settings.uiMode === "replay"
+      ? "replay"
+      : this.settings.uiMode === "analysis"
+        ? "analysis"
+        : "play";
   }
 
   _cacheEvalState(mode, positionKey, evalState) {
@@ -547,7 +610,8 @@ export class AppController {
   }
 
   _cachedEvalState(positionKey) {
-    const cached = this.evalCacheByMode?.[this._evalModeKey()]?.get(positionKey);
+    const cached =
+      this.evalCacheByMode?.[this._evalModeKey()]?.get(positionKey);
     return cached ? { ...cached, cached: true } : null;
   }
 
@@ -556,7 +620,7 @@ export class AppController {
       const key = positionKeyFromActions(actions.slice(0, index));
       const cached = this.evalCacheByMode.replay.get(key);
       return cached
-        ? { index, status: 'done', eval: { ...cached, source: 'review-batch' } }
+        ? { index, status: "done", eval: { ...cached, source: "review-batch" } }
         : null;
     });
   }
@@ -586,7 +650,7 @@ export class AppController {
 
   _liveEngineEvalState(positionKey) {
     if (
-      this.settings.uiMode !== 'play' ||
+      this.settings.uiMode !== "play" ||
       !this.aiThinking ||
       this.thinkingSeatIndex == null ||
       !(this.liveSearch || this.searchInfoBySeat[this.thinkingSeatIndex])
@@ -605,27 +669,35 @@ export class AppController {
       ...(active ?? {}),
       depthLog,
     };
-    const evalState = searchPayloadToEvalState(payload, this.session.playerToMove);
+    const evalState = searchPayloadToEvalState(
+      payload,
+      this.session.playerToMove,
+    );
     if (!evalState) {
       return null;
     }
     const withSource = {
       ...evalState,
-      source: 'play-live',
+      source: "play-live",
     };
-    this._cacheEvalState('play', positionKey, withSource);
+    this._cacheEvalState("play", positionKey, withSource);
     return withSource;
   }
 
   _latestCompletedEngineEvalState() {
-    if (this.settings.uiMode !== 'play') {
+    if (this.settings.uiMode !== "play") {
       return null;
     }
     let bestSeat = null;
     let bestSnap = null;
     for (let seat = 0; seat < 2; seat++) {
-      const snap = this.lastCompletedThinkBySeat?.[seat] ?? this.lastThinkBySeat?.[seat];
-      if (!snap || snap.live || (snap.score == null && snap.rootScore == null && !snap.depthLog?.length)) {
+      const snap =
+        this.lastCompletedThinkBySeat?.[seat] ?? this.lastThinkBySeat?.[seat];
+      if (
+        !snap ||
+        snap.live ||
+        (snap.score == null && snap.rootScore == null && !snap.depthLog?.length)
+      ) {
         continue;
       }
       if (!bestSnap || (snap.ply ?? -1) > (bestSnap.ply ?? -1)) {
@@ -647,7 +719,7 @@ export class AppController {
     return evalState
       ? {
           ...evalState,
-          source: 'play-last',
+          source: "play-last",
         }
       : null;
   }
@@ -665,7 +737,7 @@ export class AppController {
       ? analysisResultToEvalState(this.analysisEval)
       : null;
     const liveAnalysisEval = liveAnalysisEvalRaw
-      ? { ...liveAnalysisEvalRaw, source: 'analysis-engine' }
+      ? { ...liveAnalysisEvalRaw, source: "analysis-engine" }
       : null;
     if (liveAnalysisEval) {
       this._cacheEvalState(this._evalModeKey(), positionKey, liveAnalysisEval);
@@ -681,7 +753,7 @@ export class AppController {
       playerToMove: snapshot.playerToMove,
       pv: [],
       rootMoves: [],
-      source: 'distance',
+      source: "distance",
     };
     const reviewPendingEvalState = {
       p1: 0.5,
@@ -691,7 +763,7 @@ export class AppController {
       playerToMove: snapshot.playerToMove,
       pv: [],
       rootMoves: [],
-      source: 'review-pending',
+      source: "review-pending",
       pending: true,
     };
     const playPendingEvalState = {
@@ -700,15 +772,18 @@ export class AppController {
       playerToMove: snapshot.playerToMove,
       pv: [],
       rootMoves: [],
-      source: 'play-pending',
+      source: "play-pending",
       pending: true,
     };
     const resolvedEval =
-      this.settings.uiMode === 'replay'
+      this.settings.uiMode === "replay"
         ? (cachedEval ?? reviewPendingEvalState)
-        : this.settings.uiMode === 'play' && this.aiThinking
+        : this.settings.uiMode === "play" && this.aiThinking
           ? (livePlayEval ?? playPendingEvalState)
-          : (latestCompletedPlayEval ?? liveAnalysisEval ?? cachedEval ?? distanceEvalState);
+          : (latestCompletedPlayEval ??
+            liveAnalysisEval ??
+            cachedEval ??
+            distanceEvalState);
 
     return {
       ...snapshot,
@@ -720,8 +795,11 @@ export class AppController {
       thinkingPlayerType: terminal ? null : this.thinkingPlayerType,
       thinkingSeatIndex: terminal ? null : this.thinkingSeatIndex,
       eval: resolvedEval,
-      analysisEngineActive: this.analysisSession.isActive() || this.reviewAnalysis.status === 'running',
-      analysisEvalDepth: resolvedEval?.depth ?? this.analysisEval?.depth ?? null,
+      analysisEngineActive:
+        this.analysisSession.isActive() ||
+        this.reviewAnalysis.status === "running",
+      analysisEvalDepth:
+        resolvedEval?.depth ?? this.analysisEval?.depth ?? null,
       analysisEvalError: this.analysisEvalError,
       gameClocks: this._gameClockStates(),
       reviewAnalysis: {
@@ -751,9 +829,10 @@ export class AppController {
           aiThinking: terminal ? false : this.aiThinking,
         },
       ),
-      activeSearchInfo: this.thinkingSeatIndex != null
-        ? this.searchInfoBySeat[this.thinkingSeatIndex]
-        : null,
+      activeSearchInfo:
+        this.thinkingSeatIndex != null
+          ? this.searchInfoBySeat[this.thinkingSeatIndex]
+          : null,
       moveThinkLog: this.moveThinkLog,
       settingsChangelog: this.settingsChangelog,
       initialBudgetHint: this.initialBudgetHint,
@@ -774,26 +853,28 @@ export class AppController {
       enginesPaused: this.enginesPaused,
       replay: this.replay
         ? {
-          index: this.replay.index,
-          total: this.replay.actions.length,
-          code: this.replay.code,
-          meta: this.replay.meta,
-          algebraic: [...(this.replay.algebraic ?? [])],
-        }
+            index: this.replay.index,
+            total: this.replay.actions.length,
+            code: this.replay.code,
+            meta: this.replay.meta,
+            algebraic: [...(this.replay.algebraic ?? [])],
+          }
         : null,
       terminalOverlayDismissed: this._terminalOverlayDismissed,
+      gameHalted: this._gameHalted,
+      endReason: snapshot.endReason ?? null,
       legalityOracleState: { ...this.legalityOracleState },
       playReplayCode:
-        this.session.actions.length > 0 && this.settings.uiMode === 'play'
+        this.session.actions.length > 0 && this.settings.uiMode === "play"
           ? encodeReplayFromActions(
-            this.session.actions,
-            this.session.winner
-              ? {
-                winner: this.session.winner === 1 ? 'white' : 'black',
-                plies: this.session.actions.length,
-              }
-              : null,
-          )
+              this.session.actions,
+              this.session.winner
+                ? {
+                    winner: this.session.winner === 1 ? "white" : "black",
+                    plies: this.session.actions.length,
+                  }
+                : null,
+            )
           : null,
     };
   }
@@ -804,11 +885,13 @@ export class AppController {
 
   /** Remap retired player keys (Titanium, Ace v7 aliases) to current engine slots. */
   migrateLegacyPlayerTypes() {
-    this.settings.players = this.settings.players.map((p) => normalizePlayerType(p));
+    this.settings.players = this.settings.players.map((p) =>
+      normalizePlayerType(p),
+    );
   }
 
   persistPlaySettings() {
-    if (this.settings.uiMode !== 'play') {
+    if (this.settings.uiMode !== "play") {
       return;
     }
     savePersistedPlaySettings(this.settings);
@@ -816,9 +899,12 @@ export class AppController {
 
   restorePersistedPlayMatchup() {
     const persisted = loadPersistedPlaySettings();
-    const titaniumDefault = defaultPlayerAiSettings(PlayerType.TitaniumV16, this.engineConfigs);
+    const titaniumDefault = defaultPlayerAiSettings(
+      PlayerType.TitaniumV17,
+      this.engineConfigs,
+    );
     const playDefaults = {
-      players: [PlayerType.Human, PlayerType.TitaniumV16],
+      players: [PlayerType.Human, PlayerType.TitaniumV17],
       playerAiSettings: [null, { ...titaniumDefault }],
       playerAiSettingsMemory: [{}, {}],
     };
@@ -859,7 +945,7 @@ export class AppController {
         unlimited: true,
         wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
-        titaniumNet: 'hard',
+        titaniumNet: "hard",
       };
     }
     this.destroyAllEngines();
@@ -876,9 +962,16 @@ export class AppController {
     return this.settings.players[1 - humanSeat] !== PlayerType.Human;
   }
 
-  _abortEngineSearch({ bumpRequestSeq = false, stoppedBy = 'cancelled', seatIndex = null } = {}) {
+  _abortEngineSearch({
+    bumpRequestSeq = false,
+    stoppedBy = "cancelled",
+    seatIndex = null,
+  } = {}) {
     const seat = seatIndex ?? this.thinkingSeatIndex;
-    if (this._activeAiAbort && (seat == null || this.thinkingSeatIndex === seat)) {
+    if (
+      this._activeAiAbort &&
+      (seat == null || this.thinkingSeatIndex === seat)
+    ) {
       this._activeAiAbort.abort();
       this._activeAiAbort = null;
     }
@@ -902,7 +995,7 @@ export class AppController {
           stoppedBy,
         };
       }
-      this.engineStatus[seat] = 'idle';
+      this.engineStatus[seat] = "idle";
     }
     if (seat == null || this.thinkingSeatIndex === seat) {
       this.aiThinking = false;
@@ -936,7 +1029,10 @@ export class AppController {
     if (!this.isHumanVsAiPlay()) {
       return 1;
     }
-    if (this.session.isHumanTurn(this.settings.players) && this.session.actions.length > 0) {
+    if (
+      this.session.isHumanTurn(this.settings.players) &&
+      this.session.actions.length > 0
+    ) {
       return 2;
     }
     return 1;
@@ -986,11 +1082,24 @@ export class AppController {
 
   ensurePlayerAiSettingsSlot(playerNum, playerType) {
     const index = playerNum - 1;
+    const memory = this.settings.playerAiSettingsMemory[index] ?? {};
+
     if (playerType === PlayerType.Human) {
+      let saved = memory[PlayerType.Human];
+      if (saved?.wallClockSeconds != null) {
+        this.settings.playerAiSettings[index] = { ...saved };
+        return;
+      }
+      const created = defaultPlayerAiSettings(
+        PlayerType.Human,
+        this.engineConfigs,
+      );
+      memory[PlayerType.Human] = { ...created };
+      this.settings.playerAiSettingsMemory[index] = memory;
+      this.settings.playerAiSettings[index] = created;
       return;
     }
 
-    const memory = this.settings.playerAiSettingsMemory[index] ?? {};
     let saved = memory[playerType];
     if (saved?.strength != null && saved.timeToMove == null) {
       saved = {
@@ -1000,7 +1109,10 @@ export class AppController {
       memory[playerType] = saved;
     }
     if (saved && isSavedSettingsValid(playerType, saved, this.engineConfigs)) {
-      if (isTitaniumEngine(playerType, this.engineConfigs) && !saved.titaniumNet) {
+      if (
+        isTitaniumEngine(playerType, this.engineConfigs) &&
+        !saved.titaniumNet
+      ) {
         saved = {
           ...saved,
           titaniumNet: migrateTitaniumNet(TITANIUM_NET_HARD),
@@ -1027,7 +1139,19 @@ export class AppController {
   rememberPlayerAiSettings(playerNum, aiSettings) {
     const index = playerNum - 1;
     const playerType = this.settings.players[index];
-    if (playerType === PlayerType.Human || !aiSettings) {
+    if (!aiSettings) {
+      return;
+    }
+    if (playerType === PlayerType.Human) {
+      const clockOnly = {
+        wallClockSeconds: aiSettings.wallClockSeconds,
+        wholeGameTime: aiSettings.wholeGameTime !== false,
+      };
+      const memory = this.settings.playerAiSettingsMemory[index] ?? {};
+      memory[PlayerType.Human] = { ...clockOnly };
+      this.settings.playerAiSettingsMemory[index] = memory;
+      this.settings.playerAiSettings[index] = { ...clockOnly };
+      this.persistPlaySettings();
       return;
     }
     const memory = this.settings.playerAiSettingsMemory[index] ?? {};
@@ -1038,7 +1162,12 @@ export class AppController {
   }
 
   recordSettingsChange(playerNum, field, from, to) {
-    if (this.settings.uiMode !== 'play' || this.session.winner != null || this.session.isDraw || from === to) {
+    if (
+      this.settings.uiMode !== "play" ||
+      this.session.winner != null ||
+      this.session.isDraw ||
+      from === to
+    ) {
       return;
     }
     const seat = playerColorName(playerNum);
@@ -1074,16 +1203,24 @@ export class AppController {
       isLocalMcts: isLocalMctsEngine(playerType, this.engineConfigs),
       isRemote: isRemoteEngine(playerType, this.engineConfigs),
       isZeroInk: isZeroInkEngine(playerType, this.engineConfigs),
-      titaniumNet: migrateTitaniumNet(current?.titaniumNet ?? TITANIUM_NET_HARD),
+      titaniumNet: migrateTitaniumNet(
+        current?.titaniumNet ?? TITANIUM_NET_HARD,
+      ),
       cores,
       hasNativeTitaniumLazySmp,
       strengthLevel: isAceFamily(playerType, this.engineConfigs)
-        ? clampAceV10Tier(migrateAceV10Strength(current?.strengthLevel ?? 0), playerType)
+        ? clampAceV10Tier(
+            migrateAceV10Strength(current?.strengthLevel ?? 0),
+            playerType,
+          )
         : (current?.strengthLevel ?? StrengthLevel.Alpha),
       timeToMove: current?.timeToMove ?? TimeToMove.Short,
-      wallClockSeconds: current?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds,
+      wallClockSeconds:
+        current?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds,
       wholeGameTime: current?.wholeGameTime !== false,
-      visitsBudget: clampVisits(current?.visitsBudget ?? LOCAL_VISITS_RANGE.default),
+      visitsBudget: clampVisits(
+        current?.visitsBudget ?? LOCAL_VISITS_RANGE.default,
+      ),
       visitsSliderPosition: sliderPositionFromVisits(
         current?.visitsBudget ?? LOCAL_VISITS_RANGE.default,
       ),
@@ -1099,7 +1236,10 @@ export class AppController {
   }
 
   getPlayerAiSettingsUi() {
-    return [this.getPlayerAiSettingsUiForSlot(1), this.getPlayerAiSettingsUiForSlot(2)];
+    return [
+      this.getPlayerAiSettingsUiForSlot(1),
+      this.getPlayerAiSettingsUiForSlot(2),
+    ];
   }
 
   _aiSettingsNeedSessionReset(prevAi, nextAi, playerType) {
@@ -1159,7 +1299,12 @@ export class AppController {
     const isActiveSeat =
       this.session.playerToMove - 1 === seatIndex &&
       this.settings.players[seatIndex] !== PlayerType.Human;
-    if (isActiveSeat && !this.session.winner && !this.session.isDraw && !this.replay) {
+    if (
+      isActiveSeat &&
+      !this.session.winner &&
+      !this.session.isDraw &&
+      !this.replay
+    ) {
       this.maybeRequestAiMove();
     }
   }
@@ -1179,7 +1324,12 @@ export class AppController {
     }
     const current = this.settings.playerAiSettings[index] ?? {};
     const next = Number(strengthLevel);
-    this.recordSettingsChange(playerNum, 'strength', current.strengthLevel, next);
+    this.recordSettingsChange(
+      playerNum,
+      "strength",
+      current.strengthLevel,
+      next,
+    );
     const storedStrength = isAceFamily(playerType, this.engineConfigs)
       ? clampAceV10Tier(next, playerType)
       : next;
@@ -1200,7 +1350,12 @@ export class AppController {
     }
     const current = this.settings.playerAiSettings[index] ?? {};
     const next = Number(timeToMove);
-    this.recordSettingsChange(playerNum, 'timeToMove', current.timeToMove, next);
+    this.recordSettingsChange(
+      playerNum,
+      "timeToMove",
+      current.timeToMove,
+      next,
+    );
     this.rememberPlayerAiSettings(playerNum, {
       ...current,
       timeToMove: next,
@@ -1222,7 +1377,12 @@ export class AppController {
     }
     const current = this.settings.playerAiSettings[index] ?? {};
     const next = Number(seconds);
-    this.recordSettingsChange(playerNum, 'wallClockSeconds', current.wallClockSeconds, next);
+    this.recordSettingsChange(
+      playerNum,
+      "wallClockSeconds",
+      current.wallClockSeconds,
+      next,
+    );
     this.rememberPlayerAiSettings(playerNum, {
       ...current,
       wallClockSeconds: next,
@@ -1244,68 +1404,356 @@ export class AppController {
     }
   }
 
-  _managedClockSettings(seatIndex, aiSettings) {
-    const playerType = this.settings.players[seatIndex];
-    if (!supportsWholeGameTime(playerType, this.engineConfigs) || aiSettings?.wholeGameTime === false) {
-      return { ...aiSettings };
+  _gameDistanceForClock(
+    seatIndex,
+    { clockSearchHint = null, searchTelemetry = null } = {},
+  ) {
+    const actions = this.session.actions.map((action) => toAlgebraic(action));
+    if (searchTelemetry) {
+      return estimateConservativeGameDistance({
+        board: this.session.board,
+        actions,
+        depthLog: searchTelemetry.depthLog ?? null,
+        whiteDist: searchTelemetry.whiteDist ?? null,
+        blackDist: searchTelemetry.blackDist ?? null,
+      });
     }
-    const totalMs = Math.max(250, Number(aiSettings?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000);
-    const usedMs = this.moveThinkLog.reduce((sum, entry) => {
-      const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
-      return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
-        ? sum + Math.max(0, entry.thinkMs)
-        : sum;
-    }, 0);
+    const hint =
+      clockSearchHint ??
+      clockSearchHintFromState({
+        positionKey: this.currentPositionKey(),
+        seatIndex,
+        liveSearch: this.liveSearch,
+        searchInfo: this.searchInfoBySeat[seatIndex],
+      });
+    return estimateConservativeGameDistance({
+      board: this.session.board,
+      actions,
+      depthLog: hint?.depthLog ?? null,
+      whiteDist: hint?.whiteDist ?? null,
+      blackDist: hint?.blackDist ?? null,
+    });
+  }
+
+  _wholeGameClockAllocation(
+    seatIndex,
+    aiSettings,
+    {
+      clockSearchHint = null,
+      searchTelemetry = null,
+      includeActiveThink = false,
+    } = {},
+  ) {
+    const totalMs = Math.max(
+      250,
+      Number(aiSettings?.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) *
+        1000,
+    );
+    const usedMs = includeActiveThink
+      ? this._seatClockUsedMs(seatIndex, { includeActiveTurn: true })
+      : this._seatClockUsedMs(seatIndex, { includeActiveTurn: false });
     const ownMovesPlayed = this.session.actions.reduce(
-      (count, _action, plyIndex) => count + (plyIndex % 2 === seatIndex ? 1 : 0),
+      (count, _action, plyIndex) =>
+        count + (plyIndex % 2 === seatIndex ? 1 : 0),
       0,
     );
+    const distanceToWin = this._gameDistanceForClock(seatIndex, {
+      clockSearchHint,
+      searchTelemetry,
+    });
+    return {
+      totalMs,
+      usedMs,
+      distanceToWin,
+      ...allocateWholeGameTime({
+        totalMs,
+        usedMs,
+        ownMovesPlayed,
+        distanceToWin,
+      }),
+    };
+  }
+
+  _managedClockSettings(seatIndex, aiSettings, clockSearchHint = null) {
+    const playerType = this.settings.players[seatIndex];
+    if (
+      !supportsWholeGameTime(playerType, this.engineConfigs) ||
+      aiSettings?.wholeGameTime === false
+    ) {
+      return { ...aiSettings };
+    }
     const {
       remainingMs,
       moveBudgetMs,
       expectedMovesLeft,
       handoffReserveMs,
-    } = allocateWholeGameTime({ totalMs, usedMs, ownMovesPlayed });
+      totalMs,
+      distanceToWin,
+    } = this._wholeGameClockAllocation(seatIndex, aiSettings, {
+      clockSearchHint,
+      includeActiveThink: false,
+    });
     return {
       ...aiSettings,
       wallClockSeconds: moveBudgetMs / 1000,
       wholeGameTotalSeconds: totalMs / 1000,
       wholeGameRemainingSeconds: remainingMs / 1000,
       wholeGameExpectedMovesLeft: expectedMovesLeft,
+      wholeGameDistanceToWin: distanceToWin,
       wholeGameHandoffReserveMs: handoffReserveMs,
     };
+  }
+
+  _refreshThinkClockFromSearch(seatIndex, info, depthLog) {
+    const think = this._thinkAiSettings;
+    const ai = this.settings.playerAiSettings[seatIndex] ?? {};
+    const playerType = this.settings.players[seatIndex];
+    if (
+      !think ||
+      ai.wholeGameTime === false ||
+      !supportsWholeGameTime(playerType, this.engineConfigs)
+    ) {
+      return false;
+    }
+    const liveDepth =
+      info.searchDepth ?? deepestDepthEntry(depthLog)?.depth ?? null;
+    if (liveDepth == null || liveDepth === this._thinkClockLastDepth) {
+      return false;
+    }
+    this._thinkClockLastDepth = liveDepth;
+
+    const allocation = this._wholeGameClockAllocation(seatIndex, ai, {
+      searchTelemetry: {
+        depthLog,
+        whiteDist: info.whiteDist,
+        blackDist: info.blackDist,
+      },
+      includeActiveThink: true,
+    });
+    const prevBudgetMs = Math.round((think.wallClockSeconds ?? 0) * 1000);
+    const tightened = tightenThinkAllocation(prevBudgetMs, allocation);
+
+    this._thinkAiSettings = {
+      ...think,
+      wallClockSeconds: tightened.moveBudgetMs / 1000,
+      wholeGameRemainingSeconds: tightened.remainingMs / 1000,
+      wholeGameExpectedMovesLeft: tightened.expectedMovesLeft,
+      wholeGameDistanceToWin: allocation.distanceToWin,
+      wholeGameHandoffReserveMs: tightened.handoffReserveMs,
+    };
+    return true;
+  }
+
+  _formatClockLabel(remainingMs) {
+    const totalSeconds = remainingMs / 1000;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    const tenths = Math.floor((totalSeconds % 1) * 10);
+    return minutes > 0
+      ? `${minutes}:${String(seconds).padStart(2, "0")}`
+      : `${seconds}.${tenths}`;
+  }
+
+  _clockHandoffGraceMs(seatIndex) {
+    const fromThink = this._thinkAiSettings?.wholeGameHandoffReserveMs;
+    if (fromThink != null && Number.isFinite(fromThink)) {
+      return Math.max(0, fromThink);
+    }
+    const ai = this.settings.playerAiSettings[seatIndex] ?? {};
+    const totalMs = Math.max(
+      250,
+      Number(ai.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000,
+    );
+    const usedMs = this._seatClockUsedMs(seatIndex, {
+      includeActiveTurn: false,
+    });
+    const ownMovesPlayed = this.session.actions.reduce(
+      (count, _action, plyIndex) =>
+        count + (plyIndex % 2 === seatIndex ? 1 : 0),
+      0,
+    );
+    return allocateWholeGameTime({
+      totalMs,
+      usedMs,
+      ownMovesPlayed,
+      distanceToWin: this._gameDistanceForClock(seatIndex),
+    }).handoffReserveMs;
+  }
+
+  _seatClockOverBudget(seatIndex, remainingMs) {
+    return remainingMs <= -this._clockHandoffGraceMs(seatIndex);
+  }
+
+  _seatUsesWholeGameClock(seatIndex) {
+    const playerType = this.settings.players[seatIndex];
+    const ai = this.settings.playerAiSettings[seatIndex] ?? {};
+    if (playerType === PlayerType.Human) {
+      return ai.wholeGameTime !== false;
+    }
+    return (
+      supportsWholeGameTime(playerType, this.engineConfigs) &&
+      ai.wholeGameTime !== false
+    );
+  }
+
+  _seatClockUsedMs(seatIndex, { includeActiveTurn = true } = {}) {
+    const playerType = this.settings.players[seatIndex];
+    const ai = this.settings.playerAiSettings[seatIndex] ?? {};
+    if (!hasSeatClock(playerType, this.engineConfigs, ai)) {
+      return 0;
+    }
+    if (playerType === PlayerType.Human && ai.wholeGameTime === false) {
+      const onTurn =
+        this.session.playerToMove - 1 === seatIndex &&
+        this.session.isHumanTurn(this.settings.players) &&
+        !this.aiThinking;
+      if (!onTurn || !includeActiveTurn || this._humanThinkStartedAt == null) {
+        return 0;
+      }
+      return Math.max(0, performance.now() - this._humanThinkStartedAt);
+    }
+    let usedMs = this.moveThinkLog.reduce((sum, entry) => {
+      const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
+      return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
+        ? sum + Math.max(0, entry.thinkMs)
+        : sum;
+    }, 0);
+    if (!includeActiveTurn) {
+      return usedMs;
+    }
+    if (playerType === PlayerType.Human) {
+      const onTurn =
+        this.session.playerToMove - 1 === seatIndex &&
+        this.session.isHumanTurn(this.settings.players) &&
+        !this.aiThinking;
+      if (onTurn && this._humanThinkStartedAt != null) {
+        usedMs += Math.max(0, performance.now() - this._humanThinkStartedAt);
+      }
+    } else if (
+      this.aiThinking &&
+      this.thinkingSeatIndex === seatIndex &&
+      this._thinkStartedAt != null
+    ) {
+      usedMs += Math.max(0, performance.now() - this._thinkStartedAt);
+    }
+    return usedMs;
   }
 
   _gameClockStates() {
     return [0, 1].map((seatIndex) => {
       const playerType = this.settings.players[seatIndex];
       const ai = this.settings.playerAiSettings[seatIndex] ?? {};
-      if (!supportsWholeGameTime(playerType, this.engineConfigs) || ai.wholeGameTime === false) {
+      if (!hasSeatClock(playerType, this.engineConfigs, ai)) {
         return null;
       }
-      const totalMs = Math.max(250, Number(ai.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000);
-      let usedMs = this.moveThinkLog.reduce((sum, entry) => {
-        const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
-        return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
-          ? sum + Math.max(0, entry.thinkMs)
-          : sum;
-      }, 0);
-      if (this.aiThinking && this.thinkingSeatIndex === seatIndex && this._thinkStartedAt != null) {
-        usedMs += Math.max(0, performance.now() - this._thinkStartedAt);
-      }
-      const remainingMs = Math.max(0, totalMs - usedMs);
-      const totalSeconds = remainingMs / 1000;
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = Math.floor(totalSeconds % 60);
-      const tenths = Math.floor((totalSeconds % 1) * 10);
+      const totalMs = Math.max(
+        250,
+        Number(ai.wallClockSeconds ?? WALL_CLOCK_RANGE.defaultSeconds) * 1000,
+      );
+      const usedMs = this._seatClockUsedMs(seatIndex);
+      const remainingMs = this._humanTimedOut?.[seatIndex]
+        ? 0
+        : Math.max(0, totalMs - usedMs);
       return {
         totalMs,
         remainingMs,
-        label: minutes > 0
-          ? `${minutes}:${String(seconds).padStart(2, '0')}`
-          : `${seconds}.${tenths}`,
+        label: this._formatClockLabel(remainingMs),
       };
     });
+  }
+
+  _clockTickerNeeded() {
+    if (
+      this.settings.uiMode !== "play" ||
+      this.session.winner != null ||
+      this.session.isDraw
+    ) {
+      return false;
+    }
+    if (this.aiThinking && this.thinkingSeatIndex != null) {
+      const playerType = this.settings.players[this.thinkingSeatIndex];
+      const ai = this.settings.playerAiSettings[this.thinkingSeatIndex] ?? {};
+      if (
+        hasSeatClock(playerType, this.engineConfigs, ai) &&
+        this._seatUsesWholeGameClock(this.thinkingSeatIndex)
+      ) {
+        return true;
+      }
+    }
+    const humanSeat = this.session.playerToMove - 1;
+    if (
+      this.session.isHumanTurn(this.settings.players) &&
+      !this.aiThinking &&
+      this.settings.players[humanSeat] === PlayerType.Human
+    ) {
+      const ai = this.settings.playerAiSettings[humanSeat] ?? {};
+      if (hasSeatClock(PlayerType.Human, this.engineConfigs, ai)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _syncHumanClockTurn() {
+    if (
+      this.settings.uiMode !== "play" ||
+      this.session.winner != null ||
+      this.session.isDraw
+    ) {
+      this._humanThinkStartedAt = null;
+      return;
+    }
+    const seat = this.session.playerToMove - 1;
+    const ai = this.settings.playerAiSettings[seat] ?? {};
+    if (
+      !this.session.isHumanTurn(this.settings.players) ||
+      this.settings.players[seat] !== PlayerType.Human ||
+      this.aiThinking ||
+      !hasSeatClock(PlayerType.Human, this.engineConfigs, ai) ||
+      this._humanTimedOut?.[seat]
+    ) {
+      this._humanThinkStartedAt = null;
+      return;
+    }
+    if (this._humanThinkStartedAt == null) {
+      this._humanThinkStartedAt = performance.now();
+      this._startClockTicker();
+    }
+  }
+
+  _flagHumanOnTime(seatIndex) {
+    if (this.settings.players[seatIndex] !== PlayerType.Human) {
+      return;
+    }
+    if (this._humanTimedOut?.[seatIndex]) {
+      return;
+    }
+    this._humanTimedOut = this._humanTimedOut ?? [false, false];
+    this._humanTimedOut[seatIndex] = true;
+
+    const thinkStarted = this._humanThinkStartedAt;
+    this._humanThinkStartedAt = null;
+    if (
+      thinkStarted != null &&
+      hasSeatClock(
+        PlayerType.Human,
+        this.engineConfigs,
+        this.settings.playerAiSettings[seatIndex],
+      )
+    ) {
+      this.moveThinkLog.push({
+        ply: this.session.actions.length + 1,
+        move: "(time)",
+        engine: "Human",
+        thinkMs: Math.round(performance.now() - thinkStarted),
+        stoppedBy: "flag",
+      });
+    }
+
+    if (this.session.forfeitOnTime(seatIndex + 1)) {
+      this.maybeSubmitFinishedGame();
+    }
+    this.onChange?.();
   }
 
   _startClockTicker() {
@@ -1313,22 +1761,41 @@ export class AppController {
       return;
     }
     this._clockTickId = setInterval(() => {
-      if (!this.aiThinking) {
+      if (!this._clockTickerNeeded()) {
         clearInterval(this._clockTickId);
         this._clockTickId = null;
         return;
       }
       const seat = this.thinkingSeatIndex;
-      const playerType = seat != null ? this.settings.players[seat] : null;
-      const ai = seat != null ? this.settings.playerAiSettings[seat] : null;
-      if (seat != null && supportsWholeGameTime(playerType, this.engineConfigs) && ai?.wholeGameTime !== false) {
-        const remainingMs = this._gameClockStates()[seat]?.remainingMs ?? 0;
-        if (remainingMs <= 0) {
-          this._flagEngineOnTime(seat);
+      if (seat != null && this.aiThinking) {
+        const playerType = this.settings.players[seat];
+        const ai = this.settings.playerAiSettings[seat] ?? {};
+        if (
+          hasSeatClock(playerType, this.engineConfigs, ai) &&
+          this._seatUsesWholeGameClock(seat)
+        ) {
+          const remainingMs = this._gameClockStates()[seat]?.remainingMs ?? 0;
+          if (this._seatClockOverBudget(seat, remainingMs)) {
+            this._flagEngineOnTime(seat);
+            return;
+          }
+        }
+      }
+      const humanSeat = this.session.playerToMove - 1;
+      if (
+        this.session.isHumanTurn(this.settings.players) &&
+        !this.aiThinking &&
+        this.settings.players[humanSeat] === PlayerType.Human &&
+        !this._humanTimedOut?.[humanSeat]
+      ) {
+        const remainingMs =
+          this._gameClockStates()[humanSeat]?.remainingMs ?? 0;
+        if (this._seatClockOverBudget(humanSeat, remainingMs)) {
+          this._flagHumanOnTime(humanSeat);
           return;
         }
-        this.onChange?.();
       }
+      this.onChange?.();
     }, 100);
   }
 
@@ -1346,7 +1813,9 @@ export class AppController {
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
     this._thinkStartedAt = null;
-    this.engineStatus[seatIndex] = 'flagged';
+    this._thinkAiSettings = null;
+    this._thinkClockLastDepth = null;
+    this.engineStatus[seatIndex] = "flagged";
     this.engineErrors[seatIndex] = null;
     if (this.session.forfeitOnTime(seatIndex + 1)) {
       this.maybeSubmitFinishedGame();
@@ -1362,7 +1831,12 @@ export class AppController {
     }
     const current = this.settings.playerAiSettings[index] ?? {};
     const next = clampVisits(visits);
-    this.recordSettingsChange(playerNum, 'visitsBudget', current.visitsBudget, next);
+    this.recordSettingsChange(
+      playerNum,
+      "visitsBudget",
+      current.visitsBudget,
+      next,
+    );
     this.rememberPlayerAiSettings(playerNum, {
       ...current,
       visitsBudget: next,
@@ -1380,7 +1854,7 @@ export class AppController {
     }
     const current = this.settings.playerAiSettings[index] ?? {};
     const next = clampCores(cores);
-    this.recordSettingsChange(playerNum, 'cores', resolveCores(current), next);
+    this.recordSettingsChange(playerNum, "cores", resolveCores(current), next);
     this.rememberPlayerAiSettings(playerNum, {
       ...current,
       cores: next,
@@ -1401,12 +1875,12 @@ export class AppController {
   }
 
   toggleEnginesPaused(force) {
-    const next = typeof force === 'boolean' ? force : !this.enginesPaused;
+    const next = typeof force === "boolean" ? force : !this.enginesPaused;
     if (next === this.enginesPaused) {
       return;
     }
     this.enginesPaused = next;
-    if (this.settings.uiMode === 'replay') {
+    if (this.settings.uiMode === "replay") {
       if (next) {
         this.reviewSession.pause();
       } else {
@@ -1472,12 +1946,12 @@ export class AppController {
   }
 
   setVisionMode(mode) {
-    const next = mode === 'cat' || mode === 'lmr' ? mode : 'off';
-    if (next === 'cat') {
+    const next = mode === "cat" || mode === "lmr" ? mode : "off";
+    if (next === "cat") {
       this.toggleCatVision(true);
       return;
     }
-    if (next === 'lmr') {
+    if (next === "lmr") {
       this.toggleLmrVision(true);
       return;
     }
@@ -1624,7 +2098,9 @@ export class AppController {
   }
 
   isTitaniumThinkEntry(entry) {
-    return String(entry?.engine ?? '').toLowerCase().includes('titanium');
+    return String(entry?.engine ?? "")
+      .toLowerCase()
+      .includes("titanium");
   }
 
   ingestLmrSearchPayload(payload, positionKey = this.lmrPositionKey()) {
@@ -1644,7 +2120,7 @@ export class AppController {
     }
 
     const viz = buildLmrViz({
-      source: payload.live ? 'search-live' : 'search',
+      source: payload.live ? "search-live" : "search",
       searchDepth,
       depthLog,
       lmrProfile: payload.lmrProfile,
@@ -1674,7 +2150,8 @@ export class AppController {
       this.aiThinking &&
       this.thinkingPlayerType &&
       isTitaniumEngine(this.thinkingPlayerType, this.engineConfigs) &&
-      this.session.actions.length === positionKey.split('|').filter(Boolean).length;
+      this.session.actions.length ===
+        positionKey.split("|").filter(Boolean).length;
     if (thinkingHere) {
       this.lmrVizLive = { ...viz, moveIndex: new Map(viz.moveIndex) };
     }
@@ -1712,7 +2189,7 @@ export class AppController {
   }
 
   scheduleLmrRefresh() {
-    if (!this.settings.showLmrVision || this.settings.uiMode === 'replay') {
+    if (!this.settings.showLmrVision || this.settings.uiMode === "replay") {
       return;
     }
     this.refreshLmrShallow();
@@ -1722,10 +2199,14 @@ export class AppController {
     const posKey = this.lmrPositionKey();
     const timeSec = this.lmrTimeSecForPosition();
     const idDepth = this.lmrPlanDepthHint();
-    const lmrAggressionPercent = this.settings.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT;
+    const lmrAggressionPercent =
+      this.settings.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT;
     const pathBiasPercent = this.settings.pathBiasPercent ?? 0;
     const fetchKey = `${posKey}|${timeSec}|d${idDepth}|pb${pathBiasPercent}|la${lmrAggressionPercent}`;
-    if (fetchKey === this._lmrShallowKey && this.lmrShallowByPosition.has(posKey)) {
+    if (
+      fetchKey === this._lmrShallowKey &&
+      this.lmrShallowByPosition.has(posKey)
+    ) {
       return;
     }
     const seq = ++this._lmrFetchSeq;
@@ -1742,7 +2223,7 @@ export class AppController {
         return;
       }
       this._lmrShallowKey = fetchKey;
-      const shallow = buildLmrViz({ ...data, source: 'shallow' });
+      const shallow = buildLmrViz({ ...data, source: "shallow" });
       if (shallow) {
         this.lmrShallowByPosition.set(posKey, shallow);
       }
@@ -1776,7 +2257,7 @@ export class AppController {
   }
 
   catMovesKey() {
-    return this.session.actions.map((action) => toAlgebraic(action)).join('|');
+    return this.session.actions.map((action) => toAlgebraic(action)).join("|");
   }
 
   currentPositionKey() {
@@ -1814,11 +2295,16 @@ export class AppController {
         continue;
       }
       const engine = this.getEngineForSeat(seat);
-      if (typeof engine?.prewarm === 'function') {
+      if (typeof engine?.prewarm === "function") {
         const ai = this.settings.playerAiSettings[seat] ?? {};
-        const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
+        const mode = resolveTitaniumEngineMode(
+          ai,
+          playerType,
+          this.engineConfigs,
+        );
         const catLmrCeiling =
-          playerType === PlayerType.TitaniumV16 || playerType === PlayerType.TitaniumV17
+          playerType === PlayerType.TitaniumV16 ||
+          playerType === PlayerType.TitaniumV17
             ? resolveCatLmrCeiling(ai)
             : 800;
         const threads = resolveCores(ai);
@@ -1845,8 +2331,9 @@ export class AppController {
     if (this.legalityOracleState.ready) {
       return true;
     }
-    const message = this.legalityOracleState.error?.message
-      ?? 'Titanium legality oracle is not ready';
+    const message =
+      this.legalityOracleState.error?.message ??
+      "Titanium legality oracle is not ready";
     throw new Error(message);
   }
 
@@ -1868,7 +2355,7 @@ export class AppController {
   }
 
   scheduleCatRefresh() {
-    if (!this.settings.showCatVision || this.settings.uiMode === 'replay') {
+    if (!this.settings.showCatVision || this.settings.uiMode === "replay") {
       return;
     }
     const key = this.catMovesKey();
@@ -1884,9 +2371,11 @@ export class AppController {
     if (players.includes(PlayerType.Human)) {
       return;
     }
-    const titaniumSeat = (i) => isTitaniumEngine(players[i], this.engineConfigs);
+    const titaniumSeat = (i) =>
+      isTitaniumEngine(players[i], this.engineConfigs);
     const localAdversarySeat = (i) =>
-      players[i] === PlayerType.QuoridorV3 || players[i] === PlayerType.GorisansonMCTS;
+      players[i] === PlayerType.QuoridorV3 ||
+      players[i] === PlayerType.GorisansonMCTS;
     const isTiVsLocal =
       (titaniumSeat(0) && localAdversarySeat(1)) ||
       (localAdversarySeat(0) && titaniumSeat(1));
@@ -1920,6 +2409,8 @@ export class AppController {
     this.engineStatus = {};
     this.replay = null;
     this.moveThinkLog = [];
+    this._humanThinkStartedAt = null;
+    this._humanTimedOut = [false, false];
     this._illegalRetriesByPly = {};
     this.settingsChangelog = [];
     this._submittedFinishedGames.clear();
@@ -1933,10 +2424,11 @@ export class AppController {
     this.searchInfoBySeat = [null, null];
     this.catHintDismissed = false;
     this.showCatHint = false;
-    this.settings.uiMode = 'play';
+    this.settings.uiMode = "play";
     this.eval = { score: 0.5, p1: 0.5, pv: [] };
     this._syncAnalysisSessionActive();
     this._terminalOverlayDismissed = false;
+    this._gameHalted = false;
     this.session.reset();
     this.catViz = null;
     this._lmrDisplayViz = null;
@@ -1969,25 +2461,25 @@ export class AppController {
   }
 
   isFreePlayMode() {
-    return this.settings.uiMode === 'analysis';
+    return this.settings.uiMode === "analysis";
   }
 
   setUiMode(mode) {
     const prevMode = this.settings.uiMode;
     const actionsBeforeModeSwitch = [...this.session.actions];
     const replayFromCurrentGame =
-      mode === 'replay' &&
-      !this.replay &&
-      actionsBeforeModeSwitch.length > 0
+      mode === "replay" && !this.replay && actionsBeforeModeSwitch.length > 0
         ? {
             actions: actionsBeforeModeSwitch,
-            algebraic: actionsBeforeModeSwitch.map((action) => toAlgebraic(action)),
+            algebraic: actionsBeforeModeSwitch.map((action) =>
+              toAlgebraic(action),
+            ),
             index: actionsBeforeModeSwitch.length,
             code: encodeReplayFromActions(
               actionsBeforeModeSwitch,
               this.session.winner
                 ? {
-                    winner: this.session.winner === 1 ? 'white' : 'black',
+                    winner: this.session.winner === 1 ? "white" : "black",
                     plies: actionsBeforeModeSwitch.length,
                   }
                 : null,
@@ -1996,16 +2488,16 @@ export class AppController {
           }
         : null;
     this.settings.uiMode = mode;
-    if (prevMode === 'replay' && mode !== 'replay') {
+    if (prevMode === "replay" && mode !== "replay") {
       this._stopReviewAnalysis();
     }
-    if (mode === 'play' && prevMode !== 'play') {
+    if (mode === "play" && prevMode !== "play") {
       this.restorePersistedPlayMatchup();
     }
     // Analysis and Review are always Human vs Human -- evaluation comes from
     // the dedicated warm analysis session, never a per-seat AI. Play mode's
     // actual player/engine choices are preserved (see restorePersistedPlayMatchup above).
-    if (mode !== 'play' && prevMode === 'play') {
+    if (mode !== "play" && prevMode === "play") {
       this.applyAnalysisEvaluatorDefaults();
       // "Paused" means something different per mode (see _analysisShouldBeActive) --
       // a stale paused-in-Play flag must not silently deactivate the analysis
@@ -2016,14 +2508,14 @@ export class AppController {
       this.replay = replayFromCurrentGame;
       this.applyReplayIndex();
     }
-    if (mode === 'analysis') {
+    if (mode === "analysis") {
       this._moveRequestSeq += 1;
       this.replay = null;
       this.aiThinking = false;
       this.thinkingPlayerType = null;
       this.liveSearch = null;
     }
-    if (mode === 'replay' && this.replay) {
+    if (mode === "replay" && this.replay) {
       this.enginesPaused = false;
       this._startReviewAnalysis();
     }
@@ -2070,7 +2562,7 @@ export class AppController {
       const reachableRaw = data.reachable ?? [];
       const reachable =
         reachableRaw.length === 81
-          ? reachableRaw.map((v) => v === 1 || v === true || v === '1')
+          ? reachableRaw.map((v) => v === 1 || v === true || v === "1")
           : null;
       const walls = data.walls ?? [];
 
@@ -2086,7 +2578,9 @@ export class AppController {
         skippedSquares:
           data.skippedSquares ?? reachable?.filter((r) => !r).length ?? 0,
         skippedWallCount: walls.filter((w) => w.skip ?? w.pruned).length,
-        searchableWallCount: walls.filter((w) => w.search ?? !(w.skip ?? w.pruned)).length,
+        searchableWallCount: walls.filter(
+          (w) => w.search ?? !(w.skip ?? w.pruned),
+        ).length,
       };
       this._catMovesKey = movesKey;
       this.catVizError = null;
@@ -2111,7 +2605,7 @@ export class AppController {
     this._moveRequestSeq += 1;
     this._stopReviewAnalysis();
     this.replay = null;
-    this.settings.uiMode = 'play';
+    this.settings.uiMode = "play";
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.liveSearch = null;
@@ -2131,10 +2625,12 @@ export class AppController {
       actions,
       algebraic,
       index: actions.length,
-      code: trimmed.startsWith('tq1') ? trimmed : encodeReplayFromActions(actions, meta),
+      code: trimmed.startsWith("tq1")
+        ? trimmed
+        : encodeReplayFromActions(actions, meta),
       meta,
     };
-    this.settings.uiMode = 'replay';
+    this.settings.uiMode = "replay";
     this.applyAnalysisEvaluatorDefaults();
     this.enginesPaused = false;
     this.aiThinking = false;
@@ -2161,7 +2657,10 @@ export class AppController {
     if (!this.replay) {
       return;
     }
-    this.replay.index = Math.max(0, Math.min(index, this.replay.actions.length));
+    this.replay.index = Math.max(
+      0,
+      Math.min(index, this.replay.actions.length),
+    );
     this.applyReplayIndex();
     this.onChange?.();
   }
@@ -2179,7 +2678,8 @@ export class AppController {
       this.setReplayIndex(nextPly);
       return;
     }
-    const lineLength = this.session.lineActions?.().length ?? this.session.actions.length;
+    const lineLength =
+      this.session.lineActions?.().length ?? this.session.actions.length;
     if (this.aiThinking) {
       this._cancelActiveAiSearch();
     }
@@ -2193,7 +2693,7 @@ export class AppController {
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
     this.searchInfoBySeat = [null, null];
-    if (nextPly < lineLength && this.settings.uiMode === 'play') {
+    if (nextPly < lineLength && this.settings.uiMode === "play") {
       this.enginesPaused = true;
     }
     this.handleCatPositionChanged({ clearViz: true });
@@ -2255,13 +2755,45 @@ export class AppController {
 
     const freePlay = this.isFreePlayMode();
     const manualWhilePaused = this.enginesPaused;
-    if (!freePlay && !manualWhilePaused && !this.session.isHumanTurn(this.settings.players)) {
+    if (
+      !freePlay &&
+      !manualWhilePaused &&
+      !this.session.isHumanTurn(this.settings.players)
+    ) {
       return;
     }
+
+    const actingSeat = this.session.playerToMove - 1;
+    if (this._humanTimedOut?.[actingSeat]) {
+      return;
+    }
+    const humanThinkStarted = this._humanThinkStartedAt;
 
     const applied = this.session.applyAction(action);
     if (!applied) {
       return;
+    }
+
+    if (
+      this.settings.players[actingSeat] === PlayerType.Human &&
+      hasSeatClock(
+        PlayerType.Human,
+        this.engineConfigs,
+        this.settings.playerAiSettings[actingSeat],
+      )
+    ) {
+      const thinkMs =
+        humanThinkStarted != null
+          ? Math.round(performance.now() - humanThinkStarted)
+          : 0;
+      this._humanThinkStartedAt = null;
+      this.moveThinkLog.push({
+        ply: this.session.actions.length,
+        move: toAlgebraic(action),
+        engine: "Human",
+        thinkMs,
+        stoppedBy: "human",
+      });
     }
 
     this.handleCatPositionChanged();
@@ -2279,18 +2811,18 @@ export class AppController {
     if (actingSeat == null) {
       actingSeat = this.session.playerToMove === 2 ? 0 : 1;
     }
-    void this.syncRemoteEnginesAfterMove(action, actingSeat)
+    void this.syncEnginesAfterMove(action, actingSeat)
       .catch(async (err) => {
         if (gameGeneration !== this._gameGeneration) {
           return;
         }
-        console.error('Engine position sync failed after ply', err);
+        console.error("Engine position sync failed after ply", err);
         const positionKey = this.currentPositionKey();
         const moveHistory = this.session.actions;
         const diagnostic = buildDiagnosticContext({
           session: this.session,
           settings: this.settings,
-          reason: 'remote-sync-failure',
+          reason: "remote-sync-failure",
         });
         this._lastDiagnostic = diagnostic;
         const message = `${err?.message ?? String(err)}\n\n${diagnostic}`;
@@ -2304,24 +2836,29 @@ export class AppController {
             playerType,
             this.settings.playerAiSettings[seat],
           );
-          if (!engineEntry || engineEntry.backend !== EngineBackendKind.REMOTE_WS) {
+          if (
+            !engineEntry ||
+            engineEntry.backend !== EngineBackendKind.REMOTE_WS
+          ) {
             continue;
           }
           this.engineErrors[seat] = message;
-          this.engineStatus[seat] = 'error';
+          this.engineStatus[seat] = "error";
           const engine = this.getEngineForSeat(seat);
           if (engine?.markDesynced) {
             engine.markDesynced(message);
             recoveries.push(
-              engine.recoverFromDesync({
-                moveHistory,
-                gameSnapshot: this.session.getEngineSnapshot(),
-                isFreshGame: moveHistory.length === 0,
-                positionKey,
-              }).catch((resyncErr) => {
-                console.error('Remote resync failed', resyncErr);
-                throw resyncErr;
-              }),
+              engine
+                .recoverFromDesync({
+                  moveHistory,
+                  gameSnapshot: this.session.getEngineSnapshot(),
+                  isFreshGame: moveHistory.length === 0,
+                  positionKey,
+                })
+                .catch((resyncErr) => {
+                  console.error("Remote resync failed", resyncErr);
+                  throw resyncErr;
+                }),
             );
           }
         }
@@ -2331,7 +2868,7 @@ export class AppController {
             const engine = this.getEngineForSeat(seat);
             if (engine?.syncState === SyncState.SYNCED) {
               this.engineErrors[seat] = null;
-              this.engineStatus[seat] = 'idle';
+              this.engineStatus[seat] = "idle";
             }
           }
         }
@@ -2365,34 +2902,41 @@ export class AppController {
     const aiSettings = this.settings.playerAiSettings[seatIndex] ?? {};
     const tier = resolveAceTier(aiSettings.strengthLevel, playerType);
     const generation = aceGenerationFromPlayerType(playerType);
-    if (tier.kind.endsWith('-js')) {
+    if (tier.kind.endsWith("-js")) {
       if (generation === 13) return new AceV13JsEngineClient(config);
       return new AceV10JsEngineClient(config);
     }
-    return new AceRustWasmEngineClient({ ...config, engineMode: tier.engineMode });
+    return new AceRustWasmEngineClient({
+      ...config,
+      engineMode: tier.engineMode,
+    });
   }
 
   createEngineClient(config, seatIndex = 0) {
-    if (config.kind === 'local') {
+    if (config.kind === "local") {
       return new GorisansonEngineClient(config);
     }
-    if (config.kind === 'quoridor-v3') {
+    if (config.kind === "quoridor-v3") {
       return new QuoridorV3EngineClient(config);
     }
-    if (config.kind === 'zeroink') {
+    if (config.kind === "zeroink") {
       return new ZeroInkEngineClient(config);
     }
     if (
-      config.kind === 'ace-v8-family' ||
-      config.kind === 'ace-v10-family' ||
-      config.kind === 'ace-v13-family'
+      config.kind === "ace-v8-family" ||
+      config.kind === "ace-v10-family" ||
+      config.kind === "ace-v13-family"
     ) {
       return this.createAceClient(config, seatIndex);
     }
-    if (config.kind === 'titanium') {
+    if (config.kind === "titanium") {
       const ai = this.settings.playerAiSettings[seatIndex] ?? {};
       const playerType = this.settings.players[seatIndex];
-      const engineMode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
+      const engineMode = resolveTitaniumEngineMode(
+        ai,
+        playerType,
+        this.engineConfigs,
+      );
       const patched = {
         ...config,
         engineMode,
@@ -2432,20 +2976,26 @@ export class AppController {
     if (isAceFamily(playerType, this.engineConfigs)) {
       const tier = resolveAceTier(ai.strengthLevel, playerType);
       const generation = aceGenerationFromPlayerType(playerType);
-      const backend = tier.kind.endsWith('-js') ? 'js' : 'wasm';
+      const backend = tier.kind.endsWith("-js") ? "js" : "wasm";
       return `${playerType}|${backend}|${tier.engineMode}`;
     }
     if (isTitaniumEngine(playerType, this.engineConfigs)) {
-      const backend = HAS_NATIVE_TITANIUM_LAZY_SMP ? 'native' : 'wasm';
-      const mode = resolveTitaniumEngineMode(ai, playerType, this.engineConfigs);
-        const cat =
-        playerType === PlayerType.TitaniumV16 || playerType === PlayerType.TitaniumV17
+      const backend = HAS_NATIVE_TITANIUM_LAZY_SMP ? "native" : "wasm";
+      const mode = resolveTitaniumEngineMode(
+        ai,
+        playerType,
+        this.engineConfigs,
+      );
+      const cat =
+        playerType === PlayerType.TitaniumV16 ||
+        playerType === PlayerType.TitaniumV17
           ? `|cat${resolveCatLmrCeiling(ai)}`
-          : '';
+          : "";
       const cores = `|c${resolveCores(ai)}`;
       return `${playerType}|${backend}|${mode}${cat}${cores}`;
     }
-    const kind = getEngineConfig(playerType, this.engineConfigs)?.kind ?? playerType;
+    const kind =
+      getEngineConfig(playerType, this.engineConfigs)?.kind ?? playerType;
     return `${playerType}|${kind}`;
   }
 
@@ -2463,7 +3013,10 @@ export class AppController {
     const seatKey = this.engineSeatKey(seatIndex);
     const bindKey = this.engineBindKey(seatIndex);
     const cached = this.engines.get(seatKey);
-    if (cached && (cached.config?.key !== config.key || cached._bindKey !== bindKey)) {
+    if (
+      cached &&
+      (cached.config?.key !== config.key || cached._bindKey !== bindKey)
+    ) {
       cached.destroy?.();
       this.engines.delete(seatKey);
     }
@@ -2534,8 +3087,11 @@ export class AppController {
           const si = this.searchInfoBySeat[seatIndex];
           const liveDepthLog = si.depthLog ?? [];
           const deepLive = deepestDepthEntry(liveDepthLog);
-          const liveRootScore = scoreFromDepthLog(liveDepthLog, info.rootScore ?? this.liveSearch?.rootScore);
-          const livePv = deepLive?.pv ?? info.pv ?? this.liveSearch?.pv ?? '';
+          const liveRootScore = scoreFromDepthLog(
+            liveDepthLog,
+            info.rootScore ?? this.liveSearch?.rootScore,
+          );
+          const livePv = deepLive?.pv ?? info.pv ?? this.liveSearch?.pv ?? "";
           this.liveSearch = {
             playerType,
             seatIndex,
@@ -2545,26 +3101,31 @@ export class AppController {
             pv: livePv,
             simulations: si.simulations ?? 0,
             nodes: si.nodes ?? 0,
-            selectedWorkerNodes: info.selectedWorkerNodes ?? si.selectedWorkerNodes,
-            totalNodesAcrossWorkers: info.totalNodesAcrossWorkers ?? si.totalNodesAcrossWorkers,
+            selectedWorkerNodes:
+              info.selectedWorkerNodes ?? si.selectedWorkerNodes,
+            totalNodesAcrossWorkers:
+              info.totalNodesAcrossWorkers ?? si.totalNodesAcrossWorkers,
             nodeSource: info.nodeSource ?? si.nodeSource,
-            estimatedTotalNodes: info.estimatedTotalNodes ?? si.estimatedTotalNodes,
+            estimatedTotalNodes:
+              info.estimatedTotalNodes ?? si.estimatedTotalNodes,
             progress: info.progress,
             mode:
               info.mode ??
               info.stoppedBy ??
               (isTitaniumEngine(playerType, this.engineConfigs)
-                ? 'minimax'
+                ? "minimax"
                 : isAceFamily(playerType, this.engineConfigs)
                   ? resolveAceTier(
                       this.settings.playerAiSettings[seatIndex]?.strengthLevel,
                       playerType,
                     ).engineMode
-                  : 'mcts'),
+                  : "mcts"),
             searchDepth: info.searchDepth ?? this.liveSearch?.searchDepth,
             depthLog: liveDepthLog,
             rootWinRate:
-              info.rootWinRate != null ? info.rootWinRate : this.liveSearch?.rootWinRate,
+              info.rootWinRate != null
+                ? info.rootWinRate
+                : this.liveSearch?.rootWinRate,
             whiteDist: info.whiteDist ?? this.liveSearch?.whiteDist,
             blackDist: info.blackDist ?? this.liveSearch?.blackDist,
             rootMoves: siMerged?.rootMoves ?? this.liveSearch?.rootMoves,
@@ -2572,17 +3133,44 @@ export class AppController {
             lmrProfile: info.lmrProfile ?? this.liveSearch?.lmrProfile,
             lmrReSearches: info.lmrReSearches ?? this.liveSearch?.lmrReSearches,
             helperStarts: info.helperStarts ?? this.liveSearch?.helperStarts,
-            helperStartsTotal: info.helperStartsTotal ?? this.liveSearch?.helperStartsTotal,
-            requestedThreads: info.requestedThreads ?? this.liveSearch?.requestedThreads,
-            effectiveThreads: info.effectiveThreads ?? this.liveSearch?.effectiveThreads,
+            helperStartsTotal:
+              info.helperStartsTotal ?? this.liveSearch?.helperStartsTotal,
+            requestedThreads:
+              info.requestedThreads ?? this.liveSearch?.requestedThreads,
+            effectiveThreads:
+              info.effectiveThreads ?? this.liveSearch?.effectiveThreads,
             threaded: info.threaded ?? this.liveSearch?.threaded,
-            fallbackReason: info.fallbackReason ?? this.liveSearch?.fallbackReason,
+            fallbackReason:
+              info.fallbackReason ?? this.liveSearch?.fallbackReason,
             rootScore: liveRootScore,
             elapsedMs: info.elapsedMs ?? this.liveSearch?.elapsedMs,
-            rolloutVerdict: info.rolloutVerdict ?? this.liveSearch?.rolloutVerdict,
+            rolloutVerdict:
+              info.rolloutVerdict ?? this.liveSearch?.rolloutVerdict,
             rolloutVisits: info.rolloutVisits ?? this.liveSearch?.rolloutVisits,
             rolloutWins: info.rolloutWins ?? this.liveSearch?.rolloutWins,
+            wholeGameExpectedMovesLeft:
+              this._thinkAiSettings?.wholeGameExpectedMovesLeft ?? null,
+            wholeGameDistanceToWin:
+              this._thinkAiSettings?.wholeGameDistanceToWin ?? null,
+            wholeGameMoveBudgetSeconds:
+              this._thinkAiSettings?.wallClockSeconds ?? null,
           };
+          const clockRefreshed = this._refreshThinkClockFromSearch(
+            seatIndex,
+            info,
+            liveDepthLog,
+          );
+          if (clockRefreshed && this._thinkAiSettings) {
+            this.liveSearch = {
+              ...this.liveSearch,
+              wholeGameExpectedMovesLeft:
+                this._thinkAiSettings.wholeGameExpectedMovesLeft,
+              wholeGameDistanceToWin:
+                this._thinkAiSettings.wholeGameDistanceToWin,
+              wholeGameMoveBudgetSeconds:
+                this._thinkAiSettings.wallClockSeconds,
+            };
+          }
           const liveDepth =
             info.searchDepth ?? deepestDepthEntry(liveDepthLog)?.depth;
           const depthTick =
@@ -2599,7 +3187,8 @@ export class AppController {
                 searchDepth: liveDepth,
                 depthLog: liveDepthLog,
                 lmrProfile: info.lmrProfile ?? this.liveSearch.lmrProfile,
-                lmrReSearches: info.lmrReSearches ?? this.liveSearch.lmrReSearches,
+                lmrReSearches:
+                  info.lmrReSearches ?? this.liveSearch.lmrReSearches,
                 rootMoves: info.rootMoves ?? this.liveSearch.rootMoves,
               },
               this.lmrPositionKey(),
@@ -2612,7 +3201,12 @@ export class AppController {
           }
           return;
         }
-        if (info.progress !== undefined && info.p1 === undefined && !info.pv && !info.stoppedBy) {
+        if (
+          info.progress !== undefined &&
+          info.p1 === undefined &&
+          !info.pv &&
+          !info.stoppedBy
+        ) {
           return;
         }
         if (
@@ -2680,8 +3274,8 @@ export class AppController {
     return this.getEngineForSeat(this.seatIndexForPlayerType(playerType));
   }
 
-  /** Keep remote engine clients in sync after every ply (incremental makemove echo). */
-  async syncRemoteEnginesAfterMove(action, _actingSeat = null) {
+  /** Keep engine clients in sync after every ply (incremental makemove echo). */
+  async syncEnginesAfterMove(action, _actingSeat = null) {
     const positionKey = this.currentPositionKey();
     const historyLength = this.session.actions.length;
     const moveHistory = this.session.actions;
@@ -2695,7 +3289,7 @@ export class AppController {
         playerType,
         this.settings.playerAiSettings[seat],
       );
-      if (!engineEntry || engineEntry.backend !== EngineBackendKind.REMOTE_WS) {
+      if (!engineEntry) {
         continue;
       }
       const engine = this.getEngineForSeat(seat);
@@ -2712,6 +3306,11 @@ export class AppController {
     if (ops.length) {
       await Promise.all(ops);
     }
+  }
+
+  /** @deprecated alias — remote-only name kept for call sites being migrated */
+  async syncRemoteEnginesAfterMove(action, actingSeat = null) {
+    return this.syncEnginesAfterMove(action, actingSeat);
   }
 
   syncRemoteEngine(playerType) {
@@ -2761,10 +3360,11 @@ export class AppController {
   engineLabelForSeat(seatIndex) {
     const playerType = this.settings.players[seatIndex];
     if (!playerType || playerType === PlayerType.Human) {
-      return 'Human';
+      return "Human";
     }
     if (isAceFamily(playerType, this.engineConfigs)) {
-      const strength = this.settings.playerAiSettings[seatIndex]?.strengthLevel ?? 0;
+      const strength =
+        this.settings.playerAiSettings[seatIndex]?.strengthLevel ?? 0;
       return aceDisplayName(strength, playerType);
     }
     const config = getEngineConfig(playerType, this.engineConfigs);
@@ -2793,7 +3393,7 @@ export class AppController {
     }
     this._submittedFinishedGames.add(signature);
     void submitFinishedGame(payload).catch((err) => {
-      console.debug?.('finished-game training submit skipped', err);
+      console.debug?.("finished-game training submit skipped", err);
     });
   }
 
@@ -2828,9 +3428,9 @@ export class AppController {
 
   isActionLegal(action) {
     const label = this.session.actionToLabel(action);
-    return this.session.getSnapshot().validActions.some(
-      (mv) => this.session.actionToLabel(mv) === label,
-    );
+    return this.session
+      .getSnapshot()
+      .validActions.some((mv) => this.session.actionToLabel(mv) === label);
   }
 
   rejectIllegalEngineMove({
@@ -2845,9 +3445,12 @@ export class AppController {
   }) {
     const snapshot = this.session.getSnapshot();
     const suggested = this.session.actionToLabel(action);
-    const legal = snapshot.validActions.map((mv) => this.session.actionToLabel(mv));
+    const legal = snapshot.validActions.map((mv) =>
+      this.session.actionToLabel(mv),
+    );
     const ply = snapshot.actions.length + 1;
-    const position = this.session.actions.map((a) => toAlgebraic(a)).join(' ') || '(start)';
+    const position =
+      this.session.actions.map((a) => toAlgebraic(a)).join(" ") || "(start)";
     const retries = (this._illegalRetriesByPly[ply] ?? 0) + 1;
     this._illegalRetriesByPly[ply] = retries;
 
@@ -2865,11 +3468,11 @@ export class AppController {
       },
       move: suggested,
       decodedMove: suggested,
-      reason: rustError ? 'titanium-illegal' : 'canonical-illegal',
+      reason: rustError ? "titanium-illegal" : "canonical-illegal",
     });
     this._lastDiagnostic = diagnostic;
 
-    console.error('Engine produced illegal move', {
+    console.error("Engine produced illegal move", {
       playerType,
       seatIndex,
       suggested,
@@ -2887,7 +3490,7 @@ export class AppController {
       illegalDetail: diagnostic,
     };
     this.engineErrors[seatIndex] = `${illegalMsg}\n\n${diagnostic}`;
-    this.engineStatus[seatIndex] = 'error';
+    this.engineStatus[seatIndex] = "error";
 
     const budgetHint = describePlayerAiSettings(
       playerType,
@@ -2902,8 +3505,8 @@ export class AppController {
       budget: budgetHint,
       error: `${illegalMsg}\n\n${diagnostic}`,
       rejected: true,
-      legalSample: legal.slice(0, 12).join(' '),
-      stoppedBy: 'illegal',
+      legalSample: legal.slice(0, 12).join(" "),
+      stoppedBy: "illegal",
       thinkMs: resolveThinkMs(searchInfo ?? {}, this._thinkStartedAt),
       nodes: searchInfo?.nodes ?? searchInfo?.simulations ?? 0,
       depthLog: searchInfo?.depthLog ? [...searchInfo.depthLog] : [],
@@ -2916,6 +3519,7 @@ export class AppController {
     this.lmrVizLive = null;
     this._thinkStartedAt = null;
     this._thinkAiSettings = null;
+    this._thinkClockLastDepth = null;
 
     if (retries <= this._maxIllegalRetries) {
       const engine = this.getEngineForSeat(seatIndex);
@@ -2935,9 +3539,10 @@ export class AppController {
         engine: this.engineLabelForSeat(seatIndex),
         budget: budgetHint,
         note: `auto-retry ${retries}/${this._maxIllegalRetries} after illegal ${suggested}`,
-        stoppedBy: 'retry',
+        stoppedBy: "retry",
       });
-      this.engineErrors[seatIndex] = `${illegalMsg} — retrying (${retries}/${this._maxIllegalRetries})`;
+      this.engineErrors[seatIndex] =
+        `${illegalMsg} — retrying (${retries}/${this._maxIllegalRetries})`;
       this.onChange?.();
       queueMicrotask(() => {
         if (retryGen !== this._gameGeneration) {
@@ -2948,38 +3553,53 @@ export class AppController {
     } else {
       this.engineErrors[seatIndex] =
         `HALTED: illegal move ${suggested} on ply ${ply} after ${retries} attempts — fix engine or undo`;
+      this._haltGameOnEngineFailure(seatIndex);
       this.onChange?.();
     }
     return false;
+  }
+
+  _haltGameOnEngineFailure(failSeat) {
+    this._gameHalted = true;
+    this.enginesPaused = true;
+    this._cancelActiveAiSearch();
+    this.stopAllPonders();
+    if (failSeat >= 0) {
+      this.engineStatus[failSeat] = 'error';
+    }
   }
 
   recordEngineFailure(playerType, { ply, error, budget }) {
     if (isAbortError(error)) {
       return;
     }
-    const message = error?.message ?? String(error ?? 'Engine error');
-    const position = this.session.actions.map((a) => toAlgebraic(a)).join(' ') || '(start)';
+    const message = error?.message ?? String(error ?? "Engine error");
+    const position =
+      this.session.actions.map((a) => toAlgebraic(a)).join(" ") || "(start)";
     const legal = this.session
       .getSnapshot()
       .validActions.map((mv) => this.session.actionToLabel(mv))
       .slice(0, 24)
-      .join(' ');
+      .join(" ");
     const detail = `position="${position}" toMove=${this.session.playerToMove} legalSample=[${legal}]`;
-    const failSeat = this.thinkingSeatIndex ?? this.seatIndexForPlayerType(playerType);
+    const failSeat =
+      this.thinkingSeatIndex ?? this.seatIndexForPlayerType(playerType);
     const fullMessage = `${message} | ${detail}`;
-    console.error('Engine search failed', {
+    console.error("Engine search failed", {
       playerType,
       ply,
-      engine: failSeat >= 0 ? this.engineLabelForSeat(failSeat) : this.engineLabel(playerType),
+      engine:
+        failSeat >= 0
+          ? this.engineLabelForSeat(failSeat)
+          : this.engineLabel(playerType),
       message: fullMessage,
       stack: error?.stack,
     });
     if (failSeat >= 0) {
       this.engineErrors[failSeat] = fullMessage;
-    }
-    if (failSeat >= 0) {
       this.engineStatus[failSeat] = 'error';
     }
+    this._haltGameOnEngineFailure(failSeat);
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
@@ -2993,8 +3613,11 @@ export class AppController {
       ply,
       move: null,
       error: fullMessage,
-      stoppedBy: 'error',
-      engine: failSeat >= 0 ? this.engineLabelForSeat(failSeat) : this.engineLabel(playerType),
+      stoppedBy: "error",
+      engine:
+        failSeat >= 0
+          ? this.engineLabelForSeat(failSeat)
+          : this.engineLabel(playerType),
       depthLog: si.depthLog,
       searchDepth: si.searchDepth,
       whiteDist: si.whiteDist,
@@ -3006,10 +3629,13 @@ export class AppController {
     this.moveThinkLog.push({
       ply,
       move: null,
-      engine: failSeat >= 0 ? this.engineLabelForSeat(failSeat) : this.engineLabel(playerType),
-      budget: budget ?? '',
+      engine:
+        failSeat >= 0
+          ? this.engineLabelForSeat(failSeat)
+          : this.engineLabel(playerType),
+      budget: budget ?? "",
       error: fullMessage,
-      stoppedBy: 'error',
+      stoppedBy: "error",
       nodes: si.nodes ?? si.simulations ?? 0,
       searchDepth: si.searchDepth,
       whiteDist: si.whiteDist,
@@ -3046,7 +3672,10 @@ export class AppController {
     const prior = this._engineApplyChain;
     let releaseApply;
     this._engineApplyChain = prior.then(
-      () => new Promise((resolve) => { releaseApply = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          releaseApply = resolve;
+        }),
     );
     await prior;
     try {
@@ -3080,7 +3709,7 @@ export class AppController {
       this._thinkAiSettings ?? this.settings.playerAiSettings[seatIndex] ?? {};
     const engineEntry = getEngineEntryForPlayer(playerType, aiSettings);
 
-    logAiRequestEvent('AI_FINAL_RESULT_RECEIVED', {
+    logAiRequestEvent("AI_FINAL_RESULT_RECEIVED", {
       requestSeq,
       gameGeneration,
       seatIndex,
@@ -3088,9 +3717,10 @@ export class AppController {
       engineId: playerType,
       backend: engineEntry?.backend,
       positionKey: requestPositionKey ?? currentPositionKey,
-      connectionEpoch: engineEntry?.backend === EngineBackendKind.REMOTE_WS
-        ? connectionEpoch
-        : undefined,
+      connectionEpoch:
+        engineEntry?.backend === EngineBackendKind.REMOTE_WS
+          ? connectionEpoch
+          : undefined,
       raw: moveKey,
     });
 
@@ -3113,7 +3743,7 @@ export class AppController {
         sideToMove: current.playerToMove,
         engineId: currentPlayerType,
         connectionEpoch: engine?.connectionEpoch,
-        syncState: engine?.syncState ?? 'SYNCED',
+        syncState: engine?.syncState ?? "SYNCED",
       },
     });
 
@@ -3122,13 +3752,13 @@ export class AppController {
       current.playerToMove !== requestPlayerToMove;
 
     if (!identity.ok || plyMismatch) {
-      logAiRequestEvent('AI_IDENTITY_VALIDATED', {
+      logAiRequestEvent("AI_IDENTITY_VALIDATED", {
         requestSeq,
         ok: false,
-        reason: plyMismatch ? 'stale-ply' : identity.reason,
+        reason: plyMismatch ? "stale-ply" : identity.reason,
         decodedMove: moveKey,
       });
-      console.warn('Ignoring stale engine move response', {
+      console.warn("Ignoring stale engine move response", {
         playerType,
         seatIndex,
         requestSeq,
@@ -3142,16 +3772,18 @@ export class AppController {
         this.onChange?.();
         queueMicrotask(() => this.maybeRequestAiMove());
       }
-      return 'stale';
+      return "stale";
     }
 
-    logAiRequestEvent('AI_IDENTITY_VALIDATED', {
+    logAiRequestEvent("AI_IDENTITY_VALIDATED", {
       requestSeq,
       ok: true,
       decodedMove: moveKey,
     });
 
-    const siBeforeMove = finalizeSearchInfo(this.searchInfoBySeat[seatIndex] ?? {});
+    const siBeforeMove = finalizeSearchInfo(
+      this.searchInfoBySeat[seatIndex] ?? {},
+    );
 
     const canonicalLegalMoves = current.validActions.map((a) => toAlgebraic(a));
     const historyTokens = this.session.actions.map((a) => toAlgebraic(a));
@@ -3177,7 +3809,7 @@ export class AppController {
     });
 
     if (!identityGate.ok) {
-      logAiRequestEvent('AI_LEGALITY_VALIDATED', {
+      logAiRequestEvent("AI_LEGALITY_VALIDATED", {
         requestSeq,
         ok: false,
         reason: identityGate.reason,
@@ -3190,7 +3822,7 @@ export class AppController {
         this.liveSearch = null;
       }
       this.engineErrors[seatIndex] = `REJECTED ${identityGate.reason}`;
-      this.engineStatus[seatIndex] = 'error';
+      this.engineStatus[seatIndex] = "error";
       this.onChange?.();
       return identityGate.reason;
     }
@@ -3206,7 +3838,7 @@ export class AppController {
     });
 
     if (!legality.ok) {
-      logAiRequestEvent('AI_LEGALITY_VALIDATED', {
+      logAiRequestEvent("AI_LEGALITY_VALIDATED", {
         requestSeq,
         ok: false,
         reason: legality.reason,
@@ -3228,7 +3860,7 @@ export class AppController {
         oracleState: this.legalityOracleState,
       });
       this._lastDiagnostic = diagnostic;
-      console.warn('Engine move rejected at gate', legality.reason, diagnostic);
+      console.warn("Engine move rejected at gate", legality.reason, diagnostic);
       if (this.thinkingSeatIndex === seatIndex) {
         this.aiThinking = false;
         this.thinkingPlayerType = null;
@@ -3236,18 +3868,18 @@ export class AppController {
         this.liveSearch = null;
       }
       const oracleMsg =
-        legality.reason === 'titanium-oracle-unavailable'
-          ? `Local legality checker unavailable: ${legality.titanium?.error?.message ?? 'unknown error'}`
-          : legality.reason === 'titanium-position-invalid'
-            ? `Titanium rejected position: ${legality.titanium?.error?.message ?? 'invalid'}`
+        legality.reason === "titanium-oracle-unavailable"
+          ? `Local legality checker unavailable: ${legality.titanium?.error?.message ?? "unknown error"}`
+          : legality.reason === "titanium-position-invalid"
+            ? `Titanium rejected position: ${legality.titanium?.error?.message ?? "invalid"}`
             : `REJECTED ${legality.reason}`;
       this.engineErrors[seatIndex] = `${oracleMsg}\n\n${diagnostic}`;
-      this.engineStatus[seatIndex] = 'error';
+      this.engineStatus[seatIndex] = "error";
       this.onChange?.();
       return legality.reason;
     }
 
-    logAiRequestEvent('AI_LEGALITY_VALIDATED', {
+    logAiRequestEvent("AI_LEGALITY_VALIDATED", {
       requestSeq,
       ok: true,
       decodedMove: moveKey,
@@ -3265,7 +3897,9 @@ export class AppController {
       });
     }
 
-    const posKeyBeforeMove = this.session.actions.map((a) => toAlgebraic(a)).join('|');
+    const posKeyBeforeMove = this.session.actions
+      .map((a) => toAlgebraic(a))
+      .join("|");
     if (
       isTitaniumEngine(playerType, this.engineConfigs) &&
       siBeforeMove.rootMoves?.length
@@ -3312,8 +3946,9 @@ export class AppController {
           reason: wallInv.reason,
         });
         this._lastDiagnostic = diagnostic;
-        this.engineErrors[seatIndex] = `REJECTED ${wallInv.reason}\n\n${diagnostic}`;
-        this.engineStatus[seatIndex] = 'error';
+        this.engineErrors[seatIndex] =
+          `REJECTED ${wallInv.reason}\n\n${diagnostic}`;
+        this.engineStatus[seatIndex] = "error";
         this.aiThinking = false;
         this.onChange?.();
         return wallInv.reason;
@@ -3329,12 +3964,27 @@ export class AppController {
       const si = siBeforeMove;
       // Game clocks use elapsed wall time, including worker and message
       // overhead—not the engine's self-reported search-only duration.
-      const thinkMs = this._thinkStartedAt != null
-        ? Math.round(performance.now() - this._thinkStartedAt)
-        : resolveThinkMs(si, null);
+      const wallThink =
+        this._thinkStartedAt != null
+          ? Math.round(performance.now() - this._thinkStartedAt)
+          : resolveThinkMs(si, null);
+      const budgetMs = Math.round(
+        (this._thinkAiSettings?.wallClockSeconds ?? 0) * 1000,
+      );
+      const handoffMs = this._thinkAiSettings?.wholeGameHandoffReserveMs ?? 0;
+      const usesWholeGameClock = this._seatUsesWholeGameClock(seatIndex);
+      // Whole-game bank always deducts real wall time. Move budget only caps
+      // WASM movetime — capping the charge too made the clock jump upward.
+      const thinkMs = chargeThinkMsForSeat({
+        wallThinkMs: wallThink,
+        moveBudgetMs: budgetMs,
+        handoffMs,
+        usesWholeGameClock,
+      });
       this._thinkStartedAt = null;
       const moveLabel = this.session.actionToLabel(action);
       this._thinkAiSettings = null;
+      this._thinkClockLastDepth = null;
       this.snapshotCompletedThinkSeat(seatIndex, {
         move: moveLabel,
         ply: plyNum,
@@ -3354,7 +4004,7 @@ export class AppController {
         estimatedTotalNodes: false,
         progress: si.progress,
         rootWinRate: si.rootWinRate,
-        stoppedBy: si.stoppedBy ?? si.mode ?? '?',
+        stoppedBy: si.stoppedBy ?? si.mode ?? "?",
         rootMoves: si.rootMoves,
         lmrProfile: si.lmrProfile,
         lmrReSearches: si.lmrReSearches,
@@ -3372,7 +4022,7 @@ export class AppController {
         move: moveLabel,
         engine: completedEngineLabel,
         budget: budgetHint,
-        stoppedBy: si.stoppedBy ?? si.mode ?? '?',
+        stoppedBy: si.stoppedBy ?? si.mode ?? "?",
         nodes: si.nodes ?? si.simulations ?? 0,
         searchDepth: si.searchDepth,
         whiteDist: si.whiteDist,
@@ -3397,7 +4047,7 @@ export class AppController {
       this._cancelActiveAiSearch();
       this.stopAllPonders();
       this.engineErrors[seatIndex] = null;
-      this.engineStatus[seatIndex] = 'idle';
+      this.engineStatus[seatIndex] = "idle";
       this.onChange?.();
       return true;
     }
@@ -3414,8 +4064,8 @@ export class AppController {
     }
 
     this.engineErrors[seatIndex] = null;
-    this.engineStatus[seatIndex] = 'idle';
-    logAiRequestEvent('AI_MOVE_COMMITTED', {
+    this.engineStatus[seatIndex] = "idle";
+    logAiRequestEvent("AI_MOVE_COMMITTED", {
       requestSeq,
       gameGeneration,
       seatIndex,
@@ -3423,12 +4073,16 @@ export class AppController {
     });
     this.onChange?.();
     this.continueAiAfterEngineSync(action, seatIndex);
-    logAiRequestEvent('AI_REQUEST_FINALLY', { requestSeq, seatIndex });
+    logAiRequestEvent("AI_REQUEST_FINALLY", { requestSeq, seatIndex });
     return true;
   }
 
   maybeRequestAiMove() {
     if (!this.startupConfirmed) {
+      return;
+    }
+    if (this._gameHalted) {
+      this.aiThinking = false;
       return;
     }
     if (this.enginesPaused) {
@@ -3453,6 +4107,11 @@ export class AppController {
     const playerType = this.settings.players[seatIndex];
     if (playerType === PlayerType.Human) {
       this.aiThinking = false;
+      this._syncHumanClockTurn();
+      return;
+    }
+    if (this.engineErrors[seatIndex]) {
+      this.aiThinking = false;
       return;
     }
 
@@ -3467,7 +4126,9 @@ export class AppController {
     this._activeSearchSeq = requestSeq;
     const requestPly = requestSnapshot.actions.length;
     const requestPlayerToMove = requestSnapshot.playerToMove;
-    const requestHistory = this.session.actions.map((a) => toAlgebraic(a)).join(' ');
+    const requestHistory = this.session.actions
+      .map((a) => toAlgebraic(a))
+      .join(" ");
     const requestPositionKey = this.currentPositionKey();
 
     const playerIndex = requestPlayerToMove - 1;
@@ -3482,7 +4143,7 @@ export class AppController {
       return;
     }
 
-    logAiRequestEvent('AI_REQUEST_ENTER', {
+    logAiRequestEvent("AI_REQUEST_ENTER", {
       requestSeq,
       gameGeneration: this._gameGeneration,
       seatIndex,
@@ -3499,20 +4160,29 @@ export class AppController {
     // free. The Titanium worker starts this clock immediately before go().
     this._thinkStartedAt = null;
     this.engineErrors[seatIndex] = null;
-    this.engineStatus[seatIndex] = 'searching';
+    this.engineStatus[seatIndex] = "searching";
+    const clockSearchHint = clockSearchHintFromState({
+      positionKey: requestPositionKey,
+      seatIndex,
+      liveSearch: this.liveSearch,
+      searchInfo: this.searchInfoBySeat[seatIndex],
+    });
     this.searchInfoBySeat[seatIndex] = { depthLog: [] };
     this.liveSearch = {
       playerType,
       seatIndex,
       playerLabel: this.engineLabelForSeat(seatIndex),
-      mode: 'searching',
+      mode: "searching",
       depthLog: [],
       requestSeq,
       positionKey: requestPositionKey,
     };
     this._syncAnalysisSessionActive();
     this.lmrVizLive = null;
-    if (this.settings.showLmrVision && isTitaniumEngine(playerType, this.engineConfigs)) {
+    if (
+      this.settings.showLmrVision &&
+      isTitaniumEngine(playerType, this.engineConfigs)
+    ) {
       this.scheduleLmrRefresh();
     }
     this.onChange?.();
@@ -3520,11 +4190,32 @@ export class AppController {
     const gameGeneration = this._gameGeneration;
     const moveHistory = this.session.actions;
     const isFreshGame = moveHistory.length === 0;
-    const requestAiSettings = this._managedClockSettings(seatIndex, aiSettings);
+    const requestAiSettings = this._managedClockSettings(
+      seatIndex,
+      aiSettings,
+      clockSearchHint,
+    );
     this._thinkAiSettings = { ...requestAiSettings };
-    if (aiSettings?.wholeGameTime !== false && requestAiSettings.wholeGameRemainingSeconds <= 0) {
-      this._flagEngineOnTime(seatIndex);
-      return;
+    this._thinkClockLastDepth = null;
+    this.liveSearch = {
+      ...this.liveSearch,
+      wholeGameExpectedMovesLeft:
+        requestAiSettings.wholeGameExpectedMovesLeft ?? null,
+      wholeGameDistanceToWin:
+        requestAiSettings.wholeGameDistanceToWin ?? null,
+      wholeGameMoveBudgetSeconds: requestAiSettings.wallClockSeconds ?? null,
+    };
+    if (this._seatUsesWholeGameClock(seatIndex)) {
+      const remMs = Math.round(
+        (requestAiSettings.wholeGameRemainingSeconds ?? 0) * 1000,
+      );
+      const budgetMs = Math.round(
+        (requestAiSettings.wallClockSeconds ?? 0) * 1000,
+      );
+      if (remMs <= 0 && budgetMs <= 0) {
+        this._flagEngineOnTime(seatIndex);
+        return;
+      }
     }
 
     if (this._activeAiAbort) {
@@ -3534,13 +4225,19 @@ export class AppController {
     this._activeAiAbort = abortController;
     const capturedSignal = abortController.signal;
 
-    logAiRequestEvent('AI_CONTROLLER_FOUND', {
+    logAiRequestEvent("AI_CONTROLLER_FOUND", {
       requestSeq,
       engineId: playerType,
       backend: engineEntry.backend,
     });
-    logAiRequestEvent('AI_BACKEND_SELECTED', { requestSeq, backend: engineEntry.backend });
-    logAiRequestEvent('AI_REQUEST_STARTED', { requestSeq, positionKey: requestPositionKey });
+    logAiRequestEvent("AI_BACKEND_SELECTED", {
+      requestSeq,
+      backend: engineEntry.backend,
+    });
+    logAiRequestEvent("AI_REQUEST_STARTED", {
+      requestSeq,
+      positionKey: requestPositionKey,
+    });
 
     engine.onBestMove = (action, _raw, meta) =>
       resolveOnBestMoveResult(
@@ -3568,7 +4265,10 @@ export class AppController {
       if (gameGeneration !== this._gameGeneration) {
         return;
       }
-      if (requestSeq !== this._moveRequestSeq || this.thinkingSeatIndex !== seatIndex) {
+      if (
+        requestSeq !== this._moveRequestSeq ||
+        this.thinkingSeatIndex !== seatIndex
+      ) {
         return;
       }
       if (isAbortError(err)) {
@@ -3641,7 +4341,6 @@ export class AppController {
           ),
         });
         this.onChange?.();
-        queueMicrotask(() => this.maybeRequestAiMove());
       }
     });
   }
@@ -3656,12 +4355,15 @@ export class AppController {
       for (let seat = 0; seat < 2; seat++) {
         const playerType = normalizePlayerType(players[seat]);
         this.settings.players[seat] = playerType;
-        if (playerType !== PlayerType.Human && playerAiSettings && playerAiSettings[seat]) {
-          this.settings.playerAiSettings[seat] = Object.assign({}, playerAiSettings[seat]);
+        if (playerAiSettings?.[seat]) {
+          this.settings.playerAiSettings[seat] = Object.assign(
+            {},
+            playerAiSettings[seat],
+          );
           const memory = this.settings.playerAiSettingsMemory[seat] || {};
           memory[playerType] = Object.assign({}, playerAiSettings[seat]);
           this.settings.playerAiSettingsMemory[seat] = memory;
-        } else if (playerType !== PlayerType.Human) {
+        } else {
           this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
         }
       }
@@ -3688,7 +4390,9 @@ export class AppController {
     if (!players || !players.length) return;
     this._cancelActiveAiSearch();
     for (let seat = 0; seat < 2; seat++) {
-      const playerType = normalizePlayerType(players[seat] || this.settings.players[seat]);
+      const playerType = normalizePlayerType(
+        players[seat] || this.settings.players[seat],
+      );
       const prevType = this.settings.players[seat];
       const prevAi = { ...(this.settings.playerAiSettings[seat] ?? {}) };
       this.settings.players[seat] = playerType;
@@ -3696,12 +4400,15 @@ export class AppController {
         this._moveRequestSeq += 1;
         this.destroyEngineForSeat(seat);
       }
-      if (playerType !== PlayerType.Human && playerAiSettings && playerAiSettings[seat]) {
-        this.settings.playerAiSettings[seat] = Object.assign({}, playerAiSettings[seat]);
+      if (playerAiSettings?.[seat]) {
+        this.settings.playerAiSettings[seat] = Object.assign(
+          {},
+          playerAiSettings[seat],
+        );
         const memory = this.settings.playerAiSettingsMemory[seat] || {};
         memory[playerType] = Object.assign({}, playerAiSettings[seat]);
         this.settings.playerAiSettingsMemory[seat] = memory;
-      } else if (playerType !== PlayerType.Human) {
+      } else {
         this.ensurePlayerAiSettingsSlot(seat + 1, playerType);
       }
       const nextAi = this.settings.playerAiSettings[seat] ?? {};
@@ -3741,7 +4448,9 @@ export class AppController {
           depthLog: [...(this.liveSearch.depthLog ?? [])],
         }
       : null;
-    const validKeys = new Set(snapshot.validActions.map((mv) => toAlgebraic(mv)));
+    const validKeys = new Set(
+      snapshot.validActions.map((mv) => toAlgebraic(mv)),
+    );
 
     const stateForCheck = {
       aiThinking: true,
@@ -3783,7 +4492,9 @@ export class AppController {
     const playerType = this.settings.players[seatIndex];
     const requestPly = snapshot.actions.length;
     const requestPlayerToMove = snapshot.playerToMove;
-    const requestHistory = snapshot.actions.map((a) => toAlgebraic(a)).join(' ');
+    const requestHistory = snapshot.actions
+      .map((a) => toAlgebraic(a))
+      .join(" ");
     const requestPositionKey = this.currentPositionKey();
     const gameGeneration = this._gameGeneration;
     const engine = this.getEngineForSeat(seatIndex);
@@ -3798,11 +4509,29 @@ export class AppController {
         }
         await this._stopSeatEngineSearch(seatIndex);
 
+        if (engine?.echoCommittedMove) {
+          try {
+            await engine.echoCommittedMove(
+              action,
+              requestPositionKey,
+              requestPly + 1,
+              [...snapshot.actions, action],
+            );
+          } catch (err) {
+            console.warn(
+              "Play now engine echo failed; next search will resync",
+              err,
+            );
+          }
+        } else if (engine?.makeMoves) {
+          engine.makeMoves([action]);
+        }
+
         const si = this.searchInfoBySeat[seatIndex] ?? {};
         this.lastThinkBySeat[seatIndex] = buildThinkSeatSnapshot({
           engine: this.engineLabelForSeat(seatIndex),
           live: false,
-          stoppedBy: 'time',
+          stoppedBy: "time",
           depthLog: si.depthLog ?? [],
           searchDepth: si.searchDepth,
           whiteDist: si.whiteDist,
@@ -3811,12 +4540,12 @@ export class AppController {
           nodes: si.nodes,
           simulations: si.simulations,
         });
-        this.searchInfoBySeat[seatIndex] = { ...si, stoppedBy: 'time' };
+        this.searchInfoBySeat[seatIndex] = { ...si, stoppedBy: "time" };
         this.aiThinking = false;
         this.thinkingPlayerType = null;
         this.thinkingSeatIndex = null;
         this.liveSearch = null;
-        this.engineStatus[seatIndex] = 'idle';
+        this.engineStatus[seatIndex] = "idle";
         this.onChange?.();
 
         const result = await this.applyEngineMove({
@@ -3834,9 +4563,11 @@ export class AppController {
         });
 
         if (result !== true) {
-          const reason = typeof result === 'string' ? result : 'play-now-failed';
-          this.engineErrors[seatIndex] = `Play now failed (${reason}) — search cancelled`;
-          this.engineStatus[seatIndex] = 'error';
+          const reason =
+            typeof result === "string" ? result : "play-now-failed";
+          this.engineErrors[seatIndex] =
+            `Play now failed (${reason}) — search cancelled`;
+          this.engineStatus[seatIndex] = "error";
           this.onChange?.();
           queueMicrotask(() => this.maybeRequestAiMove());
         }
@@ -3858,10 +4589,16 @@ export class AppController {
       const token = tokens[i];
       try {
         const action = parseAlgebraic(token);
-        if (!action) return { error: 'Could not parse move: ' + token };
+        if (!action) return { error: "Could not parse move: " + token };
         actions.push(action);
       } catch (err) {
-        return { error: 'Invalid move "' + token + '": ' + (err && err.message ? err.message : err) };
+        return {
+          error:
+            'Invalid move "' +
+            token +
+            '": ' +
+            (err && err.message ? err.message : err),
+        };
       }
     }
     try {
@@ -3877,7 +4614,7 @@ export class AppController {
       this.engineStatus = {};
       this.replay = null;
       this.moveThinkLog = [];
-      this.settings.uiMode = 'play';
+      this.settings.uiMode = "play";
       this._syncAnalysisSessionActive();
       this.session.rebuildFromActions(actions);
       this.handleCatPositionChanged();
@@ -3886,7 +4623,10 @@ export class AppController {
       this.maybeRequestAiMove();
       return null;
     } catch (err) {
-      return { error: 'Failed to apply moves: ' + (err && err.message ? err.message : err) };
+      return {
+        error:
+          "Failed to apply moves: " + (err && err.message ? err.message : err),
+      };
     }
   }
 }

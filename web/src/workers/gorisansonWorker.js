@@ -149,6 +149,27 @@ const bootstrap = new Function(
     }
   }
 
+  function mctsMainLinePv(mcts, maxPlies) {
+    const moves = [];
+    let node = mcts.root;
+    for (let i = 0; i < (maxPlies || 48); i++) {
+      if (!node?.children?.length) {
+        break;
+      }
+      const best = node.maxSimsChild;
+      if (!best?.move) {
+        break;
+      }
+      const algebraic = moveToAlgebraicSafe(best.move);
+      if (!algebraic) {
+        break;
+      }
+      moves.push(algebraic);
+      node = best;
+    }
+    return moves.join(' ');
+  }
+
   function snapshotMctsRoot(mcts) {
     const children = mcts.root.children;
     if (!children.length) {
@@ -255,12 +276,23 @@ const bootstrap = new Function(
         const elapsed = performance.now() - started;
         const snap = snapshotMctsRoot(mcts);
         const dist = pathDistances(game);
+        const pv = mctsMainLinePv(mcts);
+        const bestWr = snap.rootWinRate;
         postMessage({
           type: 'progress',
           value: Math.min(0.99, elapsed / timeMs),
           simulations,
           ...snap,
           ...dist,
+          pv,
+          depthLog: pv
+            ? [{
+                depth: 1,
+                nodes: simulations,
+                score: bestWr != null ? Math.round(bestWr * 100) : null,
+                pv,
+              }]
+            : [],
         });
       }
     }
@@ -276,7 +308,24 @@ const bootstrap = new Function(
     }
     const snap = snapshotMctsRoot(mcts);
     const dist = pathDistances(game);
-    return { move, simulations, stoppedBy, ...snap, ...dist };
+    const pv = mctsMainLinePv(mcts);
+    const bestWr = snap.rootWinRate;
+    return {
+      move,
+      simulations,
+      stoppedBy,
+      ...snap,
+      ...dist,
+      pv,
+      depthLog: pv
+        ? [{
+            depth: 1,
+            nodes: simulations,
+            score: bestWr != null ? Math.round(bestWr * 100) : null,
+            pv,
+          }]
+        : [],
+    };
   }
 
   return { Game, AI, searchForTime };

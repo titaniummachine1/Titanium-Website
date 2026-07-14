@@ -5,6 +5,7 @@
  */
 
 import { toAlgebraic } from '../lib/gameLogic.js';
+import { formatGameEndHeadline } from '../lib/gameEndMessage.js';
 import { openPlayerDialog } from './playerDialog.js';
 import { openLoadNotationDialog } from './gameControls.js';
 
@@ -117,10 +118,9 @@ function renderMovesCard(state) {
       ).join('');
 
   let statusHtml = '';
-  if (state.winner) {
-    statusHtml = `<p class="moves-card__result">${state.winner === 1 ? 'White' : 'Black'} wins</p>`;
-  } else if (state.isDraw) {
-    statusHtml = '<p class="moves-card__result">Draw</p>';
+  const headline = formatGameEndHeadline(state);
+  if (headline) {
+    statusHtml = `<p class="moves-card__result">${escHtml(headline)}</p>`;
   }
 
   const errors = Object.entries(state.engineErrors ?? {})

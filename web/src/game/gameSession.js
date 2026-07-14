@@ -32,6 +32,7 @@ export class GameSession {
     this.wallsByPlayer = [];
     this.winner = null;
     this.isDraw = false;
+    this.endReason = null;
     this.positionKeys = [this.board.positionKey()];
     this.lastAction = null;
     this.historyIndex = null;
@@ -61,6 +62,7 @@ export class GameSession {
       wallsByPlayer: [...this.wallsByPlayer],
       winner: this.winner,
       isDraw: this.isDraw,
+      endReason: this.endReason,
       lastAction: this.lastAction,
       playerToMove: this.board.playerToMove(),
       playerPositions: this.board._playerPositions.map((coordinate) => ({ ...coordinate })),
@@ -144,6 +146,7 @@ export class GameSession {
     const terminal = this.board.terminal();
     if (terminal.isTerminal) {
       this.winner = terminal.playerNum;
+      this.endReason = 'goal';
     } else {
       this.recordPositionKey();
     }
@@ -157,6 +160,7 @@ export class GameSession {
     this.positionKeys.push(key);
     if (this.positionKeys.filter((k) => k === key).length >= 3) {
       this.isDraw = true;
+      this.endReason = 'repetition';
     }
   }
 
@@ -193,6 +197,7 @@ export class GameSession {
       return false;
     }
     this.winner = playerNum === 1 ? 2 : 1;
+    this.endReason = 'time';
     this.lastAction = null;
     this.notify();
     return true;
@@ -228,6 +233,7 @@ export class GameSession {
     this.wallsByPlayer = [];
     this.winner = null;
     this.isDraw = false;
+    this.endReason = null;
     this.positionKeys = [this.board.positionKey()];
     this.lastAction = null;
     this.futureActions = preserveFuture ? savedFuture : [];
@@ -266,6 +272,7 @@ export class GameSession {
       const terminal = this.board.terminal();
       if (terminal.isTerminal) {
         this.winner = terminal.playerNum;
+        this.endReason = 'goal';
         break;
       }
       this.recordPositionKey();

@@ -4,7 +4,11 @@
  */
 
 import { parseAlgebraic, toAlgebraic, isWallAction } from '../lib/gameLogic.js';
-import { playerColorName } from '../lib/playerColors.js';
+import {
+  formatGameEndHeadline,
+  terminalOverlayShowsCopyLogs,
+} from '../lib/gameEndMessage.js';
+import { formatLogsText } from './gameControls.js';
 import {
   normalizeGhostKey,
   pvFirstMoveFromLiveSearch,
@@ -854,18 +858,73 @@ function syncWallRack(dom, state, controller) {
   bottomSection.replaceChildren(renderWallMarks(1, wallsRemaining[0], visible, controller));
 }
 
-function renderTerminalOverlay(message, controller) {
+function copyTextToClipboard(text, onCopied) {
+  const flash = () => {
+    onCopied?.();
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(flash, () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      } catch {
+        /* clipboard unavailable */
+      }
+      flash();
+    });
+  } else {
+    flash();
+  }
+}
+
+function renderTerminalOverlay(state, controller) {
+  const message = formatGameEndHeadline(state);
+  const showCopyLogs = terminalOverlayShowsCopyLogs(state);
   const banner = document.createElement('div');
   banner.className = 'ace-terminal-overlay';
   banner.setAttribute('role', 'dialog');
   banner.setAttribute('aria-modal', 'true');
-  banner.innerHTML =
-    `<span>${message}</span>` +
-    '<button type="button" class="btn btn--small ace-terminal-overlay__close">New game</button>';
-  banner.querySelector('button').addEventListener('click', () => {
+
+  const messageEl = document.createElement('span');
+  messageEl.className = 'ace-terminal-overlay__message';
+  messageEl.textContent = message;
+
+  const actions = document.createElement('div');
+  actions.className = 'ace-terminal-overlay__actions';
+  if (showCopyLogs) {
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn btn--small ace-terminal-overlay__copy';
+    copyBtn.dataset.action = 'copy-logs';
+    copyBtn.textContent = 'Copy logs';
+    copyBtn.addEventListener('click', () => {
+      const text = formatLogsText(state);
+      copyTextToClipboard(text, () => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy logs';
+        }, 1500);
+      });
+    });
+    actions.appendChild(copyBtn);
+  }
+  const newGameBtn = document.createElement('button');
+  newGameBtn.type = 'button';
+  newGameBtn.className = 'btn btn--small ace-terminal-overlay__close';
+  newGameBtn.textContent = 'New game';
+  newGameBtn.addEventListener('click', () => {
     controller.dismissTerminalOverlay?.();
     controller._openPlayerDialog?.({ mode: 'newgame' });
   });
+  actions.appendChild(newGameBtn);
+
+  banner.append(messageEl, actions);
   return banner;
 }
 
@@ -1022,11 +1081,9 @@ function syncBoardDom(dom, state, controller) {
 
   dom.overlay?.remove();
   dom.overlay = null;
-  if (isDraw && !state.terminalOverlayDismissed) {
-    dom.overlay = renderTerminalOverlay('Draw — threefold repetition', controller);
-    boardEl.appendChild(dom.overlay);
-  } else if (winner && !state.terminalOverlayDismissed) {
-    dom.overlay = renderTerminalOverlay(`${playerColorName(winner)} wins!`, controller);
+  const headline = formatGameEndHeadline(state);
+  if (headline && !state.terminalOverlayDismissed) {
+    dom.overlay = renderTerminalOverlay(state, controller);
     boardEl.appendChild(dom.overlay);
   }
 }

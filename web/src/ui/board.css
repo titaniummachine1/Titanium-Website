@@ -681,6 +681,19 @@
   pointer-events: auto;
 }
 
+.ace-terminal-overlay__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.ace-terminal-overlay__message {
+  text-align: center;
+  max-width: 90%;
+  line-height: 1.3;
+}
+
 @keyframes bm-pulse {
   0%,
   100% {

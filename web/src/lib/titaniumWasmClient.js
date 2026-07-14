@@ -47,10 +47,12 @@ export class TitaniumWasmEngineClient {
     this.workerCrashRetries = 0;
     this._initInFlight = null;
     this._requestSeq = 0;
+    this._lastEngineMode = this.config?.engineMode ?? 'titanium-v17';
+    this._lastCatLmrCeiling = 800;
   }
 
   _workerProfileKey(
-    engineMode = this.config?.engineMode ?? 'titanium-v16',
+    engineMode = this.config?.engineMode ?? 'titanium-v17',
     catLmrCeiling = 800,
     threads = this.threads,
   ) {
@@ -58,7 +60,7 @@ export class TitaniumWasmEngineClient {
   }
 
   workerReady(
-    engineMode = this.config?.engineMode ?? 'titanium-v16',
+    engineMode = this.config?.engineMode ?? 'titanium-v17',
     catLmrCeiling = 800,
     threads = this.threads,
   ) {
@@ -79,7 +81,7 @@ export class TitaniumWasmEngineClient {
   }
 
   async initWorkers(
-    engineMode = this.config?.engineMode ?? 'titanium-v16',
+    engineMode = this.config?.engineMode ?? 'titanium-v17',
     { timeoutMs = 60_000, catLmrCeiling = 800, threads = this.threads } = {},
   ) {
     if (this._initInFlight) {
@@ -119,7 +121,7 @@ export class TitaniumWasmEngineClient {
   }
 
   async prewarm(
-    engineMode = this.config?.engineMode ?? 'titanium-v16',
+    engineMode = this.config?.engineMode ?? 'titanium-v17',
     catLmrCeiling = 800,
     threads = this.threads,
   ) {
@@ -156,7 +158,7 @@ export class TitaniumWasmEngineClient {
   }
 
   _mergeInfo(data) {
-    const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v16';
+    const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v17';
     let depthLog = data.depthLog;
     if ((!depthLog || depthLog.length === 0) && data.searchDepth != null && data.rootScore != null) {
       depthLog = [
@@ -344,8 +346,8 @@ export class TitaniumWasmEngineClient {
       fallbackReason: meta.fallbackReason,
       nodeSource: nodeFields.nodeSource ?? 'engine_total',
       estimatedTotalNodes: false,
-      stoppedBy: meta.stoppedBy ?? bestmove.stoppedBy ?? this.config?.engineMode ?? 'titanium-v16',
-      mode: meta.mode ?? bestmove.mode ?? this.config?.engineMode ?? 'titanium-v16',
+      stoppedBy: meta.stoppedBy ?? bestmove.stoppedBy ?? this.config?.engineMode ?? 'titanium-v17',
+      mode: meta.mode ?? bestmove.mode ?? this.config?.engineMode ?? 'titanium-v17',
       searchDepth,
       depthLog,
       whiteDist: meta.whiteDist,
@@ -434,6 +436,33 @@ export class TitaniumWasmEngineClient {
     this.queuedRequest = null;
     this.pendingRequest = null;
     this.setStatus('idle');
+    this.worker?.postMessage({ op: 'cancel' });
+  }
+
+  async echoCommittedMove(action, positionKey, historyLength, moveHistory = null) {
+    void positionKey;
+    const history = moveHistory?.length
+      ? moveHistory.map((a) => toAlgebraic(a))
+      : null;
+    if (history) {
+      this.algebraicMoves = [...history];
+    } else if (this.algebraicMoves.length === historyLength - 1) {
+      this.algebraicMoves.push(toAlgebraic(action));
+    } else if (this.algebraicMoves.length >= historyLength) {
+      return;
+    } else {
+      return Promise.reject(new Error('WASM titanium partial sync requires full history'));
+    }
+    if (!this.worker) {
+      return;
+    }
+    this.worker.postMessage({
+      op: 'sync',
+      algebraicMoves: this.algebraicMoves,
+      engineMode: this._lastEngineMode,
+      catLmrCeiling: this._lastCatLmrCeiling,
+      threads: this.threads,
+    });
   }
 
   clearQueuedSearches() {
@@ -502,11 +531,13 @@ export class TitaniumWasmEngineClient {
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
-    const engineMode = this.config?.engineMode ?? 'titanium-v16';
+    const engineMode = this.config?.engineMode ?? 'titanium-v17';
     const catLmrCeiling =
       engineMode === 'titanium-v16' || engineMode === 'titanium-v17'
         ? resolveCatLmrCeiling(aiSettings)
         : 800;
+    this._lastEngineMode = engineMode;
+    this._lastCatLmrCeiling = catLmrCeiling;
 
     if (this.pendingRequest) {
       throw new Error('Titanium WASM search already in flight');

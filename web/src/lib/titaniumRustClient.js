@@ -95,6 +95,36 @@ export class TitaniumEngineClient {
     this.sessionOp({ op: 'reset' }).catch(() => {});
   }
 
+  /** Echo one committed ply onto the warm native session (incremental makemove). */
+  echoCommittedMove(action, positionKey, historyLength, moveHistory = null) {
+    void positionKey;
+    const history = moveHistory?.length
+      ? moveHistory.map((a) => toAlgebraic(a))
+      : null;
+    if (history && history.length !== historyLength) {
+      return Promise.reject(new Error('echoCommittedMove history length mismatch'));
+    }
+    if (this.appliedPlies >= historyLength) {
+      return Promise.resolve();
+    }
+    if (this.appliedPlies !== historyLength - 1) {
+      if (!history) {
+        return Promise.reject(new Error('native titanium partial sync requires full history'));
+      }
+      return this.enqueueSync(() =>
+        this.syncMovesToSession(history, {
+          incremental: true,
+          forceFull: history.length === 0,
+        }),
+      );
+    }
+    const move = toAlgebraic(action);
+    return this.enqueueSync(async () => {
+      await this.sessionOp({ op: 'makemove', move, cores: 1 });
+      this.appliedPlies = historyLength;
+    });
+  }
+
   makeMoves() {
     return Promise.resolve();
   }
@@ -261,7 +291,8 @@ export class TitaniumEngineClient {
 
     this.enqueueSync(() =>
       this.syncMovesToSession(history, {
-        forceFull: true,
+        incremental: true,
+        forceFull: history.length === 0,
         signal: searchCtx.signal,
         cores: searchCtx.cores,
       }),

@@ -8,7 +8,7 @@
  *   Titanium:               Difficulty (Easy/Medium/Hard) + thinking time slider
  *   ACE v13:                Tier selector (JS→Rust→MoveGen+) + time slider
  *   Gorisanson / QuoridorV3: Thinking time slider
- *   Human:                  No controls
+ *   Human:                  Clock time slider + whole-game vs per-move toggle
  *
  * Settings are persisted to localStorage and restored on next open.
  * Keyboard: Enter / Escape / X confirm; Cancel (change-players only) discards.
@@ -600,7 +600,9 @@ function renderEngineControls(seat, selections) {
   const playerType = selections.players[seat];
   const cat = engineCategory(playerType);
 
-  if (cat === 'human') return '';
+  if (cat === 'human') {
+    return renderTimeSlider(seat, selections, 'Per-move time', true, true);
+  }
 
   if (cat === 'remote') {
     return renderRemoteStrengthControls(seat, selections) +
@@ -715,19 +717,23 @@ function renderCoresSlider(seat, selections) {
   );
 }
 
-function renderTimeSlider(seat, selections, labelText, supportsWholeGame = false) {
+function renderTimeSlider(seat, selections, labelText, supportsWholeGame = false, isHumanClock = false) {
   const wc = selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK;
   const wholeGame = supportsWholeGame && selections.wholeGameTime[seat] !== false;
+  const timeLabel = wholeGame ? 'Whole game time' : labelText;
+  const wholeGameHint = isHumanClock
+    ? 'Whole game time (one bank for all your moves)'
+    : 'Whole game time (engine manages this clock)';
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">' + escHtml(wholeGame ? 'Whole game time' : labelText) + ': ' +
+      '<label class="player-dialog__label">' + escHtml(timeLabel) + ': ' +
         '<span class="player-dialog__time-val" data-time-label="' + seat + '">' + formatTime(wc) + '</span>' +
       '</label>' +
       '<input type="range" class="player-dialog__time-slider" data-time-slider="' + seat + '"' +
       ' min="0" max="' + WALL_CLOCK_RANGE.sliderSteps + '" step="1" value="' + wallClockSliderPosition(wc) + '">' +
       (supportsWholeGame ? '<label class="player-dialog__option-row">' +
         '<input type="checkbox" data-whole-game-time="' + seat + '"' + (wholeGame ? ' checked' : '') + '>' +
-        ' Whole game time (engine manages this clock)' +
+        ' ' + escHtml(wholeGameHint) +
       '</label>' : '') +
     '</div>'
   );
@@ -969,7 +975,12 @@ function wireAnalysisEngineSection(overlay, selections) {
 // ── Apply ────────────────────────────────────────────────────────────────────
 
 function buildAiSettings(playerType, selections, seat) {
-  if (playerType === PlayerType.Human) return null;
+  if (playerType === PlayerType.Human) {
+    return {
+      wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
+      wholeGameTime: selections.wholeGameTime[seat] !== false,
+    };
+  }
   const cat = engineCategory(playerType);
 
   if (cat === 'remote') {

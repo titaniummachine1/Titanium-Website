@@ -16,7 +16,7 @@ import { toAlgebraic } from '../lib/gameLogic.js';
 
 export class AnalysisEngineSession {
   constructor() {
-    this.client = new TitaniumWasmEngineClient({ engineMode: 'titanium-v16' });
+    this.client = new TitaniumWasmEngineClient({ engineMode: 'titanium-v17' });
     this.client.onInfo = (info) => this._handleResult(info, { final: false });
     this.client.onBestMove = () => {
       // Analysis never plays moves. If a search finishes anyway (time cap,
@@ -49,7 +49,7 @@ export class AnalysisEngineSession {
       return;
     }
     this.active = true;
-    this.client.prewarm?.('titanium-v16', 800, this.client.threads);
+    this.client.prewarm?.('titanium-v17', 800, this.client.threads);
   }
 
   /** Soft stop: cancels any in-flight search but keeps the warm worker/TT alive. */

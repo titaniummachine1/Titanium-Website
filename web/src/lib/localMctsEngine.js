@@ -187,10 +187,13 @@ export class LocalMctsEngineClient {
           thinking: true,
           progress: data.value,
           simulations: data.simulations,
+          nodes: data.simulations,
           rootWinRate: data.rootWinRate,
           rootMoves: data.rootMoves,
           whiteDist: data.whiteDist,
           blackDist: data.blackDist,
+          depthLog: data.depthLog,
+          pv: data.pv,
         });
       },
       onInfo: (info) => this.onInfo?.(info),

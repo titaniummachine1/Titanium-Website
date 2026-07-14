@@ -85,6 +85,47 @@ function formatGameLogHeader(state) {
 
 function formatLogsText(state) {
   const lines = [formatGameLogHeader(state)];
+  const thinkLog = state.moveThinkLog ?? [];
+  if (thinkLog.length) {
+    lines.push('=== Think log (all plies) ===');
+    for (const entry of thinkLog) {
+      const parts = [`ply ${entry.ply ?? '?'}`];
+      if (entry.move != null) {
+        parts.push(`move ${entry.move}`);
+      }
+      parts.push(`engine=${entry.engine ?? '?'}`);
+      if (entry.budget) {
+        parts.push(`budget=${entry.budget}`);
+      }
+      if (entry.stoppedBy) {
+        parts.push(`stopped=${entry.stoppedBy}`);
+      }
+      if (entry.nodes != null) {
+        parts.push(`nodes=${entry.nodes}`);
+      }
+      if (entry.thinkMs != null) {
+        parts.push(`think=${entry.thinkMs}ms`);
+      }
+      if (entry.error) {
+        parts.push(`ERROR: ${entry.error}`);
+      }
+      if (entry.note) {
+        parts.push(`note: ${entry.note}`);
+      }
+      lines.push(`  ${parts.join('  ')}`);
+      if (entry.depthLog?.length) {
+        for (const e of entry.depthLog) {
+          const score = e.score ?? e.rootScore;
+          const scoreStr = score != null ? formatEngineScore(score) : '?';
+          const nodes = (e.nodes ?? 0).toLocaleString();
+          const pv = e.pv ? `  pv ${e.pv}` : '';
+          lines.push(`    d${e.depth}  ${scoreStr}  ${nodes}n${pv}`);
+        }
+      }
+    }
+    lines.push('');
+  }
+
   const snaps = state.lastCompletedThinkBySeat ?? [];
   const players = state.settings?.players ?? [];
   const errors = state.engineErrors ?? {};
@@ -122,9 +163,13 @@ function formatLogsText(state) {
     lines.push('');
   }
 
-  if (lines.length === 0) return '(no AI thinking logs available)';
+  if (lines.length <= 1 && !thinkLog.length) {
+    return '(no AI thinking logs available)';
+  }
   return lines.join('\n');
 }
+
+export { formatLogsText };
 
 export function openLogsDialog(state) {
   const existing = document.querySelector('.logs-dialog-overlay');
