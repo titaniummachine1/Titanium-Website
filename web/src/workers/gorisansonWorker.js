@@ -503,8 +503,16 @@ const { Game, AI, searchForTime } = bootstrap(
   performance,
 );
 
+self.postMessage({ type: 'ready' });
+
 self.onmessage = (event) => {
-  const { algebraicMoves = [], simulations, timeMs, maxSimulations, uctConst, catMoveWeights } = event.data;
+  const data = event.data ?? {};
+  if (data.op === 'init') {
+    self.postMessage({ type: 'ready' });
+    return;
+  }
+
+  const { algebraicMoves = [], simulations, timeMs, maxSimulations, uctConst, catMoveWeights } = data;
   const game = new Game(true);
   for (const move of algebraicMoves) {
     game.doMove(actionToGorisansonMove(parseAlgebraic(move)), true);
@@ -516,6 +524,7 @@ self.onmessage = (event) => {
   }
 
   if (Number.isFinite(timeMs) && timeMs > 0) {
+    self.postMessage({ type: 'search-started' });
     try {
       const result = searchForTime(game, uctConst ?? 0.2, timeMs, maxSimulations, catMoveWeights);
       self.postMessage({

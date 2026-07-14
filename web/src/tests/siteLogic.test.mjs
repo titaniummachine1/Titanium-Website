@@ -553,6 +553,7 @@ console.log("\n[notation] wallz prefix walls and move-history paste");
 import {
   tokenizeAlgebraicNotation,
   decodeReplayCode,
+  normalizeReplayToken,
 } from "../lib/replayCode.js";
 import { toAlgebraic } from "../lib/gameLogic.js";
 
@@ -572,17 +573,73 @@ assertEqual(
   "numbered wallz lines",
 );
 assertEqual(
-  toAlgebraic(parseAlgebraic("ve4")),
+  toAlgebraic(parseAlgebraic(normalizeReplayToken("ve4"))),
   "e4v",
-  "parseAlgebraic accepts ve4 prefix",
+  "wallz prefix normalizes before parseAlgebraic",
 );
 assertEqual(
-  toAlgebraic(parseAlgebraic("hd3")),
+  toAlgebraic(parseAlgebraic(normalizeReplayToken("hd3"))),
   "d3h",
-  "parseAlgebraic accepts hd3 prefix",
+  "wallz prefix normalizes before parseAlgebraic",
 );
 const decoded = decodeReplayCode("e2 ve4 hd3 e8");
 assertEqual(decoded.algebraic.join(" "), "e2 e4v d3h e8", "decodeReplayCode normalizes walls");
+
+console.log("\n[copy-logs] crash reason in bug report");
+import { formatLogsText } from "../ui/gameControls.js";
+import {
+  formatEngineFailureMessage,
+  formatEngineStatusBlock,
+  engineFailureBackoffMs,
+} from "../lib/engineFailureReport.js";
+const crashErr = new Error("WASM runtime error (engine panic) | commit=dd4a94d");
+crashErr.diagnostics = {
+  panic: "index out of bounds: the len is 9 but the index is 12",
+  buildMeta: { git_commit: "dd4a94d", wasm_sha256: "c2e2f05de166e66d" },
+};
+const crashMsg = formatEngineFailureMessage(crashErr);
+assert(
+  crashMsg.includes('panic="index out of bounds'),
+  "failure formatter keeps Rust panic",
+);
+const logsText = formatLogsText({
+  board: new QuoridorBoard(),
+  actions: [],
+  settings: {
+    players: ["titanium-v17", "titanium-v16"],
+    rotateBoard: false,
+  },
+  gameHalted: true,
+  engineErrors: {
+    0: crashMsg,
+  },
+  engineStatus: { 0: "error", 1: "idle" },
+  moveThinkLog: [
+    {
+      ply: 7,
+      engine: "Titanium v17",
+      error: crashMsg,
+      stoppedBy: "error",
+    },
+  ],
+  lastCompletedThinkBySeat: [null, null],
+});
+assert(logsText.includes("GAME HALTED"), "copy-logs shows halt banner");
+assert(logsText.includes("index out of bounds"), "copy-logs includes panic text");
+assert(logsText.includes("=== WASM build ==="), "copy-logs includes wasm build block");
+assert(
+  formatEngineStatusBlock({
+    gameHalted: true,
+    engineErrors: { 1: "worker died" },
+    settings: { players: ["human", "titanium-v16"] },
+    engineStatus: { 1: "error" },
+  }).some((line) => line.includes("worker died")),
+  "status block surfaces seat error",
+);
+
+assertEqual(engineFailureBackoffMs(1), 250, "retry backoff attempt 1");
+assertEqual(engineFailureBackoffMs(3), 1000, "retry backoff attempt 3");
+assertEqual(engineFailureBackoffMs(10), 30_000, "retry backoff capped at 30s");
 
 console.log("\n════════════════════════════════");
 console.log(

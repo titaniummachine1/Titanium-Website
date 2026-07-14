@@ -12,7 +12,7 @@ import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
 import { resolveMaxNodes, resolveCatLmrCeiling, resolveTitaniumMaxDepth } from './timeControl.js';
 import { resolveTitaniumSearchCores } from './titaniumRuntime.js';
 import { enrichNodeFields } from './searchNodes.js';
-import { setRustIdentityFromWasm } from './wasmBuildInfo.js';
+import { localBuildMeta, setRustIdentityFromWasm } from './wasmBuildInfo.js';
 
 function synthesizeDepthLog(meta, { searchDepth, nodes, pv } = {}) {
   if (meta?.depthLog?.length) {
@@ -208,6 +208,7 @@ export class TitaniumWasmEngineClient {
 
     if (data.type === 'error') {
       const error = new Error(data.message ?? 'WASM worker error');
+      error.diagnostics = data.diagnostics ?? null;
       if (data.stack) {
         error.stack = data.stack;
       }
@@ -377,11 +378,30 @@ export class TitaniumWasmEngineClient {
     }
   }
 
+  _workerCrashError(event, prefix = 'Titanium WASM worker crashed') {
+    const build = localBuildMeta();
+    const detail = [
+      event?.message ?? (typeof event === 'string' ? event : null) ?? prefix,
+      `commit=${build.git_commit ?? 'unknown'}`,
+      `wasm=${String(build.wasm_sha256 ?? 'unknown').slice(0, 16)}`,
+    ];
+    if (event?.filename) {
+      detail.push(`at=${event.filename}:${event.lineno ?? 0}:${event.colno ?? 0}`);
+    }
+    const error = new Error(detail.join(' | '));
+    error.diagnostics = {
+      buildMeta: build,
+      workerOnError: true,
+      filename: event?.filename ?? null,
+      lineno: event?.lineno ?? null,
+      colno: event?.colno ?? null,
+    };
+    return error;
+  }
+
   _onWorkerError(event) {
     if (this._readyWaiter) {
-      const message =
-        event?.message ?? (typeof event === 'string' ? event : null) ?? 'Titanium WASM worker crashed';
-      this._rejectReady(new Error(message));
+      this._rejectReady(this._workerCrashError(event, 'Titanium WASM worker init failed'));
       return;
     }
 
@@ -402,9 +422,7 @@ export class TitaniumWasmEngineClient {
       return;
     }
     this.setStatus('error');
-    const message =
-      event?.message ?? (typeof event === 'string' ? event : null) ?? 'Titanium WASM worker crashed';
-    const error = new Error(message);
+    const error = this._workerCrashError(event);
     pending.onError?.(error);
     this.onError?.(error);
     this.drainQueuedRequest();

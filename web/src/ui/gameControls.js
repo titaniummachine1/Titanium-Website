@@ -10,6 +10,10 @@
 import { toAlgebraic } from '../lib/gameLogic.js';
 import { formatEngineScore } from '../lib/engineScore.js';
 import {
+  formatEngineStatusBlock,
+  formatWasmBuildBlock,
+} from '../lib/engineFailureReport.js';
+import {
   formatCanonicalGameLog,
   canonicalStateFromBoard,
   blockedEdgesFromCanonicalWalls,
@@ -85,6 +89,13 @@ function formatGameLogHeader(state) {
 
 function formatLogsText(state) {
   const lines = [formatGameLogHeader(state)];
+
+  const statusBlock = formatEngineStatusBlock(state);
+  if (statusBlock.length) {
+    lines.push(...statusBlock, '');
+  }
+  lines.push(...formatWasmBuildBlock(), '');
+
   const thinkLog = state.moveThinkLog ?? [];
   if (thinkLog.length) {
     lines.push('=== Think log (all plies) ===');
@@ -111,6 +122,9 @@ function formatLogsText(state) {
       }
       if (entry.note) {
         parts.push(`note: ${entry.note}`);
+      }
+      if (entry.fallbackReason) {
+        parts.push(`fallback: ${entry.fallbackReason}`);
       }
       lines.push(`  ${parts.join('  ')}`);
       if (entry.depthLog?.length) {

@@ -2,7 +2,7 @@
  * WASM build identity — shown in debug panel and logged at worker ready.
  */
 
-import buildMeta from '../wasm/titanium/build-meta.json';
+import buildMeta from '../wasm/titanium/build-meta.json' with { type: 'json' };
 
 let rustIdentity = null;
 

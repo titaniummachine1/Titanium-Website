@@ -222,7 +222,7 @@ export class TitaniumEngineClient {
     this.appliedPlies = moves.length;
   }
 
-  startRequest({ aiSettings, moveHistory, isFreshGame }) {
+  startRequest({ aiSettings, moveHistory, isFreshGame, onSearchStart }) {
     const history =
       isFreshGame || !moveHistory?.length
         ? []
@@ -264,6 +264,8 @@ export class TitaniumEngineClient {
       cores,
       started,
       isAlphaBeta: engineMode !== 'mcts' && isAlphaBetaEngineMode(engineMode),
+      onSearchStart,
+      searchStarted: false,
     };
 
     if (engineMode !== 'mcts') {
@@ -300,6 +302,10 @@ export class TitaniumEngineClient {
       .then(() => {
         if (signal.aborted || !this.isActiveSearch(searchCtx)) {
           throw createAbortError();
+        }
+        if (!searchCtx.searchStarted) {
+          searchCtx.searchStarted = true;
+          searchCtx.onSearchStart?.();
         }
         return this.sessionOp(
           {
@@ -340,6 +346,11 @@ export class TitaniumEngineClient {
         nodes: 0,
         simulations: 0,
       });
+    }
+
+    if (!searchCtx.searchStarted) {
+      searchCtx.searchStarted = true;
+      searchCtx.onSearchStart?.();
     }
 
     fetch(GENMOVE_URL, {

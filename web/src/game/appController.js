@@ -61,6 +61,7 @@ import { TitaniumLegalityOracle } from "../lib/titaniumLegalityOracle.js";
 import { createTitaniumLegalityRuntime } from "../lib/titaniumLegalityRuntime.js";
 import { validateMoveLegality } from "../lib/validateMoveLegality.js";
 import { isAbortError } from "../lib/engineAbort.js";
+import { formatEngineFailureMessage, engineFailureBackoffMs } from "../lib/engineFailureReport.js";
 import { resolveDisplayNodes } from "../lib/searchNodes.js";
 import {
   mergeThinkSnapshots,
@@ -537,6 +538,11 @@ export class AppController {
     this._clockTickId = null;
     this._illegalRetriesByPly = {};
     this._maxIllegalRetries = 2;
+    this._engineFailureRetryBySeat = {};
+    this._engineFailureRetryTimer = null;
+    this._maxEngineFailureRetries = 10;
+    this._engineRecoveryActive = false;
+    this._engineRecoverySeat = -1;
     /** Skip onSessionChange → onChange while applyEngineMove is mid-apply (snapshot not ready). */
     this._suppressSessionNotify = false;
     this._activeSearchSeq = 0;
@@ -923,6 +929,16 @@ export class AppController {
         : null,
       terminalOverlayDismissed: this._terminalOverlayDismissed,
       gameHalted: this._gameHalted,
+      engineRecovery: {
+        active: this._engineRecoveryActive,
+        seatIndex: this._engineRecoverySeat,
+        attempt: this._engineRecoverySeat >= 0
+          ? (this._engineFailureRetryBySeat[
+              this._engineFailureRetryKey(this._engineRecoverySeat)
+            ]?.attempt ?? 0)
+          : 0,
+        max: this._maxEngineFailureRetries,
+      },
       endReason: snapshot.endReason ?? null,
       legalityOracleState: { ...this.legalityOracleState },
       playReplayCode:
@@ -2383,31 +2399,50 @@ export class AppController {
     void prewarmCatSnapshot(moves);
   }
 
-  /** Cold-start WASM workers before the first AI move so info/PV telemetry is live immediately. */
+  /** Cold-start WASM + thread pool before first move (UCI-style isready). */
   async prewarmTitaniumWasmEngines() {
     const tasks = [];
     for (let seat = 0; seat < this.settings.players.length; seat++) {
       const playerType = this.settings.players[seat];
-      if (!isTitaniumEngine(playerType, this.engineConfigs)) {
+      if (playerType === PlayerType.Human) {
         continue;
       }
       const engine = this.getEngineForSeat(seat);
       if (typeof engine?.prewarm === "function") {
         const ai = this.settings.playerAiSettings[seat] ?? {};
-        const mode = resolveTitaniumEngineMode(
-          ai,
-          playerType,
-          this.engineConfigs,
-        );
-        const catLmrCeiling =
-          playerType === PlayerType.TitaniumV16 ||
-          playerType === PlayerType.TitaniumV17
-            ? resolveCatLmrCeiling(ai)
-            : 800;
-        const threads = resolveCores(ai);
+        if (isTitaniumEngine(playerType, this.engineConfigs)) {
+          const mode = resolveTitaniumEngineMode(
+            ai,
+            playerType,
+            this.engineConfigs,
+          );
+          const catLmrCeiling =
+            playerType === PlayerType.TitaniumV16 ||
+            playerType === PlayerType.TitaniumV17
+              ? resolveCatLmrCeiling(ai)
+              : 800;
+          const threads = resolveCores(ai);
+          tasks.push(
+            engine.prewarm(mode, catLmrCeiling, threads).catch((err) => {
+              console.warn(
+                `Titanium WASM prewarm failed for seat ${seat}`,
+                err,
+              );
+            }),
+          );
+        } else {
+          tasks.push(
+            engine.prewarm().catch((err) => {
+              console.warn(`Engine prewarm failed for seat ${seat}`, err);
+            }),
+          );
+        }
+        continue;
+      }
+      if (typeof engine?.initWorkers === "function") {
         tasks.push(
-          engine.prewarm(mode, catLmrCeiling, threads).catch((err) => {
-            console.warn(`Titanium WASM prewarm failed for seat ${seat}`, err);
+          engine.initWorkers().catch((err) => {
+            console.warn(`Engine init failed for seat ${seat}`, err);
           }),
         );
       }
@@ -2526,6 +2561,7 @@ export class AppController {
     this._syncAnalysisSessionActive();
     this._terminalOverlayDismissed = false;
     this._gameHalted = false;
+    this._resetEngineFailureRecovery();
     this.session.reset();
     this.catViz = null;
     this._lmrDisplayViz = null;
@@ -3728,21 +3764,111 @@ export class AppController {
     return false;
   }
 
-  _haltGameOnEngineFailure(failSeat) {
-    this._gameHalted = true;
-    this.enginesPaused = true;
-    this._cancelActiveAiSearch();
-    this.stopAllPonders();
-    if (failSeat >= 0) {
-      this.engineStatus[failSeat] = 'error';
+  _engineFailureRetryKey(seatIndex) {
+    return `${this._gameGeneration}:${seatIndex}`;
+  }
+
+  _clearEngineFailureRetryTimer() {
+    if (this._engineFailureRetryTimer != null) {
+      clearTimeout(this._engineFailureRetryTimer);
+      this._engineFailureRetryTimer = null;
     }
   }
 
-  recordEngineFailure(playerType, { ply, error, budget }) {
+  _resetEngineFailureRecovery() {
+    this._clearEngineFailureRetryTimer();
+    this._engineFailureRetryBySeat = {};
+    this._engineRecoveryActive = false;
+    this._engineRecoverySeat = -1;
+  }
+
+  _clearEngineFailureRecovery(seatIndex) {
+    const key = this._engineFailureRetryKey(seatIndex);
+    delete this._engineFailureRetryBySeat[key];
+    if (this._engineRecoveryActive && this._engineRecoverySeat === seatIndex) {
+      this._clearEngineFailureRetryTimer();
+      this._engineRecoveryActive = false;
+      this._engineRecoverySeat = -1;
+      this._gameHalted = false;
+      this.engineErrors[seatIndex] = null;
+      this.engineStatus[seatIndex] = "idle";
+    }
+  }
+
+  _finalizeEngineFailure(seatIndex, message) {
+    this._engineRecoveryActive = false;
+    this._engineRecoverySeat = -1;
+    this._clearEngineFailureRetryTimer();
+    this._gameHalted = true;
+    this.enginesPaused = true;
+    this.engineErrors[seatIndex] =
+      `${message}\n\nGave up after ${this._maxEngineFailureRetries} search retries.`;
+    this.engineStatus[seatIndex] = "error";
+    this._cancelActiveAiSearch();
+    this.stopAllPonders();
+    this.aiThinking = false;
+    this.thinkingPlayerType = null;
+    this.thinkingSeatIndex = null;
+    this.liveSearch = null;
+    this.onChange?.();
+  }
+
+  async _recoverEngineAfterFailure(seatIndex) {
+    if (!this._engineRecoveryActive || this._engineRecoverySeat !== seatIndex) {
+      return;
+    }
+    if (this.session.winner != null || this.session.isDraw) {
+      return;
+    }
+    const engine = this.getEngineForSeat(seatIndex);
+    const positionKey = this.currentPositionKey();
+    try {
+      if (engine?.recoverFromDesync) {
+        await engine.recoverFromDesync({
+          moveHistory: this.session.actions,
+          gameSnapshot: this.session.getEngineSnapshot(),
+          isFreshGame: this.session.actions.length === 0,
+          positionKey,
+        });
+      } else if (engine?.hardReset) {
+        engine.hardReset();
+      }
+    } catch (err) {
+      console.warn("Engine resync before retry failed", err);
+    }
+    if (!this._engineRecoveryActive || this._engineRecoverySeat !== seatIndex) {
+      return;
+    }
+    const key = this._engineFailureRetryKey(seatIndex);
+    const retry = this._engineFailureRetryBySeat[key];
+    const attempt = retry?.attempt ?? 0;
+    this.engineErrors[seatIndex] =
+      `${retry?.lastMessage ?? "Engine error"}\n\nRetrying search (${attempt}/${this._maxEngineFailureRetries})…`;
+    this.engineStatus[seatIndex] = "connecting";
+    this.onChange?.();
+    this.maybeRequestAiMove();
+  }
+
+  _handleEngineFailure({
+    seatIndex,
+    playerType,
+    ply,
+    error,
+    budget,
+  }) {
     if (isAbortError(error)) {
       return;
     }
-    const message = error?.message ?? String(error ?? "Engine error");
+    const failSeat =
+      seatIndex >= 0
+        ? seatIndex
+        : this.thinkingSeatIndex ?? this.seatIndexForPlayerType(playerType);
+    if (failSeat < 0) {
+      return;
+    }
+
+    const baseMessage =
+      typeof error === "string" ? error : formatEngineFailureMessage(error);
     const position =
       this.session.actions.map((a) => toAlgebraic(a)).join(" ") || "(start)";
     const legal = this.session
@@ -3751,66 +3877,124 @@ export class AppController {
       .slice(0, 24)
       .join(" ");
     const detail = `position="${position}" toMove=${this.session.playerToMove} legalSample=[${legal}]`;
-    const failSeat =
-      this.thinkingSeatIndex ?? this.seatIndexForPlayerType(playerType);
-    const fullMessage = `${message} | ${detail}`;
-    console.error("Engine search failed", {
+    const fullMessage = `${baseMessage} | ${detail}`;
+
+    console.error("Engine failure", {
       playerType,
       ply,
-      engine:
-        failSeat >= 0
-          ? this.engineLabelForSeat(failSeat)
-          : this.engineLabel(playerType),
+      seatIndex: failSeat,
       message: fullMessage,
       stack: error?.stack,
     });
-    if (failSeat >= 0) {
-      this.engineErrors[failSeat] = fullMessage;
-      this.engineStatus[failSeat] = 'error';
-    }
-    this._haltGameOnEngineFailure(failSeat);
+
+    const key = this._engineFailureRetryKey(failSeat);
+    const retry = this._engineFailureRetryBySeat[key] ?? { attempt: 0 };
+    retry.attempt += 1;
+    retry.lastMessage = fullMessage;
+    this._engineFailureRetryBySeat[key] = retry;
+
+    this._engineRecoveryActive = true;
+    this._engineRecoverySeat = failSeat;
+    this._gameHalted = true;
+    this._terminalOverlayDismissed = false;
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
     this.liveSearch = null;
     this._thinkStartedAt = null;
+    this._cancelActiveAiSearch();
+    this.stopAllPonders();
 
     const si = this.searchInfoBySeat[failSeat] ?? {};
     const thinkMs = resolveThinkMs(si, null);
+    const engineLabel =
+      failSeat >= 0
+        ? this.engineLabelForSeat(failSeat)
+        : this.engineLabel(playerType);
+    const plyNum = ply ?? this.session.actions.length + 1;
+
+    if (retry.attempt > this._maxEngineFailureRetries) {
+      this.moveThinkLog.push({
+        ply: plyNum,
+        move: null,
+        engine: engineLabel,
+        budget: budget ?? "",
+        error: fullMessage,
+        stoppedBy: "error",
+        nodes: si.nodes ?? si.simulations ?? 0,
+        searchDepth: si.searchDepth,
+        depthLog: si.depthLog ? [...si.depthLog] : [],
+        thinkMs,
+      });
+      this._finalizeEngineFailure(failSeat, fullMessage);
+      return;
+    }
+
+    const delayMs = engineFailureBackoffMs(retry.attempt);
+    const statusMsg = `${fullMessage}\n\nRetrying search (${retry.attempt}/${this._maxEngineFailureRetries}) in ${(delayMs / 1000).toFixed(1)}s…`;
+    this.engineErrors[failSeat] = statusMsg;
+    this.engineStatus[failSeat] = "error";
     this.snapshotThinkSeat(failSeat, {
       live: false,
-      ply,
+      ply: plyNum,
       move: null,
-      error: fullMessage,
+      error: statusMsg,
       stoppedBy: "error",
-      engine:
-        failSeat >= 0
-          ? this.engineLabelForSeat(failSeat)
-          : this.engineLabel(playerType),
+      engine: engineLabel,
       depthLog: si.depthLog,
       searchDepth: si.searchDepth,
-      whiteDist: si.whiteDist,
-      blackDist: si.blackDist,
       nodes: si.nodes ?? si.simulations,
-      simulations: si.simulations ?? si.nodes,
       thinkMs,
     });
     this.moveThinkLog.push({
-      ply,
+      ply: plyNum,
       move: null,
-      engine:
-        failSeat >= 0
-          ? this.engineLabelForSeat(failSeat)
-          : this.engineLabel(playerType),
+      engine: engineLabel,
       budget: budget ?? "",
-      error: fullMessage,
+      error: statusMsg,
       stoppedBy: "error",
       nodes: si.nodes ?? si.simulations ?? 0,
       searchDepth: si.searchDepth,
-      whiteDist: si.whiteDist,
-      blackDist: si.blackDist,
       depthLog: si.depthLog ? [...si.depthLog] : [],
       thinkMs,
+    });
+    this.onChange?.();
+
+    this._clearEngineFailureRetryTimer();
+    const gen = this._gameGeneration;
+    this._engineFailureRetryTimer = setTimeout(() => {
+      if (gen !== this._gameGeneration) {
+        return;
+      }
+      void this._recoverEngineAfterFailure(failSeat);
+    }, delayMs);
+  }
+
+  _haltGameOnEngineFailure(failSeat) {
+    this._finalizeEngineFailure(
+      failSeat,
+      this.engineErrors[failSeat] ?? "Engine error",
+    );
+  }
+
+  _rejectEngineMove(seatIndex, message, { ply, budget, playerType } = {}) {
+    this._handleEngineFailure({
+      seatIndex,
+      playerType: playerType ?? this.settings.players[seatIndex],
+      ply: ply ?? this.session.actions.length + 1,
+      error: message,
+      budget,
+    });
+  }
+
+  recordEngineFailure(playerType, { ply, error, budget }) {
+    this._handleEngineFailure({
+      playerType,
+      ply,
+      error,
+      budget,
+      seatIndex:
+        this.thinkingSeatIndex ?? this.seatIndexForPlayerType(playerType),
     });
   }
 
@@ -4001,15 +4185,21 @@ export class AppController {
         reason: identityGate.reason,
         decodedMove: moveKey,
       });
-      if (this.thinkingSeatIndex === seatIndex) {
-        this.aiThinking = false;
-        this.thinkingPlayerType = null;
-        this.thinkingSeatIndex = null;
-        this.liveSearch = null;
-      }
-      this.engineErrors[seatIndex] = `REJECTED ${identityGate.reason}`;
-      this.engineStatus[seatIndex] = "error";
-      this.onChange?.();
+      this._rejectEngineMove(
+        seatIndex,
+        `REJECTED ${identityGate.reason} (move ${moveKey}, ply ${requestPly + 1})`,
+        {
+          ply: requestPly + 1,
+          playerType,
+          budget: describePlayerAiSettings(
+            playerType,
+            this._thinkAiSettings ??
+              this.settings.playerAiSettings[seatIndex] ??
+              {},
+            this.engineConfigs,
+          ),
+        },
+      );
       return identityGate.reason;
     }
 
@@ -4069,21 +4259,13 @@ export class AppController {
       });
       this._lastDiagnostic = diagnostic;
       console.warn("Engine move rejected at gate", legality.reason, diagnostic);
-      if (this.thinkingSeatIndex === seatIndex) {
-        this.aiThinking = false;
-        this.thinkingPlayerType = null;
-        this.thinkingSeatIndex = null;
-        this.liveSearch = null;
-      }
       const oracleMsg =
         legality.reason === "titanium-oracle-unavailable"
           ? `Local legality checker unavailable: ${legality.titanium?.error?.message ?? "unknown error"}`
           : legality.reason === "titanium-position-invalid"
             ? `Titanium rejected position: ${legality.titanium?.error?.message ?? "invalid"}`
             : `REJECTED ${legality.reason}`;
-      this.engineErrors[seatIndex] = `${oracleMsg}\n\n${diagnostic}`;
-      this.engineStatus[seatIndex] = "error";
-      this.onChange?.();
+      this._rejectEngineMove(seatIndex, `${oracleMsg}\n\n${diagnostic}`);
       return legality.reason;
     }
 
@@ -4154,11 +4336,10 @@ export class AppController {
           reason: wallInv.reason,
         });
         this._lastDiagnostic = diagnostic;
-        this.engineErrors[seatIndex] =
-          `REJECTED ${wallInv.reason}\n\n${diagnostic}`;
-        this.engineStatus[seatIndex] = "error";
-        this.aiThinking = false;
-        this.onChange?.();
+        this._rejectEngineMove(
+          seatIndex,
+          `REJECTED ${wallInv.reason}\n\n${diagnostic}`,
+        );
         return wallInv.reason;
       }
     }
@@ -4167,6 +4348,7 @@ export class AppController {
     const applied = this.session.applyAction(action);
     this._suppressSessionNotify = false;
     if (applied) {
+      this._clearEngineFailureRecovery(seatIndex);
       this.handleCatPositionChanged();
       const plyNum = this.session.actions.length;
       const si = siBeforeMove;
@@ -4289,11 +4471,11 @@ export class AppController {
     if (!this.startupConfirmed) {
       return;
     }
-    if (this._gameHalted) {
+    if (this._gameHalted && !this._engineRecoveryActive) {
       this.aiThinking = false;
       return;
     }
-    if (this.enginesPaused) {
+    if (this.enginesPaused && !this._engineRecoveryActive) {
       return;
     }
     if (this.replay || this.isFreePlayMode()) {
@@ -4318,7 +4500,7 @@ export class AppController {
       this._syncHumanClockTurn();
       return;
     }
-    if (this.engineErrors[seatIndex]) {
+    if (this.engineErrors[seatIndex] && !this._engineRecoveryActive) {
       this.aiThinking = false;
       return;
     }
@@ -4824,6 +5006,8 @@ export class AppController {
       this.liveSearch = null;
       this.engineErrors = {};
       this.engineStatus = {};
+      this._resetEngineFailureRecovery();
+      this._gameHalted = false;
       this.replay = null;
       this.moveThinkLog = [];
       this.settings.uiMode = "play";

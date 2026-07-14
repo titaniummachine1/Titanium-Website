@@ -13,12 +13,27 @@ export function erroredSeatIndex(state) {
 
 /** Headline for the board terminal overlay or moves-card result line. */
 export function formatGameEndHeadline(state) {
+  const recovery = state.engineRecovery;
+  if (state.gameHalted && recovery?.active) {
+    const seat =
+      recovery.seatIndex >= 0 ? recovery.seatIndex : erroredSeatIndex(state);
+    const attempt = recovery.attempt ?? 0;
+    const max = recovery.max ?? 10;
+    if (seat >= 0) {
+      return `Game halted — ${playerColorName(seat + 1)} engine error (retry ${attempt}/${max})`;
+    }
+    return `Game halted — engine error (retry ${attempt}/${max})`;
+  }
   if (state.gameHalted) {
     const seat = erroredSeatIndex(state);
     if (seat >= 0) {
       return `Game halted — ${playerColorName(seat + 1)} engine error`;
     }
     return 'Game halted';
+  }
+  const errored = erroredSeatIndex(state);
+  if (errored >= 0 && !state.winner && !state.isDraw) {
+    return `Game halted — ${playerColorName(errored + 1)} engine error`;
   }
   if (state.isDraw) {
     return 'Draw — threefold repetition';

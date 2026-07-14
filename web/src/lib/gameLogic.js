@@ -125,11 +125,7 @@ function coordinatesEqual(a, b) {
 // ---------------------------------------------------------------------------
 
 function parseAlgebraic(move) {
-  let text = String(move ?? '').trim().toLowerCase();
-  // wallz.gg prefix walls: ve4 / hd3 → e4v / d3h
-  if (text.length === 3 && (text[0] === 'h' || text[0] === 'v')) {
-    text = `${text.slice(1)}${text[0]}`;
-  }
+  const text = String(move ?? '').trim().toLowerCase();
   const coordinate = parseCoordinateText(text.slice(0, 2));
   if (text.length > 2) {
     return {

@@ -5,7 +5,7 @@
 
 import init, * as titaniumWasm from '../wasm/titanium/titanium.js';
 import wasmUrl from '../wasm/titanium/titanium_bg.wasm?url';
-import buildMeta from '../wasm/titanium/build-meta.json';
+import buildMeta from '../wasm/titanium/build-meta.json' with { type: 'json' };
 
 const { WasmEngine } = titaniumWasm;
 // v17's expanded search history makes construction/search frames larger than
