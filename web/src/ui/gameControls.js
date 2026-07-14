@@ -140,7 +140,15 @@ function formatLogsText(state) {
 
     lines.push(`=== ${color} (${engine}) — move: ${snap?.move ?? '?'} ===`);
 
-    if (errMsg) {
+    const history = state.actions?.map((a) => toAlgebraic(a)) ?? [];
+    const committedAtPly =
+      snap?.ply != null && snap?.move && history[snap.ply - 1] === snap.move;
+    const staleDuplicateError =
+      committedAtPly &&
+      typeof errMsg === 'string' &&
+      errMsg.includes('canonical-illegal');
+
+    if (errMsg && !staleDuplicateError) {
       lines.push(`  ⚠ ENGINE ERROR: ${errMsg}`);
     }
 

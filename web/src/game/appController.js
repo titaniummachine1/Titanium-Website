@@ -8,10 +8,13 @@ import {
 import {
   clockSearchHintFromState,
   estimateConservativeGameDistance,
+  pvTokensFromDepthLog,
+  remainingPliesFromDepthLog,
 } from "../lib/gameDistance.js";
 import {
   decodeReplayCode,
   encodeReplayFromActions,
+  tokenizeAlgebraicNotation,
 } from "../lib/replayCode.js";
 import {
   AnalysisEngineSession,
@@ -59,6 +62,10 @@ import { createTitaniumLegalityRuntime } from "../lib/titaniumLegalityRuntime.js
 import { validateMoveLegality } from "../lib/validateMoveLegality.js";
 import { isAbortError } from "../lib/engineAbort.js";
 import { resolveDisplayNodes } from "../lib/searchNodes.js";
+import {
+  mergeThinkSnapshots,
+  thinkSnapshotToSearchPayload,
+} from "../lib/searchTelemetry.js";
 import { getEngineEntryForPlayer } from "../engines/engineRegistry.js";
 import { requestEngineMove } from "../engines/requestEngineMove.js";
 import { validateEngineResultIdentity } from "../engines/validateEngineResultIdentity.js";
@@ -119,12 +126,37 @@ function deepestDepthEntry(depthLog) {
   );
 }
 
-function scoreFromDepthLog(depthLog, rootScore) {
+function scoreFromDepthLog(depthLog, rootScore, rootWinRate) {
+  if (Number.isFinite(Number(rootScore))) {
+    return Number(rootScore);
+  }
+  // MCTS win% lives in rootWinRate / card UI — never promote depthLog 0..100 to cp eval.
+  if (rootWinRate != null && Number.isFinite(Number(rootWinRate))) {
+    return null;
+  }
   const deep = deepestDepthEntry(depthLog);
   if (deep?.score != null && Number.isFinite(Number(deep.score))) {
     return deep.score;
   }
-  return rootScore ?? null;
+  return null;
+}
+
+function sanitizeSearchPayloadForEngine(payload, playerType, engineConfigs) {
+  if (!payload) {
+    return payload;
+  }
+  if (isTitaniumEngine(playerType, engineConfigs) || isAceFamily(playerType, engineConfigs)) {
+    return { ...payload, rootWinRate: null, evalKind: "score" };
+  }
+  if (isGorisansonEngine(playerType, engineConfigs)) {
+    return {
+      ...payload,
+      rootScore: null,
+      score: null,
+      evalKind: "winrate",
+    };
+  }
+  return payload;
 }
 
 function finalizeSearchInfo(info) {
@@ -137,7 +169,7 @@ function finalizeSearchInfo(info) {
     nodes,
     simulations: Number(info?.simulations) || nodes,
     searchDepth: info?.searchDepth ?? deep?.depth ?? null,
-    rootScore: scoreFromDepthLog(depthLog, info?.rootScore),
+    rootScore: scoreFromDepthLog(depthLog, info?.rootScore, info?.rootWinRate),
     pv: deep?.pv ?? info?.pv ?? "",
   };
 }
@@ -245,12 +277,21 @@ function searchPayloadToEvalState(payload, playerToMove) {
   const hasDist =
     Number.isFinite(payload.whiteDist) && Number.isFinite(payload.blackDist);
   const margin = hasDist ? payload.blackDist - payload.whiteDist : 0;
-  const hasScore = Number.isFinite(Number(payload.rootScore ?? payload.score));
+  const deep = deepestDepthEntry(payload.depthLog);
+  const scoreCandidate = payload.rootScore ?? payload.score ?? deep?.score;
+  const hasScore =
+    payload.evalKind === "score" ||
+    (payload.evalKind !== "winrate" &&
+      Number.isFinite(Number(scoreCandidate)));
+  const hasWinRate =
+    !hasScore &&
+    (payload.evalKind === "winrate" ||
+      Number.isFinite(Number(payload.rootWinRate)));
 
   let p1;
   let whiteScore = null;
   if (hasScore) {
-    const sideScore = Number(payload.rootScore ?? payload.score);
+    const sideScore = Number(scoreCandidate);
     whiteScore = playerToMove === 2 ? -sideScore : sideScore;
     p1 = 1 / (1 + Math.exp(-whiteScore / 350));
   } else if (Number.isFinite(Number(payload.rootWinRate))) {
@@ -263,7 +304,6 @@ function searchPayloadToEvalState(payload, playerToMove) {
   }
   p1 = Math.max(0.05, Math.min(0.95, p1));
 
-  const deep = deepestDepthEntry(payload.depthLog);
   return {
     p1,
     margin,
@@ -274,6 +314,8 @@ function searchPayloadToEvalState(payload, playerToMove) {
     depth: payload.depth ?? payload.searchDepth ?? deep?.depth ?? null,
     pv: pvArrayFromPayload(payload),
     rootMove: payload.rootMove ?? null,
+    rootWinRate: hasWinRate ? Number(payload.rootWinRate) : null,
+    evalKind: hasScore ? "score" : hasWinRate ? "winrate" : hasDist ? "distance" : "none",
     rootMoves: Array.isArray(payload.rootMoves) ? [...payload.rootMoves] : [],
   };
 }
@@ -302,13 +344,15 @@ import {
   resolveCores,
   clampCores,
   defaultCoreCount,
-  TITANIUM_NET_HARD,
-  migrateTitaniumNet,
+  TITANIUM_DEPTH_UNLIMITED,
+  migrateTitaniumDepthLimit,
+  clampTitaniumDepthLimit,
   allocateWholeGameTime,
   chargeThinkMsForSeat,
   tightenThinkAllocation,
   supportsWholeGameTime,
   hasSeatClock,
+  isGorisansonEngine,
 } from "../lib/timeControl.js";
 import { playerColorName } from "../lib/playerColors.js";
 import { ponderCandidateSlots } from "../lib/enginePonder.js";
@@ -390,7 +434,7 @@ export class AppController {
         unlimited: true,
         wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
-        titaniumNet: "hard",
+        searchDepthLimit: 0,
       },
     };
     for (let seat = 0; seat < 2; seat++) {
@@ -489,6 +533,7 @@ export class AppController {
     this._gameGeneration = 0;
     this._thinkAiSettings = null;
     this._thinkClockLastDepth = null;
+    this._thinkClockLastPv = null;
     this._clockTickId = null;
     this._illegalRetriesByPly = {};
     this._maxIllegalRetries = 2;
@@ -552,7 +597,7 @@ export class AppController {
         unlimited: true,
         wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
-        titaniumNet: "hard",
+        searchDepthLimit: 0,
       };
     }
     this.settings.analysisEngine = {
@@ -657,18 +702,25 @@ export class AppController {
     ) {
       return null;
     }
-    const active = this.searchInfoBySeat[this.thinkingSeatIndex] ?? null;
+    const seat = this.thinkingSeatIndex;
+    const playerType = this.settings.players[seat];
+    const active = this.searchInfoBySeat[seat] ?? null;
     const live = this.liveSearch ?? null;
     const depthLog = active?.depthLog?.length
       ? active.depthLog
       : (live?.depthLog ?? []);
-    // This merge order deliberately matches playerCard.thinkingTelemetry():
-    // the eval bar and the active engine card must consume one payload.
-    const payload = {
-      ...(live ?? {}),
-      ...(active ?? {}),
-      depthLog,
-    };
+    const completed = thinkSnapshotToSearchPayload(
+      this.lastCompletedThinkBySeat?.[seat],
+    );
+    const payload = sanitizeSearchPayloadForEngine(
+      mergeThinkSnapshots(completed, {
+        ...(live ?? {}),
+        ...(active ?? {}),
+        depthLog,
+      }),
+      playerType,
+      this.engineConfigs,
+    );
     const evalState = searchPayloadToEvalState(
       payload,
       this.session.playerToMove,
@@ -696,7 +748,10 @@ export class AppController {
       if (
         !snap ||
         snap.live ||
-        (snap.score == null && snap.rootScore == null && !snap.depthLog?.length)
+        (snap.score == null &&
+          snap.rootScore == null &&
+          snap.rootWinRate == null &&
+          !snap.depthLog?.length)
       ) {
         continue;
       }
@@ -708,12 +763,18 @@ export class AppController {
     if (!bestSnap || bestSeat == null) {
       return null;
     }
+    const playerType = this.settings.players[bestSeat];
     const evalState = searchPayloadToEvalState(
-      {
-        ...bestSnap,
-        rootScore: bestSnap.score ?? bestSnap.rootScore,
-        searchDepth: bestSnap.depth ?? bestSnap.searchDepth,
-      },
+      sanitizeSearchPayloadForEngine(
+        {
+          ...bestSnap,
+          rootScore: bestSnap.score ?? bestSnap.rootScore,
+          rootWinRate: bestSnap.rootWinRate ?? null,
+          searchDepth: bestSnap.depth ?? bestSnap.searchDepth,
+        },
+        playerType,
+        this.engineConfigs,
+      ),
       bestSeat + 1,
     );
     return evalState
@@ -945,7 +1006,7 @@ export class AppController {
         unlimited: true,
         wallClockSeconds: 5,
         cores: defaultAnalysisThreadCount(),
-        titaniumNet: "hard",
+        searchDepthLimit: 0,
       };
     }
     this.destroyAllEngines();
@@ -1111,11 +1172,24 @@ export class AppController {
     if (saved && isSavedSettingsValid(playerType, saved, this.engineConfigs)) {
       if (
         isTitaniumEngine(playerType, this.engineConfigs) &&
+        saved.searchDepthLimit == null &&
         !saved.titaniumNet
       ) {
         saved = {
           ...saved,
-          titaniumNet: migrateTitaniumNet(TITANIUM_NET_HARD),
+          searchDepthLimit: TITANIUM_DEPTH_UNLIMITED,
+          visitsBudget: saved.visitsBudget ?? 0,
+          cores: resolveCores(saved),
+        };
+      }
+      if (
+        isTitaniumEngine(playerType, this.engineConfigs) &&
+        saved.searchDepthLimit == null &&
+        saved.titaniumNet
+      ) {
+        saved = {
+          ...saved,
+          searchDepthLimit: migrateTitaniumDepthLimit(saved),
           visitsBudget: saved.visitsBudget ?? 0,
           cores: resolveCores(saved),
         };
@@ -1203,8 +1277,9 @@ export class AppController {
       isLocalMcts: isLocalMctsEngine(playerType, this.engineConfigs),
       isRemote: isRemoteEngine(playerType, this.engineConfigs),
       isZeroInk: isZeroInkEngine(playerType, this.engineConfigs),
-      titaniumNet: migrateTitaniumNet(
-        current?.titaniumNet ?? TITANIUM_NET_HARD,
+      titaniumNet: migrateTitaniumDepthLimit(current),
+      searchDepthLimit: clampTitaniumDepthLimit(
+        current?.searchDepthLimit ?? migrateTitaniumDepthLimit(current),
       ),
       cores,
       hasNativeTitaniumLazySmp,
@@ -1246,7 +1321,12 @@ export class AppController {
     if (isTitaniumEngine(playerType, this.engineConfigs)) {
       return (
         prevAi.wallClockSeconds !== nextAi.wallClockSeconds ||
-        prevAi.titaniumNet !== nextAi.titaniumNet ||
+        clampTitaniumDepthLimit(
+          prevAi.searchDepthLimit ?? migrateTitaniumDepthLimit(prevAi),
+        ) !==
+          clampTitaniumDepthLimit(
+            nextAi.searchDepthLimit ?? migrateTitaniumDepthLimit(nextAi),
+          ) ||
         prevAi.visitsBudget !== nextAi.visitsBudget ||
         resolveCores(prevAi) !== resolveCores(nextAi)
       );
@@ -1260,7 +1340,9 @@ export class AppController {
     if (isLocalMctsEngine(playerType, this.engineConfigs)) {
       return (
         prevAi.wallClockSeconds !== nextAi.wallClockSeconds ||
-        prevAi.visitsBudget !== nextAi.visitsBudget
+        prevAi.visitsBudget !== nextAi.visitsBudget ||
+        (isGorisansonEngine(playerType, this.engineConfigs) &&
+          prevAi.gorisansonNet !== nextAi.gorisansonNet)
       );
     }
     if (isZeroInkEngine(playerType, this.engineConfigs)) {
@@ -1515,12 +1597,27 @@ export class AppController {
     ) {
       return false;
     }
-    const liveDepth =
-      info.searchDepth ?? deepestDepthEntry(depthLog)?.depth ?? null;
-    if (liveDepth == null || liveDepth === this._thinkClockLastDepth) {
-      return false;
+    const remainingPlies = remainingPliesFromDepthLog(depthLog);
+    const pvKey = pvTokensFromDepthLog(depthLog).join(" ");
+    if (isGorisansonEngine(playerType, this.engineConfigs)) {
+      const tickKey =
+        remainingPlies != null
+          ? `r${remainingPlies}|${pvKey}`
+          : pvKey
+            ? `pv:${pvKey}`
+            : "";
+      if (!tickKey || tickKey === this._thinkClockLastPv) {
+        return false;
+      }
+      this._thinkClockLastPv = tickKey;
+    } else {
+      const liveDepth =
+        info.searchDepth ?? deepestDepthEntry(depthLog)?.depth ?? null;
+      if (liveDepth == null || liveDepth === this._thinkClockLastDepth) {
+        return false;
+      }
+      this._thinkClockLastDepth = liveDepth;
     }
-    this._thinkClockLastDepth = liveDepth;
 
     const allocation = this._wholeGameClockAllocation(seatIndex, ai, {
       searchTelemetry: {
@@ -3412,6 +3509,78 @@ export class AppController {
     return `seat-${seatIndex}`;
   }
 
+  _isStaleEngineMoveResponse({
+    moveKey,
+    requestPly,
+    requestHistory,
+    requestPositionKey,
+    currentPositionKey,
+    historyTokens,
+    actionsLength,
+    sessionActions,
+  }) {
+    const currentHistory = historyTokens.join(" ");
+    if (requestHistory && currentHistory !== requestHistory) {
+      return true;
+    }
+    if (actionsLength !== requestPly) {
+      return true;
+    }
+    if (
+      requestPositionKey &&
+      currentPositionKey &&
+      requestPositionKey !== currentPositionKey
+    ) {
+      return true;
+    }
+    const last = sessionActions[sessionActions.length - 1];
+    if (last && toAlgebraic(last) === moveKey) {
+      return true;
+    }
+    return false;
+  }
+
+  _ignoreStaleEngineMove({
+    seatIndex,
+    playerType,
+    requestSeq,
+    moveKey,
+    reason,
+    sessionActions,
+  }) {
+    logAiRequestEvent("AI_IDENTITY_VALIDATED", {
+      requestSeq,
+      ok: false,
+      reason,
+      decodedMove: moveKey,
+    });
+    console.warn("Ignoring stale engine move response", {
+      playerType,
+      seatIndex,
+      requestSeq,
+      reason,
+      suggested: moveKey,
+    });
+    const last = sessionActions[sessionActions.length - 1];
+    if (
+      last &&
+      toAlgebraic(last) === moveKey &&
+      typeof this.engineErrors[seatIndex] === "string" &&
+      this.engineErrors[seatIndex].includes("canonical-illegal")
+    ) {
+      this.engineErrors[seatIndex] = null;
+      this.engineStatus[seatIndex] = "idle";
+    }
+    if (this.thinkingSeatIndex === seatIndex) {
+      this.aiThinking = false;
+      this.thinkingPlayerType = null;
+      this.thinkingSeatIndex = null;
+      this.onChange?.();
+      queueMicrotask(() => this.maybeRequestAiMove());
+    }
+    return "stale";
+  }
+
   seatIndexForPlayerType(playerType) {
     if (
       this.thinkingSeatIndex != null &&
@@ -3752,27 +3921,14 @@ export class AppController {
       current.playerToMove !== requestPlayerToMove;
 
     if (!identity.ok || plyMismatch) {
-      logAiRequestEvent("AI_IDENTITY_VALIDATED", {
-        requestSeq,
-        ok: false,
-        reason: plyMismatch ? "stale-ply" : identity.reason,
-        decodedMove: moveKey,
-      });
-      console.warn("Ignoring stale engine move response", {
-        playerType,
+      return this._ignoreStaleEngineMove({
         seatIndex,
+        playerType,
         requestSeq,
-        reason: identity.reason,
-        suggested: moveKey,
+        moveKey,
+        reason: plyMismatch ? "stale-ply" : identity.reason,
+        sessionActions: current.actions,
       });
-      if (this.thinkingSeatIndex === seatIndex) {
-        this.aiThinking = false;
-        this.thinkingPlayerType = null;
-        this.thinkingSeatIndex = null;
-        this.onChange?.();
-        queueMicrotask(() => this.maybeRequestAiMove());
-      }
-      return "stale";
     }
 
     logAiRequestEvent("AI_IDENTITY_VALIDATED", {
@@ -3809,6 +3965,36 @@ export class AppController {
     });
 
     if (!identityGate.ok) {
+      const staleGateReasons = new Set([
+        "stale-request-seq",
+        "stale-game-generation",
+        "stale-position",
+        "wrong-seat",
+        "wrong-side",
+      ]);
+      const staleLegality =
+        staleGateReasons.has(identityGate.reason) ||
+        (identityGate.reason === "canonical-illegal" &&
+          this._isStaleEngineMoveResponse({
+            moveKey,
+            requestPly,
+            requestHistory,
+            requestPositionKey,
+            currentPositionKey,
+            historyTokens,
+            actionsLength: current.actions.length,
+            sessionActions: current.actions,
+          }));
+      if (staleLegality) {
+        return this._ignoreStaleEngineMove({
+          seatIndex,
+          playerType,
+          requestSeq,
+          moveKey,
+          reason: identityGate.reason,
+          sessionActions: current.actions,
+        });
+      }
       logAiRequestEvent("AI_LEGALITY_VALIDATED", {
         requestSeq,
         ok: false,
@@ -3838,6 +4024,28 @@ export class AppController {
     });
 
     if (!legality.ok) {
+      const staleLegality =
+        legality.reason === "canonical-illegal" &&
+        this._isStaleEngineMoveResponse({
+          moveKey,
+          requestPly,
+          requestHistory,
+          requestPositionKey,
+          currentPositionKey,
+          historyTokens,
+          actionsLength: current.actions.length,
+          sessionActions: current.actions,
+        });
+      if (staleLegality) {
+        return this._ignoreStaleEngineMove({
+          seatIndex,
+          playerType,
+          requestSeq,
+          moveKey,
+          reason: legality.reason,
+          sessionActions: current.actions,
+        });
+      }
       logAiRequestEvent("AI_LEGALITY_VALIDATED", {
         requestSeq,
         ok: false,
@@ -4197,6 +4405,7 @@ export class AppController {
     );
     this._thinkAiSettings = { ...requestAiSettings };
     this._thinkClockLastDepth = null;
+    this._thinkClockLastPv = null;
     this.liveSearch = {
       ...this.liveSearch,
       wholeGameExpectedMovesLeft:
@@ -4583,7 +4792,10 @@ export class AppController {
    */
   loadNotationString(text) {
     if (!text || !text.trim()) return null;
-    const tokens = text.trim().split(/\s+/).filter(Boolean);
+    const tokens = tokenizeAlgebraicNotation(text);
+    if (tokens.length === 0) {
+      return { error: "No moves found in notation" };
+    }
     const actions = [];
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];

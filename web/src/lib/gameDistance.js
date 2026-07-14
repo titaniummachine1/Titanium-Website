@@ -38,6 +38,16 @@ export function pvTokensFromDepthLog(depthLog) {
   return parts;
 }
 
+/** Gorisanson MCTS: mean remaining plies from rollout telemetry. */
+export function remainingPliesFromDepthLog(depthLog) {
+  const deep = deepestDepthEntry(depthLog);
+  const direct = deep?.remainingPlies;
+  if (direct != null && Number.isFinite(Number(direct))) {
+    return Math.max(1, Math.round(Number(direct)));
+  }
+  return null;
+}
+
 function boardFromActionTokens(tokens) {
   const board = new QuoridorBoard();
   for (const token of tokens) {
@@ -116,6 +126,8 @@ export function estimateConservativeGameDistance({
   blackDist = null,
 } = {}) {
   if (depthLog?.length) {
+    const simFloor = remainingPliesFromDepthLog(depthLog);
+    if (simFloor != null) return simFloor;
     const pvFloor = minimumRemainingPliesFromPv(actions, depthLog);
     if (pvFloor != null) return pvFloor;
   }

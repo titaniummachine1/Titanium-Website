@@ -261,7 +261,63 @@ export function resolveCores(aiSettings) {
   return resolveThreads(aiSettings);
 }
 
-/** Titanium difficulty tiers (NNUE weight sets). */
+/** Titanium search depth cap. 0 = engine default (128 ply in WASM). */
+export const TITANIUM_DEPTH_UNLIMITED = 0;
+export const TITANIUM_DEPTH_RANGE = {
+  min: 0,
+  max: 64,
+  default: TITANIUM_DEPTH_UNLIMITED,
+};
+
+export function clampTitaniumDepthLimit(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return TITANIUM_DEPTH_UNLIMITED;
+  }
+  return Math.min(TITANIUM_DEPTH_RANGE.max, Math.max(1, Math.round(n)));
+}
+
+/** WASM/Rust: <=0 uses engine default 128; positive capped at 64 in browser WASM. */
+export function resolveTitaniumMaxDepth(aiSettings) {
+  if (aiSettings?.searchDepthLimit != null) {
+    return clampTitaniumDepthLimit(aiSettings.searchDepthLimit);
+  }
+  return migrateTitaniumDepthLimit(aiSettings);
+}
+
+export function migrateTitaniumDepthLimit(saved) {
+  if (saved?.searchDepthLimit != null) {
+    return clampTitaniumDepthLimit(saved.searchDepthLimit);
+  }
+  const net = saved?.titaniumNet;
+  if (net === "frozen" || net === TITANIUM_NET_EASY) return 16;
+  if (net === "live" || net === TITANIUM_NET_MEDIUM) return 32;
+  return TITANIUM_DEPTH_UNLIMITED;
+}
+
+export function formatTitaniumDepthLimit(limit) {
+  const n = clampTitaniumDepthLimit(limit);
+  if (n === TITANIUM_DEPTH_UNLIMITED) {
+    return "unlimited";
+  }
+  return `d≤${n}`;
+}
+
+/** Gorisanson strength: Easy = vanilla MCTS, Medium = CAT-guided rollouts. */
+export const GORISANSON_NET_EASY = "easy";
+export const GORISANSON_NET_MEDIUM = "medium";
+
+export function migrateGorisansonNet(net) {
+  return net === GORISANSON_NET_MEDIUM ? GORISANSON_NET_MEDIUM : GORISANSON_NET_EASY;
+}
+
+export function gorisansonNetLabel(aiSettings) {
+  return migrateGorisansonNet(aiSettings?.gorisansonNet) === GORISANSON_NET_MEDIUM
+    ? "Medium (CAT)"
+    : "Easy";
+}
+
+/** @deprecated Titanium Easy/Medium/Hard — migrated to searchDepthLimit. */
 export const TITANIUM_NET_EASY = "easy";
 export const TITANIUM_NET_MEDIUM = "medium";
 export const TITANIUM_NET_HARD = "hard";
@@ -290,11 +346,8 @@ export function resolveTitaniumEngineMode(
   return "titanium-v16";
 }
 
-/** v16 CAT LMR ceiling (cm) from Easy/Medium/Hard difficulty. */
-export function resolveCatLmrCeiling(aiSettings) {
-  const net = migrateTitaniumNet(aiSettings?.titaniumNet ?? TITANIUM_NET_HARD);
-  if (net === TITANIUM_NET_EASY) return 500;
-  if (net === TITANIUM_NET_MEDIUM) return 800;
+/** v16/v17 CAT LMR ceiling — single production profile (former Hard tier). */
+export function resolveCatLmrCeiling(_aiSettings) {
   return 1000;
 }
 
@@ -303,10 +356,9 @@ export function catLmrCeilingLabel(aiSettings) {
 }
 
 export function titaniumNetLabel(aiSettings) {
-  const net = migrateTitaniumNet(aiSettings?.titaniumNet ?? TITANIUM_NET_HARD);
-  if (net === TITANIUM_NET_EASY) return "Easy";
-  if (net === TITANIUM_NET_MEDIUM) return "Medium";
-  return "Hard";
+  return formatTitaniumDepthLimit(
+    aiSettings?.searchDepthLimit ?? migrateTitaniumDepthLimit(aiSettings),
+  );
 }
 
 /** Default think budget for legacy Quoridor v3 client (removed from UI, kept for imports). */
@@ -431,9 +483,10 @@ export function isAceV13Family(playerType, engineConfigs) {
 
 export function isGorisansonEngine(playerType, engineConfigs) {
   return (
-    playerType === PlayerType.GorisansonMCTS ||
-    getEngineConfig(playerType, engineConfigs)?.kind === "local"
-  ) && playerType === PlayerType.GorisansonMCTS;
+    (playerType === PlayerType.GorisansonMCTS ||
+      getEngineConfig(playerType, engineConfigs)?.kind === "local") &&
+    playerType === PlayerType.GorisansonMCTS
+  );
 }
 
 /** Engines with a reliable wall-clock stop and a search-start notification. */
@@ -572,7 +625,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
   }
   if (isTitaniumEngine(playerType, engineConfigs)) {
     return {
-      titaniumNet: TITANIUM_NET_HARD,
+      searchDepthLimit: TITANIUM_DEPTH_UNLIMITED,
       wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
       wholeGameTime: true,
       visitsBudget: UNLIMITED_VISITS,
@@ -599,6 +652,7 @@ export function defaultPlayerAiSettings(playerType, engineConfigs) {
       wallClockSeconds: WALL_CLOCK_RANGE.defaultSeconds,
       wholeGameTime: true,
       visitsBudget: LOCAL_VISITS_RANGE.default,
+      gorisansonNet: GORISANSON_NET_EASY,
     };
   }
   if (isLocalEngine(playerType, engineConfigs)) {
@@ -690,20 +744,32 @@ export function describePlayerAiSettings(
       aiSettings.visitsBudget ?? LOCAL_VISITS_RANGE.default,
     );
     if (isTitaniumEngine(playerType, engineConfigs)) {
+      const depthLabel = formatTitaniumDepthLimit(
+        aiSettings.searchDepthLimit ?? migrateTitaniumDepthLimit(aiSettings),
+      );
       const tier =
         playerType === PlayerType.TitaniumV16
           ? catLmrCeilingLabel(aiSettings)
-          : `${titaniumNetLabel(aiSettings)} NNUE`;
+          : "NNUE";
       const budgetLabel = "nodes";
       const cores = resolveCores(aiSettings);
       const threads = cores > 1 ? ` · ${cores} threads` : "";
-      return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${tier}${threads}`;
+      return `${config.name}: ${time} · ${cap} ${budgetLabel} · ${depthLabel}${threads}`;
     }
     if (isQuoridorV3Engine(playerType, engineConfigs)) {
       const depthCap = formatMaxDepth(
         maxDepthFromVisitsBudget(aiSettings.visitsBudget),
       );
       return `${config.name}: ${time} · ${depthCap}`;
+    }
+    if (isGorisansonEngine(playerType, engineConfigs)) {
+      const cap = formatVisitsCap(
+        aiSettings.visitsBudget ?? LOCAL_VISITS_RANGE.default,
+      );
+      const bank =
+        aiSettings.wholeGameTime !== false ? "whole game" : "per move";
+      const tier = gorisansonNetLabel(aiSettings);
+      return `${config.name}: ${time} · ${cap} · ${bank} · ${tier}`;
     }
     if (isAceFamily(playerType, engineConfigs)) {
       return `${aceDisplayName(aiSettings.strengthLevel, playerType)}: ${time}`;

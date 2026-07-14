@@ -125,10 +125,15 @@ function coordinatesEqual(a, b) {
 // ---------------------------------------------------------------------------
 
 function parseAlgebraic(move) {
-  const coordinate = parseCoordinateText(move.slice(0, 2));
-  if (move.length > 2) {
+  let text = String(move ?? '').trim().toLowerCase();
+  // wallz.gg prefix walls: ve4 / hd3 → e4v / d3h
+  if (text.length === 3 && (text[0] === 'h' || text[0] === 'v')) {
+    text = `${text.slice(1)}${text[0]}`;
+  }
+  const coordinate = parseCoordinateText(text.slice(0, 2));
+  if (text.length > 2) {
     return {
-      wallType: move[2] === 'h' ? WallType.Horizontal : WallType.Vertical,
+      wallType: text[2] === 'h' ? WallType.Horizontal : WallType.Vertical,
       coordinate,
     };
   }

@@ -5,28 +5,36 @@
  *
  *   Remote (Ka / Ishtar):   Strength (Beg→Alpha) + thinking mode
  *   zero.ink:               Thinking mode only (Immediate / Short / Medium / Long)
- *   Titanium:               Difficulty (Easy/Medium/Hard) + thinking time slider
+ *   Titanium:               Depth limit slider + thinking time
  *   ACE v13:                Tier selector (JS→Rust→MoveGen+) + time slider
- *   Gorisanson / QuoridorV3: Thinking time slider
+ *   Gorisanson:             Easy / Medium (CAT) + whole-game time slider
  *   Human:                  Clock time slider + whole-game vs per-move toggle
  *
  * Settings are persisted to localStorage and restored on next open.
  * Keyboard: Enter / Escape / X confirm; Cancel (change-players only) discards.
  */
 
-import { PlayerType, TimeToMove, StrengthLevel } from '../lib/engineConfig.js';
-import { LMR_AGGRESSION_DEFAULT } from '../lib/catHeatmap.js';
-import { getPlayerOptionGroups, getAllEngineConfigs } from '../lib/playerRegistry.js';
-import { playerColorName } from '../lib/playerColors.js';
+import { PlayerType, TimeToMove, StrengthLevel } from "../lib/engineConfig.js";
+import { LMR_AGGRESSION_DEFAULT } from "../lib/catHeatmap.js";
+import {
+  getPlayerOptionGroups,
+  getAllEngineConfigs,
+} from "../lib/playerRegistry.js";
+import { playerColorName } from "../lib/playerColors.js";
 import {
   isRemoteEngine,
   isTitaniumEngine,
   isAceFamily,
+  isGorisansonEngine,
+  supportsWholeGameTime,
   STRENGTH_LEVEL_PRESETS,
-  TITANIUM_NET_EASY,
-  TITANIUM_NET_MEDIUM,
-  TITANIUM_NET_HARD,
-  migrateTitaniumNet,
+  TITANIUM_DEPTH_UNLIMITED,
+  TITANIUM_DEPTH_RANGE,
+  clampTitaniumDepthLimit,
+  migrateTitaniumDepthLimit,
+  GORISANSON_NET_EASY,
+  GORISANSON_NET_MEDIUM,
+  migrateGorisansonNet,
   coresSliderMax,
   defaultThreadCount,
   clampCores,
@@ -36,50 +44,48 @@ import {
   WALL_CLOCK_RANGE,
   wallClockFromSlider,
   wallClockSliderPosition,
-  supportsWholeGameTime,
-} from '../lib/timeControl.js';
+} from "../lib/timeControl.js";
 
 const UI_MODE_TABS = [
-  { id: 'play', label: 'Play' },
-  { id: 'analysis', label: 'Analysis' },
-  { id: 'replay', label: 'Review' },
+  { id: "play", label: "Play" },
+  { id: "analysis", label: "Analysis" },
+  { id: "replay", label: "Review" },
 ];
 
-const TITANIUM_NET_OPTIONS = [
-  { label: 'Easy', id: TITANIUM_NET_EASY },
-  { label: 'Medium', id: TITANIUM_NET_MEDIUM },
-  { label: 'Hard', id: TITANIUM_NET_HARD },
+const GORISANSON_TIER_OPTIONS = [
+  { label: "Easy", id: GORISANSON_NET_EASY },
+  { label: "Medium (CAT)", id: GORISANSON_NET_MEDIUM },
 ];
 
-const PREFS_KEY = 'quoridor-player-prefs-v5';
+const PREFS_KEY = "quoridor-player-prefs-v5";
 
 const TIME_TO_MOVE_OPTIONS = [
-  { label: 'Immediate', id: TimeToMove.Intuition },
-  { label: 'Short',     id: TimeToMove.Short },
-  { label: 'Medium',    id: TimeToMove.Medium },
-  { label: 'Long',      id: TimeToMove.Long },
+  { label: "Immediate", id: TimeToMove.Intuition },
+  { label: "Short", id: TimeToMove.Short },
+  { label: "Medium", id: TimeToMove.Medium },
+  { label: "Long", id: TimeToMove.Long },
 ];
 
 const ACE_V13_TIERS = [
-  { label: 'JS',       id: 0 },
-  { label: 'Rust',     id: 1 },
-  { label: 'MoveGen+', id: 2 },
+  { label: "JS", id: 0 },
+  { label: "Rust", id: 1 },
+  { label: "MoveGen+", id: 2 },
 ];
 
-const DEFAULT_WALL_CLOCK    = WALL_CLOCK_RANGE.defaultSeconds;
-const DEFAULT_TIME_TO_MOVE  = TimeToMove.Short;
-const DEFAULT_ACE_TIER      = 0;
-const DEFAULT_CORES         = defaultThreadCount();
-const ANALYSIS_TIME_MIN     = 0.5;
-const ANALYSIS_TIME_MAX     = 60;
-const ANALYSIS_TIME_STEP    = 0.5;
-const CORES_MIN             = 1;
-const PATH_BIAS_MIN         = -30;
-const PATH_BIAS_MAX         = 30;
-const PATH_BIAS_STEP        = 1;
-const LMR_AGGRESSION_MIN    = -500;
-const LMR_AGGRESSION_MAX    = 150;
-const LMR_AGGRESSION_STEP   = 1;
+const DEFAULT_WALL_CLOCK = WALL_CLOCK_RANGE.defaultSeconds;
+const DEFAULT_TIME_TO_MOVE = TimeToMove.Short;
+const DEFAULT_ACE_TIER = 0;
+const DEFAULT_CORES = defaultThreadCount();
+const ANALYSIS_TIME_MIN = 0.5;
+const ANALYSIS_TIME_MAX = 60;
+const ANALYSIS_TIME_STEP = 0.5;
+const CORES_MIN = 1;
+const PATH_BIAS_MIN = -30;
+const PATH_BIAS_MAX = 30;
+const PATH_BIAS_STEP = 1;
+const LMR_AGGRESSION_MIN = -500;
+const LMR_AGGRESSION_MAX = 150;
+const LMR_AGGRESSION_STEP = 1;
 
 const DEFAULT_CAT_VISION = Object.freeze({
   showSquares: true,
@@ -89,24 +95,28 @@ const DEFAULT_CAT_VISION = Object.freeze({
 });
 
 const VISION_MODE_OPTIONS = [
-  { label: 'Off', id: 'off' },
-  { label: 'CAT', id: 'cat' },
-  { label: 'LMR', id: 'lmr' },
+  { label: "Off", id: "off" },
+  { label: "CAT", id: "cat" },
+  { label: "LMR", id: "lmr" },
 ];
 
 function escHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function formatTime(seconds) {
-  if (seconds < 1) return seconds.toFixed(2).replace(/0$/, '') + ' s';
-  if (seconds < 60) return (Number.isInteger(seconds) ? seconds : seconds.toFixed(1)) + ' s';
+  if (seconds < 1) return seconds.toFixed(2).replace(/0$/, "") + " s";
+  if (seconds < 60)
+    return (Number.isInteger(seconds) ? seconds : seconds.toFixed(1)) + " s";
   const minutes = seconds / 60;
-  return (Number.isInteger(minutes) ? minutes : minutes.toFixed(1)) + ' min';
+  return (Number.isInteger(minutes) ? minutes : minutes.toFixed(1)) + " min";
 }
 
 function formatPercent(value) {
-  return Math.round(Number(value ?? 1) * 100) + '%';
+  return Math.round(Number(value ?? 1) * 100) + "%";
 }
 
 function formatPly(value) {
@@ -124,23 +134,23 @@ function clampNumber(value, min, max) {
 
 function visionModeFromSettings(settings = {}) {
   if (settings.showLmrVision) {
-    return 'lmr';
+    return "lmr";
   }
   if (settings.showCatVision) {
-    return 'cat';
+    return "cat";
   }
-  return 'off';
+  return "off";
 }
 
 /** Classify a player type into a dialog control category. */
 function engineCategory(playerType) {
   const configs = getAllEngineConfigs();
-  if (playerType === PlayerType.Human) return 'human';
-  if (playerType === PlayerType.ZeroInk) return 'zeroink';
-  if (isRemoteEngine(playerType, configs)) return 'remote';
-  if (isTitaniumEngine(playerType, configs)) return 'titanium';
-  if (isAceFamily(playerType, configs)) return 'ace-v13';
-  return 'local';
+  if (playerType === PlayerType.Human) return "human";
+  if (playerType === PlayerType.ZeroInk) return "zeroink";
+  if (isRemoteEngine(playerType, configs)) return "remote";
+  if (isTitaniumEngine(playerType, configs)) return "titanium";
+  if (isAceFamily(playerType, configs)) return "ace-v13";
+  return "local";
 }
 
 function aceDisplayTiers(_playerType) {
@@ -150,18 +160,43 @@ function aceDisplayTiers(_playerType) {
 // ── Prefs ────────────────────────────────────────────────────────────────────
 
 function loadPrefs(state) {
-  const defaultPlayers = state.settings?.players ?? [PlayerType.Human, PlayerType.Human];
+  const defaultPlayers = state.settings?.players ?? [
+    PlayerType.Human,
+    PlayerType.Human,
+  ];
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     const saved = raw ? JSON.parse(raw) : {};
     return {
-      players:     saved.players     ?? [...defaultPlayers],
-      wallClock:   saved.wallClock   ?? [DEFAULT_WALL_CLOCK, DEFAULT_WALL_CLOCK],
+      players: saved.players ?? [...defaultPlayers],
+      wallClock: saved.wallClock ?? [DEFAULT_WALL_CLOCK, DEFAULT_WALL_CLOCK],
       wholeGameTime: saved.wholeGameTime ?? [true, true],
-      timeToMove:  saved.timeToMove  ?? [DEFAULT_TIME_TO_MOVE, DEFAULT_TIME_TO_MOVE],
+      timeToMove: saved.timeToMove ?? [
+        DEFAULT_TIME_TO_MOVE,
+        DEFAULT_TIME_TO_MOVE,
+      ],
       aceStrength: saved.aceStrength ?? [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
-      remoteStrength: saved.remoteStrength ?? [StrengthLevel.Alpha, StrengthLevel.Alpha],
-      titaniumNet: (saved.titaniumNet ?? [TITANIUM_NET_HARD, TITANIUM_NET_HARD]).map(migrateTitaniumNet),
+      remoteStrength: saved.remoteStrength ?? [
+        StrengthLevel.Alpha,
+        StrengthLevel.Alpha,
+      ],
+      searchDepthLimit: [0, 1].map((seat) =>
+        clampTitaniumDepthLimit(
+          Array.isArray(saved.searchDepthLimit)
+            ? saved.searchDepthLimit[seat]
+            : migrateTitaniumDepthLimit({
+                searchDepthLimit: saved.searchDepthLimit,
+                titaniumNet: saved.titaniumNet?.[seat],
+              }),
+        ),
+      ),
+      gorisansonNet: [0, 1].map((seat) =>
+        migrateGorisansonNet(
+          Array.isArray(saved.gorisansonNet)
+            ? saved.gorisansonNet[seat]
+            : GORISANSON_NET_EASY,
+        ),
+      ),
       cores: [0, 1].map((seat) =>
         clampCores(
           (Array.isArray(saved.cores) ? saved.cores[seat] : null) ??
@@ -172,20 +207,23 @@ function loadPrefs(state) {
     };
   } catch {
     return {
-      players:     [...defaultPlayers],
-      wallClock:   [DEFAULT_WALL_CLOCK, DEFAULT_WALL_CLOCK],
+      players: [...defaultPlayers],
+      wallClock: [DEFAULT_WALL_CLOCK, DEFAULT_WALL_CLOCK],
       wholeGameTime: [true, true],
-      timeToMove:  [DEFAULT_TIME_TO_MOVE, DEFAULT_TIME_TO_MOVE],
+      timeToMove: [DEFAULT_TIME_TO_MOVE, DEFAULT_TIME_TO_MOVE],
       aceStrength: [DEFAULT_ACE_TIER, DEFAULT_ACE_TIER],
       remoteStrength: [StrengthLevel.Alpha, StrengthLevel.Alpha],
-      titaniumNet: [TITANIUM_NET_HARD, TITANIUM_NET_HARD],
+      searchDepthLimit: [TITANIUM_DEPTH_UNLIMITED, TITANIUM_DEPTH_UNLIMITED],
+      gorisansonNet: [GORISANSON_NET_EASY, GORISANSON_NET_EASY],
       cores: [DEFAULT_CORES, DEFAULT_CORES],
     };
   }
 }
 
 function savePrefs(prefs) {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {}
 }
 
 function aiSelected(players) {
@@ -193,29 +231,27 @@ function aiSelected(players) {
 }
 
 function oracleBlocksStart(state, selections) {
-  if (selections.uiMode !== 'play' || !aiSelected(selections.players)) {
+  if (selections.uiMode !== "play" || !aiSelected(selections.players)) {
     return false;
   }
   return !state.legalityOracleState?.ready;
 }
 
 function oracleStatusHtml(state, selections) {
-  if (selections.uiMode !== 'play' || !aiSelected(selections.players)) {
-    return '';
+  if (selections.uiMode !== "play" || !aiSelected(selections.players)) {
+    return "";
   }
   if (state.legalityOracleState?.ready) {
-    return '';
+    return "";
   }
   if (state.legalityOracleState?.error) {
     return (
       '<div class="player-dialog__hint player-dialog__hint--error">' +
-      'Local legality checker failed to load. Check the copied diagnostic.' +
-      '</div>'
+      "Local legality checker failed to load. Check the copied diagnostic." +
+      "</div>"
     );
   }
-  return (
-    '<div class="player-dialog__hint">Preparing local legality checker…</div>'
-  );
+  return '<div class="player-dialog__hint">Preparing local legality checker…</div>';
 }
 
 function updateStartButtonState(overlay, state, selections) {
@@ -225,37 +261,39 @@ function updateStartButtonState(overlay, state, selections) {
   }
   const blocked = oracleBlocksStart(state, selections);
   startBtn.disabled = blocked;
-  startBtn.title = blocked
-    ? 'Waiting for local legality checker'
-    : '';
+  startBtn.title = blocked ? "Waiting for local legality checker" : "";
 }
 
 // ── Dialog state ─────────────────────────────────────────────────────────────
 
 let currentDialog = null;
 
-export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
-  if (currentDialog) { currentDialog.remove(); currentDialog = null; }
+export function openPlayerDialog(state, controller, { mode = "newgame" } = {}) {
+  if (currentDialog) {
+    currentDialog.remove();
+    currentDialog = null;
+  }
 
-  const isNewGame = mode === 'newgame';
-  const isSettings = mode === 'settings';
+  const isNewGame = mode === "newgame";
+  const isSettings = mode === "settings";
   const title = isNewGame
-    ? 'New game — choose players'
+    ? "New game — choose players"
     : isSettings
-      ? 'Settings'
-      : 'Change players';
+      ? "Settings"
+      : "Change players";
 
   const prefs = loadPrefs(state);
   const analysisEngine = state.settings?.analysisEngine ?? {};
   const selections = {
-    uiMode: state.uiMode ?? 'play',
-    players:     [...prefs.players],
-    wallClock:   [...prefs.wallClock],
+    uiMode: state.uiMode ?? "play",
+    players: [...prefs.players],
+    wallClock: [...prefs.wallClock],
     wholeGameTime: [...prefs.wholeGameTime],
-    timeToMove:  [...prefs.timeToMove],
+    timeToMove: [...prefs.timeToMove],
     aceStrength: [...prefs.aceStrength],
     remoteStrength: [...prefs.remoteStrength],
-    titaniumNet: [...prefs.titaniumNet],
+    searchDepthLimit: [...prefs.searchDepthLimit],
+    gorisansonNet: [...prefs.gorisansonNet],
     cores: [...(prefs.cores ?? [DEFAULT_CORES, DEFAULT_CORES])],
     analysisWallClock: analysisEngine.wallClockSeconds ?? 5,
     analysisCores: analysisEngine.cores ?? defaultAnalysisThreadCount(),
@@ -265,53 +303,67 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
       ...DEFAULT_CAT_VISION,
       ...(state.settings?.catVision ?? {}),
     },
-    pathBiasPercent: Math.trunc(clampNumber(
-      state.settings?.pathBiasPercent ?? 0,
-      PATH_BIAS_MIN,
-      PATH_BIAS_MAX,
-    )),
-    lmrAggressionPercent: Math.trunc(clampNumber(
-      state.settings?.lmrAggressionPercent
-        ?? (state.settings?.lmrAggressiveness != null
-          ? LMR_AGGRESSION_DEFAULT
-          : LMR_AGGRESSION_DEFAULT),
-      LMR_AGGRESSION_MIN,
-      LMR_AGGRESSION_MAX,
-    )),
+    pathBiasPercent: Math.trunc(
+      clampNumber(
+        state.settings?.pathBiasPercent ?? 0,
+        PATH_BIAS_MIN,
+        PATH_BIAS_MAX,
+      ),
+    ),
+    lmrAggressionPercent: Math.trunc(
+      clampNumber(
+        state.settings?.lmrAggressionPercent ??
+          (state.settings?.lmrAggressiveness != null
+            ? LMR_AGGRESSION_DEFAULT
+            : LMR_AGGRESSION_DEFAULT),
+        LMR_AGGRESSION_MIN,
+        LMR_AGGRESSION_MAX,
+      ),
+    ),
   };
 
   const groups = getPlayerOptionGroups();
 
-  const overlay = document.createElement('div');
-  overlay.className = 'dialog-overlay';
+  const overlay = document.createElement("div");
+  overlay.className = "dialog-overlay";
   overlay.innerHTML =
     '<div class="player-dialog" role="dialog" aria-modal="true">' +
-      '<div class="player-dialog__header">' +
-        '<h2 class="player-dialog__title">' + escHtml(title) + '</h2>' +
-        '<button type="button" class="player-dialog__close" aria-label="Close" data-action="close">✕</button>' +
-      '</div>' +
-      '<div class="player-dialog__body">' +
-        renderUiModeTabs(selections) +
-        '<div data-mode-body>' + renderModeBody(state, selections, groups) + '</div>' +
-        '<div class="player-dialog__options">' +
-          renderVisionSettings(selections) +
-          '<label class="player-dialog__option-row">' +
-            '<input type="checkbox" data-option="evalBar"' + (state.settings?.displayEvalBar !== false ? ' checked' : '') + '>' +
-            ' Show eval bar' +
-          '</label>' +
-          '<label class="player-dialog__option-row">' +
-            '<input type="checkbox" data-option="bestMoveHint"' + (state.settings?.showBestMoveHint !== false ? ' checked' : '') + '>' +
-            ' Show best-move hint on board while engine thinks' +
-          '</label>' +
-        '</div>' +
-      '</div>' +
-      '<div class="player-dialog__footer">' +
-        '<button type="button" class="btn btn--primary player-dialog__start" data-action="start">' +
-          (isNewGame ? 'Start game' : isSettings ? 'Apply settings' : 'Apply') +
-        '</button>' +
-        (!isNewGame ? '<button type="button" class="btn player-dialog__cancel" data-action="cancel">Cancel</button>' : '') +
-      '</div>' +
-    '</div>';
+    '<div class="player-dialog__header">' +
+    '<h2 class="player-dialog__title">' +
+    escHtml(title) +
+    "</h2>" +
+    '<button type="button" class="player-dialog__close" aria-label="Close" data-action="close">✕</button>' +
+    "</div>" +
+    '<div class="player-dialog__body">' +
+    renderUiModeTabs(selections) +
+    "<div data-mode-body>" +
+    renderModeBody(state, selections, groups) +
+    "</div>" +
+    '<div class="player-dialog__options">' +
+    renderVisionSettings(selections) +
+    '<label class="player-dialog__option-row">' +
+    '<input type="checkbox" data-option="evalBar"' +
+    (state.settings?.displayEvalBar !== false ? " checked" : "") +
+    ">" +
+    " Show eval bar" +
+    "</label>" +
+    '<label class="player-dialog__option-row">' +
+    '<input type="checkbox" data-option="bestMoveHint"' +
+    (state.settings?.showBestMoveHint !== false ? " checked" : "") +
+    ">" +
+    " Show best-move hint on board while engine thinks" +
+    "</label>" +
+    "</div>" +
+    "</div>" +
+    '<div class="player-dialog__footer">' +
+    '<button type="button" class="btn btn--primary player-dialog__start" data-action="start">' +
+    (isNewGame ? "Start game" : isSettings ? "Apply settings" : "Apply") +
+    "</button>" +
+    (!isNewGame
+      ? '<button type="button" class="btn player-dialog__cancel" data-action="cancel">Cancel</button>'
+      : "") +
+    "</div>" +
+    "</div>";
 
   document.body.appendChild(overlay);
   overlay._selections = selections;
@@ -323,49 +375,71 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
   wireModeBody(overlay, state, selections, groups);
   wireVisionSettings(overlay, selections, controller);
 
-  overlay.querySelectorAll('[data-mode-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+  overlay.querySelectorAll("[data-mode-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
       if (btn.dataset.modeTab === selections.uiMode) return;
       selections.uiMode = btn.dataset.modeTab;
-      overlay.querySelectorAll('[data-mode-tab]').forEach((b) => {
-        b.classList.toggle('mode-tab--active', b.dataset.modeTab === selections.uiMode);
+      overlay.querySelectorAll("[data-mode-tab]").forEach((b) => {
+        b.classList.toggle(
+          "mode-tab--active",
+          b.dataset.modeTab === selections.uiMode,
+        );
       });
-      const host = overlay.querySelector('[data-mode-body]');
+      const host = overlay.querySelector("[data-mode-body]");
       if (host) {
-        host.innerHTML = renderModeBody(controller.getState(), selections, groups);
+        host.innerHTML = renderModeBody(
+          controller.getState(),
+          selections,
+          groups,
+        );
         wireModeBody(overlay, state, selections, groups);
       }
       const startBtn = overlay.querySelector('[data-action="start"]');
       if (startBtn) {
-        startBtn.textContent = selections.uiMode !== 'play'
-          ? 'Apply'
-          : (isNewGame ? 'Start game' : isSettings ? 'Apply settings' : 'Apply');
+        startBtn.textContent =
+          selections.uiMode !== "play"
+            ? "Apply"
+            : isNewGame
+              ? "Start game"
+              : isSettings
+                ? "Apply settings"
+                : "Apply";
       }
       updateStartButtonState(overlay, controller.getState(), selections);
     });
   });
 
-  const confirmDialog = () => { applyAndClose(); };
-  const cancelDialog = () => { overlay.remove(); currentDialog = null; };
+  const confirmDialog = () => {
+    applyAndClose();
+  };
+  const cancelDialog = () => {
+    overlay.remove();
+    currentDialog = null;
+  };
 
   function applyAndClose() {
     const liveState = controller.getState();
     // Apply display toggles immediately via controller (both branches).
-    const evalBar = overlay.querySelector('[data-option="evalBar"]')?.checked ?? true;
+    const evalBar =
+      overlay.querySelector('[data-option="evalBar"]')?.checked ?? true;
     if ((liveState.settings?.displayEvalBar !== false) !== evalBar) {
       controller.toggleDisplayEvalBar?.();
     }
-    const bmHint = overlay.querySelector('[data-option="bestMoveHint"]')?.checked ?? true;
+    const bmHint =
+      overlay.querySelector('[data-option="bestMoveHint"]')?.checked ?? true;
     controller.toggleBestMoveHint?.(bmHint);
     applyVisionSettings(selections, controller);
 
-    if (selections.uiMode !== 'play') {
+    if (selections.uiMode !== "play") {
       // Analysis/Review: apply the single-engine settings chosen here, then
       // actually switch modes -- this used to be missing entirely, so
       // picking the Analysis/Review tab and hitting Apply silently did
       // nothing (stayed in Play with whatever players were already set).
-      controller.setAnalysisEngineSetting?.('wallClockSeconds', selections.analysisWallClock);
-      controller.setAnalysisEngineSetting?.('cores', selections.analysisCores);
+      controller.setAnalysisEngineSetting?.(
+        "wallClockSeconds",
+        selections.analysisWallClock,
+      );
+      controller.setAnalysisEngineSetting?.("cores", selections.analysisCores);
       controller.setUiMode?.(selections.uiMode);
       overlay.remove();
       currentDialog = null;
@@ -377,35 +451,50 @@ export function openPlayerDialog(state, controller, { mode = 'newgame' } = {}) {
       return;
     }
     savePrefs({
-      players:     selections.players,
-      wallClock:   selections.wallClock,
+      players: selections.players,
+      wallClock: selections.wallClock,
       wholeGameTime: selections.wholeGameTime,
-      timeToMove:  selections.timeToMove,
+      timeToMove: selections.timeToMove,
       aceStrength: selections.aceStrength,
       remoteStrength: selections.remoteStrength,
-      titaniumNet: selections.titaniumNet,
+      searchDepthLimit: selections.searchDepthLimit,
+      gorisansonNet: selections.gorisansonNet,
       cores: selections.cores,
     });
-    if (liveState.uiMode !== 'play') {
+    if (liveState.uiMode !== "play") {
       // Coming back to Play from Analysis/Review via "Settings" (not "New
       // game") -- changePlayers() alone doesn't touch uiMode, so do it here.
-      controller.setUiMode?.('play');
+      controller.setUiMode?.("play");
     }
     applySelections(selections, isNewGame, controller, liveState);
     overlay.remove();
     currentDialog = null;
   }
 
-  overlay.querySelector('[data-action="start"]')?.addEventListener('click', confirmDialog);
-  overlay.querySelector('[data-action="close"]')?.addEventListener('click', cancelDialog);
-  overlay.querySelector('[data-action="cancel"]')?.addEventListener('click', cancelDialog);
+  overlay
+    .querySelector('[data-action="start"]')
+    ?.addEventListener("click", confirmDialog);
+  overlay
+    .querySelector('[data-action="close"]')
+    ?.addEventListener("click", cancelDialog);
+  overlay
+    .querySelector('[data-action="cancel"]')
+    ?.addEventListener("click", cancelDialog);
 
-  overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter')  { e.preventDefault(); confirmDialog(); }
-    if (e.key === 'Escape') { e.preventDefault(); cancelDialog(); }
+  overlay.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmDialog();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelDialog();
+    }
   });
 
-  overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) cancelDialog(); });
+  overlay.addEventListener("pointerdown", (e) => {
+    if (e.target === overlay) cancelDialog();
+  });
 }
 
 /** Re-enable Start once the legality oracle finishes loading. */
@@ -428,71 +517,112 @@ export function refreshOpenPlayerDialog(state) {
 // ── Rendering ────────────────────────────────────────────────────────────────
 
 function renderUiModeTabs(selections) {
-  const btns = UI_MODE_TABS.map((tab) =>
-    '<button type="button" class="mode-tab ' + (tab.id === selections.uiMode ? 'mode-tab--active' : '') + '"' +
-    ' data-mode-tab="' + tab.id + '">' + escHtml(tab.label) + '</button>'
-  ).join('');
-  return '<div class="mode-tabs">' + btns + '</div>';
+  const btns = UI_MODE_TABS.map(
+    (tab) =>
+      '<button type="button" class="mode-tab ' +
+      (tab.id === selections.uiMode ? "mode-tab--active" : "") +
+      '"' +
+      ' data-mode-tab="' +
+      tab.id +
+      '">' +
+      escHtml(tab.label) +
+      "</button>",
+  ).join("");
+  return '<div class="mode-tabs">' + btns + "</div>";
 }
 
 function renderModeBody(state, selections, groups) {
-  if (selections.uiMode !== 'play') {
+  if (selections.uiMode !== "play") {
     return renderAnalysisEngineSection(selections);
   }
   return (
     '<div class="player-dialog__hint">White starts at the bottom and moves upward. Black starts at the top and moves downward.</div>' +
     renderSeatSection(0, selections, groups) +
     renderSeatSection(1, selections, groups) +
-    '<div data-oracle-hint="1">' + oracleStatusHtml(state, selections) + '</div>'
+    '<div data-oracle-hint="1">' +
+    oracleStatusHtml(state, selections) +
+    "</div>"
   );
 }
 
 function renderAnalysisEngineSection(selections) {
-  const hint = selections.uiMode === 'analysis'
-    ? 'Move either side on the board. Titanium v16 evaluates the current position continuously.'
-    : 'Load a game via the Moves card\'s Load button (right sidebar). Review evaluates game positions with parallel single-thread workers.';
-  const workerLabel = selections.uiMode === 'analysis'
-    ? 'Search threads'
-    : 'Parallel workers';
+  const hint =
+    selections.uiMode === "analysis"
+      ? "Move either side on the board. Titanium v16 evaluates the current position continuously."
+      : "Load a game via the Moves card's Load button (right sidebar). Review evaluates game positions with parallel single-thread workers.";
+  const workerLabel =
+    selections.uiMode === "analysis" ? "Search threads" : "Parallel workers";
   return (
-    '<div class="player-dialog__hint">' + escHtml(hint) + '</div>' +
+    '<div class="player-dialog__hint">' +
+    escHtml(hint) +
+    "</div>" +
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Evaluation engine</label>' +
-      '<div class="player-dialog__preset-group">' +
-        '<button type="button" class="btn btn--primary btn--small btn--fit" disabled>Titanium v16</button>' +
-      '</div>' +
-    '</div>' +
+    '<label class="player-dialog__label">Evaluation engine</label>' +
+    '<div class="player-dialog__preset-group">' +
+    '<button type="button" class="btn btn--primary btn--small btn--fit" disabled>Titanium v16</button>' +
+    "</div>" +
+    "</div>" +
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Time per position: ' +
-        '<span class="player-dialog__time-val" data-analysis-time-label>' + formatTime(selections.analysisWallClock) + '</span>' +
-      '</label>' +
-      '<input type="range" class="player-dialog__time-slider" data-analysis-time-slider' +
-      ' min="' + ANALYSIS_TIME_MIN + '" max="' + ANALYSIS_TIME_MAX + '" step="' + ANALYSIS_TIME_STEP + '" value="' + selections.analysisWallClock + '">' +
-    '</div>' +
+    '<label class="player-dialog__label">Time per position: ' +
+    '<span class="player-dialog__time-val" data-analysis-time-label>' +
+    formatTime(selections.analysisWallClock) +
+    "</span>" +
+    "</label>" +
+    '<input type="range" class="player-dialog__time-slider" data-analysis-time-slider' +
+    ' min="' +
+    ANALYSIS_TIME_MIN +
+    '" max="' +
+    ANALYSIS_TIME_MAX +
+    '" step="' +
+    ANALYSIS_TIME_STEP +
+    '" value="' +
+    selections.analysisWallClock +
+    '">' +
+    "</div>" +
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">' + workerLabel + ' (device max ' + analysisThreadsMax() + '): ' +
-        '<span class="player-dialog__time-val" data-analysis-cores-label>' + selections.analysisCores + '</span>' +
-      '</label>' +
-      '<input type="range" class="player-dialog__time-slider" data-analysis-cores-slider' +
-      ' min="1" max="' + analysisThreadsMax() + '" step="1" value="' + selections.analysisCores + '">' +
-    '</div>'
+    '<label class="player-dialog__label">' +
+    workerLabel +
+    " (device max " +
+    analysisThreadsMax() +
+    "): " +
+    '<span class="player-dialog__time-val" data-analysis-cores-label>' +
+    selections.analysisCores +
+    "</span>" +
+    "</label>" +
+    '<input type="range" class="player-dialog__time-slider" data-analysis-cores-slider' +
+    ' min="1" max="' +
+    analysisThreadsMax() +
+    '" step="1" value="' +
+    selections.analysisCores +
+    '">' +
+    "</div>"
   );
 }
 
 function renderVisionSettings(selections) {
-  const current = selections.visionMode ?? 'off';
-  const btns = VISION_MODE_OPTIONS.map((opt) =>
-    '<button type="button" class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
-    ' data-vision-mode="' + opt.id + '">' +
-    escHtml(opt.label) + '</button>'
-  ).join('');
+  const current = selections.visionMode ?? "off";
+  const btns = VISION_MODE_OPTIONS.map(
+    (opt) =>
+      '<button type="button" class="btn ' +
+      (opt.id === current ? "btn--primary" : "btn--ghost") +
+      ' btn--small btn--fit"' +
+      ' data-vision-mode="' +
+      opt.id +
+      '">' +
+      escHtml(opt.label) +
+      "</button>",
+  ).join("");
 
   return (
     '<div class="player-dialog__field player-dialog__field--vision">' +
-      '<label class="player-dialog__label">Vision overlay</label>' +
-      '<div class="player-dialog__preset-group player-dialog__preset-group--vision">' + btns + '</div>' +
-      '<div data-vision-detail>' + renderVisionDetail(selections) + '</div>' +
-    '</div>'
+    '<label class="player-dialog__label">Vision overlay</label>' +
+    '<div class="player-dialog__preset-group player-dialog__preset-group--vision">' +
+    btns +
+    "</div>" +
+    "<div data-vision-detail>" +
+    renderVisionDetail(selections) +
+    "</div>" +
+    "</div>"
   );
 }
 
@@ -503,96 +633,164 @@ function renderLmrPlanHint() {
 function renderLmrSourceToggle(selections) {
   const shallow = selections.lmrVisionShallow !== false;
   const btn = (id, label, active) =>
-    '<button type="button" class="btn ' + (active ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
-    ' data-lmr-source="' + id + '">' + escHtml(label) + '</button>';
+    '<button type="button" class="btn ' +
+    (active ? "btn--primary" : "btn--ghost") +
+    ' btn--small btn--fit"' +
+    ' data-lmr-source="' +
+    id +
+    '">' +
+    escHtml(label) +
+    "</button>";
   return (
     '<div class="player-dialog__field player-dialog__field--compact">' +
-      '<label class="player-dialog__label">LMR source</label>' +
-      '<div class="player-dialog__preset-group">' +
-        btn('plan', 'Plan', shallow) +
-        btn('live', 'Live search', !shallow) +
-      '</div>' +
-    '</div>'
+    '<label class="player-dialog__label">LMR source</label>' +
+    '<div class="player-dialog__preset-group">' +
+    btn("plan", "Plan", shallow) +
+    btn("live", "Live search", !shallow) +
+    "</div>" +
+    "</div>"
   );
 }
 
 function renderVisionDetail(selections) {
-  if (selections.visionMode === 'cat') {
+  if (selections.visionMode === "cat") {
     const catVision = {
       ...DEFAULT_CAT_VISION,
       ...(selections.catVision ?? {}),
     };
     return (
       '<div class="player-dialog__vision-detail">' +
-        '<label class="player-dialog__option-row">' +
-          '<input type="checkbox" data-cat-setting="showSquares"' + (catVision.showSquares ? ' checked' : '') + '>' +
-          ' Squares' +
-        '</label>' +
-        '<label class="player-dialog__option-row">' +
-          '<input type="checkbox" data-cat-setting="showWalls"' + (catVision.showWalls ? ' checked' : '') + '>' +
-          ' Walls' +
-        '</label>' +
-        renderVisionSlider('squareOpacity', 'Square opacity', catVision.squareOpacity, 0.25, 1.5, 0.05, formatPercent(catVision.squareOpacity)) +
-        renderVisionSlider('wallOpacity', 'Wall opacity', catVision.wallOpacity, 0.25, 1.5, 0.05, formatPercent(catVision.wallOpacity)) +
-      '</div>'
+      '<label class="player-dialog__option-row">' +
+      '<input type="checkbox" data-cat-setting="showSquares"' +
+      (catVision.showSquares ? " checked" : "") +
+      ">" +
+      " Squares" +
+      "</label>" +
+      '<label class="player-dialog__option-row">' +
+      '<input type="checkbox" data-cat-setting="showWalls"' +
+      (catVision.showWalls ? " checked" : "") +
+      ">" +
+      " Walls" +
+      "</label>" +
+      renderVisionSlider(
+        "squareOpacity",
+        "Square opacity",
+        catVision.squareOpacity,
+        0.25,
+        1.5,
+        0.05,
+        formatPercent(catVision.squareOpacity),
+      ) +
+      renderVisionSlider(
+        "wallOpacity",
+        "Wall opacity",
+        catVision.wallOpacity,
+        0.25,
+        1.5,
+        0.05,
+        formatPercent(catVision.wallOpacity),
+      ) +
+      "</div>"
     );
   }
 
-  if (selections.visionMode === 'lmr') {
+  if (selections.visionMode === "lmr") {
     return (
       '<div class="player-dialog__vision-detail">' +
-        renderLmrSourceToggle(selections) +
-        renderLmrPlanHint() +
-      '</div>'
+      renderLmrSourceToggle(selections) +
+      renderLmrPlanHint() +
+      "</div>"
     );
   }
 
-  return '';
+  return "";
 }
 
 function renderVisionSlider(key, label, value, min, max, step, displayValue) {
   return (
     '<div class="player-dialog__field player-dialog__field--compact">' +
-      '<label class="player-dialog__label">' + escHtml(label) + ': ' +
-        '<span class="player-dialog__time-val" data-vision-slider-label="' + escHtml(key) + '">' + escHtml(displayValue) + '</span>' +
-      '</label>' +
-      '<input type="range" class="player-dialog__time-slider" data-vision-slider="' + escHtml(key) + '"' +
-      ' min="' + min + '" max="' + max + '" step="' + step + '" value="' + escHtml(value) + '">' +
-    '</div>'
+    '<label class="player-dialog__label">' +
+    escHtml(label) +
+    ": " +
+    '<span class="player-dialog__time-val" data-vision-slider-label="' +
+    escHtml(key) +
+    '">' +
+    escHtml(displayValue) +
+    "</span>" +
+    "</label>" +
+    '<input type="range" class="player-dialog__time-slider" data-vision-slider="' +
+    escHtml(key) +
+    '"' +
+    ' min="' +
+    min +
+    '" max="' +
+    max +
+    '" step="' +
+    step +
+    '" value="' +
+    escHtml(value) +
+    '">' +
+    "</div>"
   );
 }
 
 function renderSeatSection(seat, selections, groups) {
   const colorName = playerColorName(seat + 1);
-  const current   = selections.players[seat];
+  const current = selections.players[seat];
 
-  const opts = groups.map((group) =>
-    '<optgroup label="' + escHtml(group.label) + '">' +
-    group.options.map((o) =>
-      '<option value="' + escHtml(o.value) + '"' +
-      (o.value === current ? ' selected' : '') +
-      (o.disabled ? ' disabled' : '') + '>' +
-      escHtml(o.label) + '</option>'
-    ).join('') +
-    '</optgroup>'
-  ).join('');
+  const opts = groups
+    .map(
+      (group) =>
+        '<optgroup label="' +
+        escHtml(group.label) +
+        '">' +
+        group.options
+          .map(
+            (o) =>
+              '<option value="' +
+              escHtml(o.value) +
+              '"' +
+              (o.value === current ? " selected" : "") +
+              (o.disabled ? " disabled" : "") +
+              ">" +
+              escHtml(o.label) +
+              "</option>",
+          )
+          .join("") +
+        "</optgroup>",
+    )
+    .join("");
 
   return (
-    '<div class="player-dialog__seat" data-seat-section="' + seat + '">' +
-      '<div class="player-dialog__seat-header">' +
-        '<div class="pawn-icon pawn-icon--seat' + seat + '"></div>' +
-        '<span class="player-dialog__seat-name">' + escHtml(colorName) + '</span>' +
-      '</div>' +
-      '<div class="player-dialog__field">' +
-        '<label class="player-dialog__label" for="seat-select-' + seat + '">Player type</label>' +
-        '<select class="player-dialog__select" id="seat-select-' + seat + '" data-seat-select="' + seat + '">' +
-          opts +
-        '</select>' +
-      '</div>' +
-      '<div data-engine-controls="' + seat + '">' +
-        renderEngineControls(seat, selections) +
-      '</div>' +
-    '</div>'
+    '<div class="player-dialog__seat" data-seat-section="' +
+    seat +
+    '">' +
+    '<div class="player-dialog__seat-header">' +
+    '<div class="pawn-icon pawn-icon--seat' +
+    seat +
+    '"></div>' +
+    '<span class="player-dialog__seat-name">' +
+    escHtml(colorName) +
+    "</span>" +
+    "</div>" +
+    '<div class="player-dialog__field">' +
+    '<label class="player-dialog__label" for="seat-select-' +
+    seat +
+    '">Player type</label>' +
+    '<select class="player-dialog__select" id="seat-select-' +
+    seat +
+    '" data-seat-select="' +
+    seat +
+    '">' +
+    opts +
+    "</select>" +
+    "</div>" +
+    '<div data-engine-controls="' +
+    seat +
+    '">' +
+    renderEngineControls(seat, selections) +
+    "</div>" +
+    "</div>"
   );
 }
 
@@ -600,142 +798,264 @@ function renderEngineControls(seat, selections) {
   const playerType = selections.players[seat];
   const cat = engineCategory(playerType);
 
-  if (cat === 'human') {
-    return renderTimeSlider(seat, selections, 'Per-move time', true, true);
+  if (cat === "human") {
+    return renderTimeSlider(seat, selections, "Per-move time", true, true);
   }
 
-  if (cat === 'remote') {
-    return renderRemoteStrengthControls(seat, selections) +
-           renderTimeModeControls(seat, selections);
+  if (cat === "remote") {
+    return (
+      renderRemoteStrengthControls(seat, selections) +
+      renderTimeModeControls(seat, selections)
+    );
   }
 
-  if (cat === 'zeroink') {
+  if (cat === "zeroink") {
     return renderTimeModeControls(seat, selections);
   }
 
-  if (cat === 'titanium') {
-    return renderTitaniumNetControls(seat, selections) +
-           renderCoresSlider(seat, selections) +
-           renderTimeSlider(seat, selections, 'Thinking time', true);
+  if (cat === "titanium") {
+    return (
+      renderTitaniumDepthControls(seat, selections) +
+      renderCoresSlider(seat, selections) +
+      renderTimeSlider(seat, selections, "Thinking time", true)
+    );
   }
 
-  if (cat === 'ace-v13') {
-    return renderAceTierControls(seat, selections, playerType) +
-           renderTimeSlider(
-             seat,
-             selections,
-             'Thinking time',
-             supportsWholeGameTime(playerType, getAllEngineConfigs()),
-           );
+  if (cat === "ace-v13") {
+    return (
+      renderAceTierControls(seat, selections, playerType) +
+      renderTimeSlider(
+        seat,
+        selections,
+        "Thinking time",
+        supportsWholeGameTime(playerType, getAllEngineConfigs()),
+      )
+    );
   }
 
-  // Gorisanson, QuoridorV3, etc.
-  return renderTimeSlider(seat, selections, 'Thinking time');
+  // Gorisanson: whole-game bank + visit cap; QuoridorV3 and others: per-move only.
+  if (isGorisansonEngine(playerType, getAllEngineConfigs())) {
+    return (
+      renderGorisansonTierControls(seat, selections) +
+      renderTimeSlider(seat, selections, "Thinking time", true)
+    );
+  }
+  return renderTimeSlider(seat, selections, "Thinking time");
 }
 
 function renderRemoteStrengthControls(seat, selections) {
   const current = selections.remoteStrength[seat] ?? StrengthLevel.Alpha;
-  const btns = STRENGTH_LEVEL_PRESETS.map((opt) =>
-    '<button class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
-    ' data-strength-btn data-seat="' + seat + '" data-strength-id="' + opt.id + '">' +
-    escHtml(opt.label) + '</button>'
-  ).join('');
+  const btns = STRENGTH_LEVEL_PRESETS.map(
+    (opt) =>
+      '<button class="btn ' +
+      (opt.id === current ? "btn--primary" : "btn--ghost") +
+      ' btn--small btn--fit"' +
+      ' data-strength-btn data-seat="' +
+      seat +
+      '" data-strength-id="' +
+      opt.id +
+      '">' +
+      escHtml(opt.label) +
+      "</button>",
+  ).join("");
 
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Strength</label>' +
-      '<div class="player-dialog__preset-group player-dialog__preset-group--strength">' + btns + '</div>' +
-    '</div>'
+    '<label class="player-dialog__label">Strength</label>' +
+    '<div class="player-dialog__preset-group player-dialog__preset-group--strength">' +
+    btns +
+    "</div>" +
+    "</div>"
   );
 }
 
-function renderTitaniumNetControls(seat, selections) {
-  let current = migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD);
-  // Clamp to available options (e.g. production hides Medium/Hard).
-  if (!TITANIUM_NET_OPTIONS.some((o) => o.id === current)) {
-    current = TITANIUM_NET_OPTIONS[0].id;
-  }
-  const btns = TITANIUM_NET_OPTIONS.map((opt) =>
-    '<button class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
-    ' data-ti-net-btn data-seat="' + seat + '" data-ti-net-id="' + opt.id + '">' +
-    escHtml(opt.label) + '</button>'
-  ).join('');
-
+function renderTitaniumDepthControls(seat, selections) {
+  const limit = clampTitaniumDepthLimit(
+    selections.searchDepthLimit[seat] ?? TITANIUM_DEPTH_UNLIMITED,
+  );
+  selections.searchDepthLimit[seat] = limit;
+  const label =
+    limit === TITANIUM_DEPTH_UNLIMITED ? "Unlimited" : String(limit);
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Difficulty</label>' +
-      '<div class="player-dialog__preset-group">' + btns + '</div>' +
-    '</div>'
+    '<label class="player-dialog__label">Depth limit: ' +
+    '<span class="player-dialog__time-val" data-ti-depth-label="' +
+    seat +
+    '">' +
+    escHtml(label) +
+    "</span>" +
+    "</label>" +
+    '<input type="range" class="player-dialog__time-slider" data-ti-depth-slider="' +
+    seat +
+    '"' +
+    ' min="' +
+    TITANIUM_DEPTH_RANGE.min +
+    '" max="' +
+    TITANIUM_DEPTH_RANGE.max +
+    '" step="1" value="' +
+    limit +
+    '">' +
+    "</div>"
+  );
+}
+
+function renderGorisansonTierControls(seat, selections) {
+  const current = migrateGorisansonNet(
+    selections.gorisansonNet[seat] ?? GORISANSON_NET_EASY,
+  );
+  const btns = GORISANSON_TIER_OPTIONS.map(
+    (opt) =>
+      '<button class="btn ' +
+      (opt.id === current ? "btn--primary" : "btn--ghost") +
+      ' btn--small btn--fit"' +
+      ' data-gor-tier-btn data-seat="' +
+      seat +
+      '" data-gor-tier-id="' +
+      opt.id +
+      '">' +
+      escHtml(opt.label) +
+      "</button>",
+  ).join("");
+  return (
+    '<div class="player-dialog__field">' +
+    '<label class="player-dialog__label">Strength</label>' +
+    '<div class="player-dialog__preset-group">' +
+    btns +
+    "</div>" +
+    "</div>"
   );
 }
 
 function renderTimeModeControls(seat, selections) {
   const current = selections.timeToMove[seat] ?? DEFAULT_TIME_TO_MOVE;
-  const btns = TIME_TO_MOVE_OPTIONS.map((opt) =>
-    '<button class="btn ' + (opt.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
-    ' data-tm-btn data-seat="' + seat + '" data-tm-id="' + opt.id + '">' +
-    escHtml(opt.label) + '</button>'
-  ).join('');
+  const btns = TIME_TO_MOVE_OPTIONS.map(
+    (opt) =>
+      '<button class="btn ' +
+      (opt.id === current ? "btn--primary" : "btn--ghost") +
+      ' btn--small btn--fit"' +
+      ' data-tm-btn data-seat="' +
+      seat +
+      '" data-tm-id="' +
+      opt.id +
+      '">' +
+      escHtml(opt.label) +
+      "</button>",
+  ).join("");
 
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Thinking mode</label>' +
-      '<div class="player-dialog__preset-group">' + btns + '</div>' +
-    '</div>'
+    '<label class="player-dialog__label">Thinking mode</label>' +
+    '<div class="player-dialog__preset-group">' +
+    btns +
+    "</div>" +
+    "</div>"
   );
 }
 
 function renderAceTierControls(seat, selections, playerType) {
   const tiers = aceDisplayTiers(playerType);
   const current = selections.aceStrength[seat] ?? DEFAULT_ACE_TIER;
-  const btns = tiers.map((t) =>
-    '<button class="btn ' + (t.id === current ? 'btn--primary' : 'btn--ghost') + ' btn--small btn--fit"' +
-    ' data-ace-btn data-seat="' + seat + '" data-ace-id="' + t.id + '">' +
-    escHtml(t.label) + '</button>'
-  ).join('');
+  const btns = tiers
+    .map(
+      (t) =>
+        '<button class="btn ' +
+        (t.id === current ? "btn--primary" : "btn--ghost") +
+        ' btn--small btn--fit"' +
+        ' data-ace-btn data-seat="' +
+        seat +
+        '" data-ace-id="' +
+        t.id +
+        '">' +
+        escHtml(t.label) +
+        "</button>",
+    )
+    .join("");
 
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Engine tier</label>' +
-      '<div class="player-dialog__preset-group">' + btns + '</div>' +
-    '</div>'
+    '<label class="player-dialog__label">Engine tier</label>' +
+    '<div class="player-dialog__preset-group">' +
+    btns +
+    "</div>" +
+    "</div>"
   );
 }
 
 function renderCoresSlider(seat, selections) {
   const max = coresSliderMax();
-  const c = Math.min(max, Math.max(CORES_MIN, selections.cores[seat] ?? DEFAULT_CORES));
+  const c = Math.min(
+    max,
+    Math.max(CORES_MIN, selections.cores[seat] ?? DEFAULT_CORES),
+  );
   selections.cores[seat] = c;
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">Search threads: ' +
-        '<span class="player-dialog__time-val" data-cores-label="' + seat + '">' + c + '</span>' +
-      '</label>' +
-      '<input type="range" class="player-dialog__time-slider" data-cores-slider="' + seat + '"' +
-      ' min="' + CORES_MIN + '" max="' + max + '" step="1" value="' + c + '">' +
-    '</div>'
+    '<label class="player-dialog__label">Search threads: ' +
+    '<span class="player-dialog__time-val" data-cores-label="' +
+    seat +
+    '">' +
+    c +
+    "</span>" +
+    "</label>" +
+    '<input type="range" class="player-dialog__time-slider" data-cores-slider="' +
+    seat +
+    '"' +
+    ' min="' +
+    CORES_MIN +
+    '" max="' +
+    max +
+    '" step="1" value="' +
+    c +
+    '">' +
+    "</div>"
   );
 }
 
-function renderTimeSlider(seat, selections, labelText, supportsWholeGame = false, isHumanClock = false) {
+function renderTimeSlider(
+  seat,
+  selections,
+  labelText,
+  supportsWholeGame = false,
+  isHumanClock = false,
+) {
   const wc = selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK;
-  const wholeGame = supportsWholeGame && selections.wholeGameTime[seat] !== false;
-  const timeLabel = wholeGame ? 'Whole game time' : labelText;
+  const wholeGame =
+    supportsWholeGame && selections.wholeGameTime[seat] !== false;
+  const timeLabel = wholeGame ? "Whole game time" : labelText;
   const wholeGameHint = isHumanClock
-    ? 'Whole game time (one bank for all your moves)'
-    : 'Whole game time (engine manages this clock)';
+    ? "Whole game time (one bank for all your moves)"
+    : "Whole game time (engine manages this clock)";
   return (
     '<div class="player-dialog__field">' +
-      '<label class="player-dialog__label">' + escHtml(timeLabel) + ': ' +
-        '<span class="player-dialog__time-val" data-time-label="' + seat + '">' + formatTime(wc) + '</span>' +
-      '</label>' +
-      '<input type="range" class="player-dialog__time-slider" data-time-slider="' + seat + '"' +
-      ' min="0" max="' + WALL_CLOCK_RANGE.sliderSteps + '" step="1" value="' + wallClockSliderPosition(wc) + '">' +
-      (supportsWholeGame ? '<label class="player-dialog__option-row">' +
-        '<input type="checkbox" data-whole-game-time="' + seat + '"' + (wholeGame ? ' checked' : '') + '>' +
-        ' ' + escHtml(wholeGameHint) +
-      '</label>' : '') +
-    '</div>'
+    '<label class="player-dialog__label">' +
+    escHtml(timeLabel) +
+    ": " +
+    '<span class="player-dialog__time-val" data-time-label="' +
+    seat +
+    '">' +
+    formatTime(wc) +
+    "</span>" +
+    "</label>" +
+    '<input type="range" class="player-dialog__time-slider" data-time-slider="' +
+    seat +
+    '"' +
+    ' min="0" max="' +
+    WALL_CLOCK_RANGE.sliderSteps +
+    '" step="1" value="' +
+    wallClockSliderPosition(wc) +
+    '">' +
+    (supportsWholeGame
+      ? '<label class="player-dialog__option-row">' +
+        '<input type="checkbox" data-whole-game-time="' +
+        seat +
+        '"' +
+        (wholeGame ? " checked" : "") +
+        ">" +
+        " " +
+        escHtml(wholeGameHint) +
+        "</label>"
+      : "") +
+    "</div>"
   );
 }
 
@@ -743,21 +1063,21 @@ function renderTimeSlider(seat, selections, labelText, supportsWholeGame = false
 
 function wireVisionSettings(overlay, selections, controller) {
   const refreshDetail = () => {
-    const host = overlay.querySelector('[data-vision-detail]');
+    const host = overlay.querySelector("[data-vision-detail]");
     if (host) {
       host.innerHTML = renderVisionDetail(selections);
     }
-    overlay.querySelectorAll('[data-vision-mode]').forEach((btn) => {
+    overlay.querySelectorAll("[data-vision-mode]").forEach((btn) => {
       const active = btn.dataset.visionMode === selections.visionMode;
-      btn.classList.toggle('btn--primary', active);
-      btn.classList.toggle('btn--ghost', !active);
+      btn.classList.toggle("btn--primary", active);
+      btn.classList.toggle("btn--ghost", !active);
     });
     wireVisionDetail(overlay, selections, controller);
   };
 
-  overlay.querySelectorAll('[data-vision-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      selections.visionMode = btn.dataset.visionMode ?? 'off';
+  overlay.querySelectorAll("[data-vision-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selections.visionMode = btn.dataset.visionMode ?? "off";
       refreshDetail();
     });
   });
@@ -766,75 +1086,77 @@ function wireVisionSettings(overlay, selections, controller) {
 }
 
 function wireVisionDetail(overlay, selections, controller) {
-  overlay.querySelectorAll('[data-lmr-source]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      selections.lmrVisionShallow = btn.dataset.lmrSource !== 'live';
+  overlay.querySelectorAll("[data-lmr-source]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selections.lmrVisionShallow = btn.dataset.lmrSource !== "live";
       controller.toggleLmrShallow?.(selections.lmrVisionShallow);
-      overlay.querySelectorAll('[data-lmr-source]').forEach((b) => {
-        const active = (b.dataset.lmrSource === 'live') === !selections.lmrVisionShallow;
-        b.classList.toggle('btn--primary', active);
-        b.classList.toggle('btn--ghost', !active);
+      overlay.querySelectorAll("[data-lmr-source]").forEach((b) => {
+        const active =
+          (b.dataset.lmrSource === "live") === !selections.lmrVisionShallow;
+        b.classList.toggle("btn--primary", active);
+        b.classList.toggle("btn--ghost", !active);
       });
     });
   });
 
-  overlay.querySelectorAll('[data-cat-setting]').forEach((input) => {
+  overlay.querySelectorAll("[data-cat-setting]").forEach((input) => {
     const update = (event) => {
       const target = event.currentTarget;
       const key = target.dataset.catSetting;
       selections.catVision = {
         ...DEFAULT_CAT_VISION,
         ...(selections.catVision ?? {}),
-        [key]: target.type === 'checkbox' ? target.checked : Number(target.value),
+        [key]:
+          target.type === "checkbox" ? target.checked : Number(target.value),
       };
     };
-    input.addEventListener('input', update);
-    input.addEventListener('change', update);
+    input.addEventListener("input", update);
+    input.addEventListener("change", update);
   });
 
-  overlay.querySelectorAll('[data-vision-slider]').forEach((slider) => {
-    slider.addEventListener('input', () => {
+  overlay.querySelectorAll("[data-vision-slider]").forEach((slider) => {
+    slider.addEventListener("input", () => {
       const key = slider.dataset.visionSlider;
       const value = Number(slider.value);
-      if (key === 'pathBiasPercent') {
-        selections.pathBiasPercent = Math.trunc(clampNumber(
-          value,
-          PATH_BIAS_MIN,
-          PATH_BIAS_MAX,
-        ));
+      if (key === "pathBiasPercent") {
+        selections.pathBiasPercent = Math.trunc(
+          clampNumber(value, PATH_BIAS_MIN, PATH_BIAS_MAX),
+        );
         controller.setPathBiasPercent?.(selections.pathBiasPercent);
-        if (selections.visionMode === 'cat') {
-          controller.setVisionMode?.('cat');
-        } else if (selections.visionMode === 'lmr') {
-          controller.setVisionMode?.('lmr');
+        if (selections.visionMode === "cat") {
+          controller.setVisionMode?.("cat");
+        } else if (selections.visionMode === "lmr") {
+          controller.setVisionMode?.("lmr");
         }
-      } else if (key === 'lmrAggressionPercent') {
-        selections.lmrAggressionPercent = Math.trunc(clampNumber(
-          value,
-          LMR_AGGRESSION_MIN,
-          LMR_AGGRESSION_MAX,
-        ));
+      } else if (key === "lmrAggressionPercent") {
+        selections.lmrAggressionPercent = Math.trunc(
+          clampNumber(value, LMR_AGGRESSION_MIN, LMR_AGGRESSION_MAX),
+        );
         controller.setLmrAggressionPercent?.(selections.lmrAggressionPercent);
-        if (selections.visionMode === 'lmr') {
-          controller.setVisionMode?.('lmr');
+        if (selections.visionMode === "lmr") {
+          controller.setVisionMode?.("lmr");
         }
-      } else if (key === 'squareOpacity' || key === 'wallOpacity') {
+      } else if (key === "squareOpacity" || key === "wallOpacity") {
         selections.catVision = {
           ...DEFAULT_CAT_VISION,
           ...(selections.catVision ?? {}),
           [key]: clampNumber(value, 0.25, 1.5),
         };
-        if (selections.visionMode === 'cat') {
+        if (selections.visionMode === "cat") {
           controller.updateCatVisionSettings?.(selections.catVision);
-          controller.setVisionMode?.('cat');
+          controller.setVisionMode?.("cat");
         }
       }
-      const label = overlay.querySelector('[data-vision-slider-label="' + key + '"]');
+      const label = overlay.querySelector(
+        '[data-vision-slider-label="' + key + '"]',
+      );
       if (label) {
-        if (key === 'pathBiasPercent') {
-          const v = Math.trunc(clampNumber(value, PATH_BIAS_MIN, PATH_BIAS_MAX));
-          label.textContent = `${v > 0 ? '+' : ''}${v}%`;
-        } else if (key === 'lmrAggressionPercent') {
+        if (key === "pathBiasPercent") {
+          const v = Math.trunc(
+            clampNumber(value, PATH_BIAS_MIN, PATH_BIAS_MAX),
+          );
+          label.textContent = `${v > 0 ? "+" : ""}${v}%`;
+        } else if (key === "lmrAggressionPercent") {
           label.textContent = `${Math.trunc(clampNumber(value, LMR_AGGRESSION_MIN, LMR_AGGRESSION_MAX))}%`;
         } else {
           label.textContent = formatPercent(value);
@@ -849,58 +1171,103 @@ function wireEngineControls(overlay, seat, selections) {
   if (!host) return;
 
   // TimeToMove buttons (remote engines)
-  host.querySelectorAll('[data-tm-btn][data-seat="' + seat + '"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = Number(btn.dataset.tmId);
-      selections.timeToMove[seat] = id;
-      host.querySelectorAll('[data-tm-btn][data-seat="' + seat + '"]').forEach((b) => {
-        b.classList.toggle('btn--primary', Number(b.dataset.tmId) === id);
-        b.classList.toggle('btn--ghost',   Number(b.dataset.tmId) !== id);
+  host
+    .querySelectorAll('[data-tm-btn][data-seat="' + seat + '"]')
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.dataset.tmId);
+        selections.timeToMove[seat] = id;
+        host
+          .querySelectorAll('[data-tm-btn][data-seat="' + seat + '"]')
+          .forEach((b) => {
+            b.classList.toggle("btn--primary", Number(b.dataset.tmId) === id);
+            b.classList.toggle("btn--ghost", Number(b.dataset.tmId) !== id);
+          });
       });
     });
-  });
 
   // Remote strength buttons
-  host.querySelectorAll('[data-strength-btn][data-seat="' + seat + '"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = Number(btn.dataset.strengthId);
-      selections.remoteStrength[seat] = id;
-      host.querySelectorAll('[data-strength-btn][data-seat="' + seat + '"]').forEach((b) => {
-        b.classList.toggle('btn--primary', Number(b.dataset.strengthId) === id);
-        b.classList.toggle('btn--ghost', Number(b.dataset.strengthId) !== id);
+  host
+    .querySelectorAll('[data-strength-btn][data-seat="' + seat + '"]')
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.dataset.strengthId);
+        selections.remoteStrength[seat] = id;
+        host
+          .querySelectorAll('[data-strength-btn][data-seat="' + seat + '"]')
+          .forEach((b) => {
+            b.classList.toggle(
+              "btn--primary",
+              Number(b.dataset.strengthId) === id,
+            );
+            b.classList.toggle(
+              "btn--ghost",
+              Number(b.dataset.strengthId) !== id,
+            );
+          });
       });
     });
-  });
 
-  // Titanium NNUE net buttons
-  host.querySelectorAll('[data-ti-net-btn][data-seat="' + seat + '"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.tiNetId;
-      selections.titaniumNet[seat] = id;
-      host.querySelectorAll('[data-ti-net-btn][data-seat="' + seat + '"]').forEach((b) => {
-        b.classList.toggle('btn--primary', b.dataset.tiNetId === id);
-        b.classList.toggle('btn--ghost', b.dataset.tiNetId !== id);
+  // Titanium depth limit slider
+  const tiDepthSlider = host.querySelector(
+    '[data-ti-depth-slider="' + seat + '"]',
+  );
+  const tiDepthLabel = host.querySelector(
+    '[data-ti-depth-label="' + seat + '"]',
+  );
+  if (tiDepthSlider) {
+    tiDepthSlider.addEventListener("input", () => {
+      const v = clampTitaniumDepthLimit(Number(tiDepthSlider.value));
+      selections.searchDepthLimit[seat] = v;
+      if (tiDepthLabel) {
+        tiDepthLabel.textContent =
+          v === TITANIUM_DEPTH_UNLIMITED ? "Unlimited" : String(v);
+      }
+    });
+  }
+
+  // Gorisanson tier buttons
+  host
+    .querySelectorAll('[data-gor-tier-btn][data-seat="' + seat + '"]')
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.gorTierId;
+        selections.gorisansonNet[seat] = id;
+        host
+          .querySelectorAll('[data-gor-tier-btn][data-seat="' + seat + '"]')
+          .forEach((b) => {
+            b.classList.toggle("btn--primary", b.dataset.gorTierId === id);
+            b.classList.toggle("btn--ghost", b.dataset.gorTierId !== id);
+          });
       });
     });
-  });
+
+  // Titanium NNUE net buttons (legacy — removed)
+  host
+    .querySelectorAll('[data-ti-net-btn][data-seat="' + seat + '"]')
+    .forEach(() => {});
 
   // ACE tier buttons
-  host.querySelectorAll('[data-ace-btn][data-seat="' + seat + '"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = Number(btn.dataset.aceId);
-      selections.aceStrength[seat] = id;
-      host.querySelectorAll('[data-ace-btn][data-seat="' + seat + '"]').forEach((b) => {
-        b.classList.toggle('btn--primary', Number(b.dataset.aceId) === id);
-        b.classList.toggle('btn--ghost',   Number(b.dataset.aceId) !== id);
+  host
+    .querySelectorAll('[data-ace-btn][data-seat="' + seat + '"]')
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.dataset.aceId);
+        selections.aceStrength[seat] = id;
+        host
+          .querySelectorAll('[data-ace-btn][data-seat="' + seat + '"]')
+          .forEach((b) => {
+            b.classList.toggle("btn--primary", Number(b.dataset.aceId) === id);
+            b.classList.toggle("btn--ghost", Number(b.dataset.aceId) !== id);
+          });
       });
     });
-  });
 
   // Wall clock slider
   const slider = host.querySelector('[data-time-slider="' + seat + '"]');
-  const label  = host.querySelector('[data-time-label="' + seat + '"]');
+  const label = host.querySelector('[data-time-label="' + seat + '"]');
   if (slider) {
-    slider.addEventListener('input', () => {
+    slider.addEventListener("input", () => {
       const v = wallClockFromSlider(slider.value);
       selections.wallClock[seat] = v;
       if (label) label.textContent = formatTime(v);
@@ -908,7 +1275,7 @@ function wireEngineControls(overlay, seat, selections) {
   }
   const wholeGame = host.querySelector('[data-whole-game-time="' + seat + '"]');
   if (wholeGame) {
-    wholeGame.addEventListener('change', () => {
+    wholeGame.addEventListener("change", () => {
       selections.wholeGameTime[seat] = wholeGame.checked;
     });
   }
@@ -916,13 +1283,12 @@ function wireEngineControls(overlay, seat, selections) {
   const coresSlider = host.querySelector('[data-cores-slider="' + seat + '"]');
   const coresLabel = host.querySelector('[data-cores-label="' + seat + '"]');
   if (coresSlider) {
-    coresSlider.addEventListener('input', () => {
+    coresSlider.addEventListener("input", () => {
       const v = Number(coresSlider.value);
       selections.cores[seat] = v;
       if (coresLabel) coresLabel.textContent = String(v);
     });
   }
-
 }
 
 function rebuildEngineControls(overlay, seat, selections) {
@@ -934,7 +1300,7 @@ function rebuildEngineControls(overlay, seat, selections) {
 
 /** Wires whichever body is currently rendered — seat pickers (Play) or the single-engine analysis section. */
 function wireModeBody(overlay, state, selections) {
-  if (selections.uiMode !== 'play') {
+  if (selections.uiMode !== "play") {
     wireAnalysisEngineSection(overlay, selections);
     return;
   }
@@ -942,7 +1308,7 @@ function wireModeBody(overlay, state, selections) {
   for (const seat of [0, 1]) {
     const sel = overlay.querySelector('[data-seat-select="' + seat + '"]');
     if (sel) {
-      sel.addEventListener('change', () => {
+      sel.addEventListener("change", () => {
         selections.players[seat] = sel.value;
         rebuildEngineControls(overlay, seat, selections);
       });
@@ -953,19 +1319,20 @@ function wireModeBody(overlay, state, selections) {
 }
 
 function wireAnalysisEngineSection(overlay, selections) {
-  const timeSlider = overlay.querySelector('[data-analysis-time-slider]');
-  const timeLabel = overlay.querySelector('[data-analysis-time-label]');
+  const timeSlider = overlay.querySelector("[data-analysis-time-slider]");
+  const timeLabel = overlay.querySelector("[data-analysis-time-label]");
   if (timeSlider) {
-    timeSlider.addEventListener('input', () => {
+    timeSlider.addEventListener("input", () => {
       selections.analysisWallClock = Number(timeSlider.value);
-      if (timeLabel) timeLabel.textContent = formatTime(selections.analysisWallClock);
+      if (timeLabel)
+        timeLabel.textContent = formatTime(selections.analysisWallClock);
     });
   }
 
-  const coresSlider = overlay.querySelector('[data-analysis-cores-slider]');
-  const coresLabel = overlay.querySelector('[data-analysis-cores-label]');
+  const coresSlider = overlay.querySelector("[data-analysis-cores-slider]");
+  const coresLabel = overlay.querySelector("[data-analysis-cores-label]");
   if (coresSlider) {
-    coresSlider.addEventListener('input', () => {
+    coresSlider.addEventListener("input", () => {
       selections.analysisCores = Number(coresSlider.value);
       if (coresLabel) coresLabel.textContent = String(selections.analysisCores);
     });
@@ -983,52 +1350,67 @@ function buildAiSettings(playerType, selections, seat) {
   }
   const cat = engineCategory(playerType);
 
-  if (cat === 'remote') {
+  if (cat === "remote") {
     return {
       strengthLevel: selections.remoteStrength[seat] ?? StrengthLevel.Alpha,
-      timeToMove:    selections.timeToMove[seat] ?? DEFAULT_TIME_TO_MOVE,
+      timeToMove: selections.timeToMove[seat] ?? DEFAULT_TIME_TO_MOVE,
     };
   }
 
-  if (cat === 'zeroink') {
+  if (cat === "zeroink") {
     return {
       timeToMove: selections.timeToMove[seat] ?? DEFAULT_TIME_TO_MOVE,
     };
   }
 
-  if (cat === 'titanium') {
+  if (cat === "titanium") {
     return {
-      titaniumNet:      migrateTitaniumNet(selections.titaniumNet[seat] ?? TITANIUM_NET_HARD),
+      searchDepthLimit: clampTitaniumDepthLimit(
+        selections.searchDepthLimit[seat] ?? TITANIUM_DEPTH_UNLIMITED,
+      ),
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
       wholeGameTime: selections.wholeGameTime[seat] !== false,
-      visitsBudget:     0,
-      cores:            clampCores(selections.cores[seat] ?? DEFAULT_CORES),
+      visitsBudget: 0,
+      cores: clampCores(selections.cores[seat] ?? DEFAULT_CORES),
     };
   }
 
-  if (cat === 'ace-v13') {
+  if (cat === "ace-v13") {
     return {
-      strengthLevel:    selections.aceStrength[seat] ?? DEFAULT_ACE_TIER,
+      strengthLevel: selections.aceStrength[seat] ?? DEFAULT_ACE_TIER,
       wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
-      wholeGameTime:    selections.wholeGameTime[seat] !== false,
+      wholeGameTime: selections.wholeGameTime[seat] !== false,
     };
   }
 
-  // local (Gorisanson, QuoridorV3, others)
+  if (isGorisansonEngine(playerType, getAllEngineConfigs())) {
+    return {
+      wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
+      wholeGameTime: selections.wholeGameTime[seat] !== false,
+      visitsBudget: 0,
+      gorisansonNet: migrateGorisansonNet(
+        selections.gorisansonNet[seat] ?? GORISANSON_NET_EASY,
+      ),
+    };
+  }
+
+  // local (QuoridorV3, others)
   return {
     wallClockSeconds: selections.wallClock[seat] ?? DEFAULT_WALL_CLOCK,
-    visitsBudget:     0,  // time-bounded; engine uses default node budget
+    visitsBudget: 0, // time-bounded; engine uses default node budget
   };
 }
 
 function applyVisionSettings(selections, controller) {
-  const mode = selections.visionMode ?? 'off';
+  const mode = selections.visionMode ?? "off";
   controller.updateCatVisionSettings?.({
     ...DEFAULT_CAT_VISION,
     ...(selections.catVision ?? {}),
   });
   controller.setPathBiasPercent?.(selections.pathBiasPercent ?? 0);
-  controller.setLmrAggressionPercent?.(selections.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT);
+  controller.setLmrAggressionPercent?.(
+    selections.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT,
+  );
   controller.setVisionMode?.(mode);
 }
 

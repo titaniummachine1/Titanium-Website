@@ -12,34 +12,39 @@ import {
   formatWallClock,
   titaniumNetLabel,
   catLmrCeilingLabel,
-} from '../lib/timeControl.js';
-import { PlayerType, StrengthLevel, TimeToMove } from '../lib/engineConfig.js';
-import { playerColorName } from '../lib/playerColors.js';
-import { formatScoreForCard, isMateScore, mateInfo } from '../lib/engineScore.js';
-import { resolveDisplayNodes } from '../lib/searchNodes.js';
-import { canPlayNow, resolveLiveBestMoveKey } from '../lib/liveBestMove.js';
-import { aceStrengthPresetsForPlayerType } from '../lib/aceTier.js';
-import { openLogsDialog } from './gameControls.js';
+} from "../lib/timeControl.js";
+import { PlayerType, StrengthLevel, TimeToMove } from "../lib/engineConfig.js";
+import { playerColorName } from "../lib/playerColors.js";
+import {
+  formatScoreForCard,
+  isMateScore,
+  mateInfo,
+} from "../lib/engineScore.js";
+import { resolveDisplayNodes } from "../lib/searchNodes.js";
+import { canPlayNow, resolveLiveBestMoveKey } from "../lib/liveBestMove.js";
+import { mergeThinkSnapshots } from "../lib/searchTelemetry.js";
+import { aceStrengthPresetsForPlayerType } from "../lib/aceTier.js";
+import { openLogsDialog } from "./gameControls.js";
 
 function escHtml(s) {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function escAttr(s) {
-  return escHtml(s).replace(/"/g, '&quot;');
+  return escHtml(s).replace(/"/g, "&quot;");
 }
 
 function formatMs(ms) {
-  if (ms == null || !Number.isFinite(Number(ms))) return '';
+  if (ms == null || !Number.isFinite(Number(ms))) return "";
   const n = Number(ms);
   return n < 1000 ? `${Math.round(n)}ms` : `${(n / 1000).toFixed(1)}s`;
 }
 
 function formatNodes(n) {
-  if (!n || n <= 0) return '';
+  if (!n || n <= 0) return "";
   return Number(n).toLocaleString();
 }
 
@@ -51,7 +56,9 @@ function resolvePayloadScore(snap) {
 
 function deepestEntry(depthLog) {
   if (!depthLog?.length) return null;
-  return depthLog.reduce((best, e) => (e.depth > (best?.depth ?? 0) ? e : best));
+  return depthLog.reduce((best, e) =>
+    e.depth > (best?.depth ?? 0) ? e : best,
+  );
 }
 
 /** Merge controller search telemetry for the thinking seat (live + finalized partial info). */
@@ -59,15 +66,16 @@ function thinkingTelemetry(state, seatIndex) {
   if (!state.aiThinking || state.thinkingSeatIndex !== seatIndex) {
     return null;
   }
+  const completed = state.lastCompletedThinkBySeat?.[seatIndex];
   const active = state.activeSearchInfo ?? state.searchInfoBySeat?.[seatIndex];
   const live = state.liveSearch;
-  if (!active && !live) {
+  if (!active && !live && !completed) {
     return null;
   }
   const depthLog = active?.depthLog?.length
     ? active.depthLog
     : (live?.depthLog ?? []);
-  return {
+  const incoming = {
     ...(live ?? {}),
     ...(active ?? {}),
     depthLog,
@@ -76,6 +84,7 @@ function thinkingTelemetry(state, seatIndex) {
     requestSeq: live?.requestSeq ?? state.searchGeneration,
     positionKey: live?.positionKey ?? state.positionKey,
   };
+  return mergeThinkSnapshots(completed, incoming);
 }
 
 function resolveNodes(snap) {
@@ -84,8 +93,8 @@ function resolveNodes(snap) {
 
 function formatNodesLine(snap) {
   const n = resolveNodes(snap);
-  if (n <= 0) return '';
-  return `${snap?.estimatedTotalNodes ? 'n~' : 'n'}${formatNodes(n)}`;
+  if (n <= 0) return "";
+  return `${snap?.estimatedTotalNodes ? "n~" : "n"}${formatNodes(n)}`;
 }
 
 function formatTelemetryNodes(view) {
@@ -95,7 +104,7 @@ function formatTelemetryNodes(view) {
   if (view.nodes > 0) {
     return `n${formatNodes(view.nodes)}`;
   }
-  return '';
+  return "";
 }
 
 function buildTelemetryHtml(view) {
@@ -103,20 +112,21 @@ function buildTelemetryHtml(view) {
   const hasEval = Boolean(view.scoreDisplay);
   const hasDepth = view.depth != null;
   if (!nodes && !hasEval && !hasDepth && view.thinkMs == null) {
-    return '';
+    return "";
   }
   const depthHtml = hasDepth
     ? `<span class="player-card__telemetry-depth" title="Search depth">d${view.depth}</span>`
-    : '';
+    : "";
   const evalHtml = hasEval
-    ? `<span class="player-card__telemetry-eval${view.isMate ? ' player-card__telemetry-eval--mate' : ''}">${escHtml(view.scoreDisplay)}</span>`
-    : '';
+    ? `<span class="player-card__telemetry-eval${view.isMate ? " player-card__telemetry-eval--mate" : ""}">${escHtml(view.scoreDisplay)}</span>`
+    : "";
   const nodesHtml = nodes
     ? `<span class="player-card__telemetry-nodes">${escHtml(nodes)}</span>`
     : '<span class="player-card__telemetry-nodes player-card__telemetry-nodes--empty"></span>';
-  const timeHtml = view.thinkMs != null
-    ? `<span class="player-card__telemetry-time">${escHtml(formatMs(view.thinkMs))}</span>`
-    : '';
+  const timeHtml =
+    view.thinkMs != null
+      ? `<span class="player-card__telemetry-time">${escHtml(formatMs(view.thinkMs))}</span>`
+      : "";
   return `${nodesHtml}${evalHtml}${depthHtml}${timeHtml}`;
 }
 
@@ -128,46 +138,56 @@ function resolveDepth(snap) {
 
 function expandStrengthLabel(label) {
   switch (label) {
-    case 'Beg.': return 'Beginner';
-    case 'Inter.': return 'Intermediate';
-    case 'Adv.': return 'Advanced';
-    default: return label;
+    case "Beg.":
+      return "Beginner";
+    case "Inter.":
+      return "Intermediate";
+    case "Adv.":
+      return "Advanced";
+    default:
+      return label;
   }
 }
 
 function formatTimeSummary(seconds) {
   const formatted = formatWallClock(seconds ?? 10);
-  if (formatted.endsWith('ms')) return formatted;
-  if (formatted.endsWith('s') && !formatted.includes(' ')) {
-    return formatted.replace(/s$/, ' s');
+  if (formatted.endsWith("ms")) return formatted;
+  if (formatted.endsWith("s") && !formatted.includes(" ")) {
+    return formatted.replace(/s$/, " s");
   }
   return formatted;
 }
 
 export function compactPlayerConfigSummary(ui, snap = null) {
-  if (!ui || ui.isHuman) return 'Human';
+  if (!ui || ui.isHuman) return "Human";
 
   const engine = shortEngineName(ui.playerType);
 
   if (ui.isRemote && !ui.isZeroInk) {
     const strength = expandStrengthLabel(
-      STRENGTH_LEVEL_PRESETS.find((p) => p.id === (ui.strengthLevel ?? StrengthLevel.Alpha))?.label
-        ?? 'Alpha',
+      STRENGTH_LEVEL_PRESETS.find(
+        (p) => p.id === (ui.strengthLevel ?? StrengthLevel.Alpha),
+      )?.label ?? "Alpha",
     );
-    const time = TIME_TO_MOVE_PRESETS.find((p) => p.id === (ui.timeToMove ?? TimeToMove.Short))?.label
-      ?? 'Short';
+    const time =
+      TIME_TO_MOVE_PRESETS.find(
+        (p) => p.id === (ui.timeToMove ?? TimeToMove.Short),
+      )?.label ?? "Short";
     return `${engine} · ${strength} · ${time}`;
   }
 
   if (ui.isZeroInk) {
-    const time = TIME_TO_MOVE_PRESETS.find((p) => p.id === (ui.timeToMove ?? TimeToMove.Short))?.label
-      ?? 'Short';
+    const time =
+      TIME_TO_MOVE_PRESETS.find(
+        (p) => p.id === (ui.timeToMove ?? TimeToMove.Short),
+      )?.label ?? "Short";
     return `${engine} · ${time}`;
   }
 
   if (ui.isAceFamily) {
     const tiers = aceStrengthPresetsForPlayerType(ui.playerType);
-    const tier = tiers.find((t) => t.id === (ui.strengthLevel ?? 0))?.label ?? 'JS';
+    const tier =
+      tiers.find((t) => t.id === (ui.strengthLevel ?? 0))?.label ?? "JS";
     return `${engine} · ${tier} · ${formatTimeSummary(ui.wallClockSeconds)}`;
   }
 
@@ -180,17 +200,21 @@ export function compactPlayerConfigSummary(ui, snap = null) {
 
 function shortEngineName(playerType) {
   if (playerType === PlayerType.TitaniumV17) {
-    return 'Titanium v17';
+    return "Titanium v17";
   }
   if (playerType === PlayerType.TitaniumV16) {
-    return 'Titanium v16';
+    return "Titanium v16";
   }
-  if (playerType === PlayerType.GorisansonMCTS) return 'Gorisanson';
-  if (playerType === PlayerType.KaAI) return 'Ka';
-  if (playerType === PlayerType.ZeroInk) return 'zero.ink';
-  if (playerType === PlayerType.IshtarV3 || playerType === PlayerType.IshtarPonder) return 'Ishtar';
-  if (playerType === PlayerType.AceV10) return 'ACE v10';
-  if (playerType === PlayerType.AceV13) return 'ACE v13';
+  if (playerType === PlayerType.GorisansonMCTS) return "Gorisanson";
+  if (playerType === PlayerType.KaAI) return "Ka";
+  if (playerType === PlayerType.ZeroInk) return "zero.ink";
+  if (
+    playerType === PlayerType.IshtarV3 ||
+    playerType === PlayerType.IshtarPonder
+  )
+    return "Ishtar";
+  if (playerType === PlayerType.AceV10) return "ACE v10";
+  if (playerType === PlayerType.AceV13) return "ACE v13";
   return String(playerType);
 }
 
@@ -201,7 +225,7 @@ function shortEngineName(playerType) {
  */
 /** @param {'thinking' | 'loading' | null} mode */
 function updatePawnSpinner(container, mode, seatIndex) {
-  const pawnEl = container.querySelector('.player-card__pawn');
+  const pawnEl = container.querySelector(".player-card__pawn");
   let spinner = container._pawnSpinner;
 
   if (!mode || !pawnEl) {
@@ -211,13 +235,13 @@ function updatePawnSpinner(container, mode, seatIndex) {
   }
 
   if (!spinner) {
-    spinner = document.createElement('div');
-    spinner.className = 'pawn-spinner';
+    spinner = document.createElement("div");
+    spinner.className = "pawn-spinner";
     container._pawnSpinner = spinner;
   }
 
   spinner.dataset.seat = String(seatIndex);
-  spinner.classList.toggle('pawn-spinner--loading', mode === 'loading');
+  spinner.classList.toggle("pawn-spinner--loading", mode === "loading");
   if (spinner.parentNode !== pawnEl) {
     pawnEl.appendChild(spinner);
   }
@@ -228,16 +252,17 @@ export function playerCardStructureKey(state, seatIndex) {
   const playerType = state.settings.players[seatIndex];
   const isHuman = playerType === PlayerType.Human;
   const isThinking = state.aiThinking && state.thinkingSeatIndex === seatIndex;
-  const isMyTurn = !state.winner && !state.isDraw && state.playerToMove === seatIndex + 1;
+  const isMyTurn =
+    !state.winner && !state.isDraw && state.playerToMove === seatIndex + 1;
   const ui = state.playerAiSettingsUi?.[seatIndex];
   const engineStatus = state.engineStatus?.[seatIndex];
   const engineError = state.engineErrors?.[seatIndex];
   const hasError =
-    !isHuman && typeof engineError === 'string' && engineError.length > 0;
+    !isHuman && typeof engineError === "string" && engineError.length > 0;
   const completedSnap = state.lastCompletedThinkBySeat?.[seatIndex];
   const activeSnap = thinkingTelemetry(state, seatIndex);
   const snap = activeSnap ?? completedSnap;
-  const isLoading = isMyTurn && !isHuman && engineStatus === 'connecting';
+  const isLoading = isMyTurn && !isHuman && engineStatus === "connecting";
 
   return JSON.stringify({
     seatIndex,
@@ -250,7 +275,7 @@ export function playerCardStructureKey(state, seatIndex) {
     isDraw: state.isDraw,
     configSummary: compactPlayerConfigSummary(ui, snap),
     hasError,
-    engineError: hasError ? engineError : '',
+    engineError: hasError ? engineError : "",
   });
 }
 
@@ -258,21 +283,25 @@ function derivePlayerCardView(state, seatIndex) {
   const playerType = state.settings.players[seatIndex];
   const isHuman = playerType === PlayerType.Human;
   const isThinking = state.aiThinking && state.thinkingSeatIndex === seatIndex;
-  const isMyTurn = !state.winner && !state.isDraw && state.playerToMove === seatIndex + 1;
+  const isMyTurn =
+    !state.winner && !state.isDraw && state.playerToMove === seatIndex + 1;
   const colorName = playerColorName(seatIndex + 1);
   const ui = state.playerAiSettingsUi?.[seatIndex];
 
   const engineStatus = state.engineStatus?.[seatIndex];
   const engineError = state.engineErrors?.[seatIndex];
   const hasError =
-    !isHuman && typeof engineError === 'string' && engineError.length > 0;
+    !isHuman && typeof engineError === "string" && engineError.length > 0;
 
-  const isThinkingThisSeat = state.aiThinking && state.thinkingSeatIndex === seatIndex;
+  const isThinkingThisSeat =
+    state.aiThinking && state.thinkingSeatIndex === seatIndex;
   const liveSnap = thinkingTelemetry(state, seatIndex);
   const completedSnap = state.lastCompletedThinkBySeat?.[seatIndex];
-  // While this seat thinks, show live telemetry; once the opponent thinks, freeze
-  // the last completed snapshot so Gorisanson/MCTS results stay visible.
-  const snap = isThinkingThisSeat ? (liveSnap ?? completedSnap) : completedSnap;
+  // While this seat thinks, keep the last snapshot on screen until live search
+  // reports something new (Gorisanson progress arrives in bursts).
+  const snap = isThinkingThisSeat
+    ? (liveSnap ?? completedSnap)
+    : completedSnap;
 
   const depth = resolveDepth(snap);
   const nodes = resolveNodes(snap);
@@ -281,35 +310,42 @@ function derivePlayerCardView(state, seatIndex) {
   const thinkMs = liveSnap?.elapsedMs ?? snap?.thinkMs ?? null;
   const rootWinRate = snap?.rootWinRate ?? null;
 
-  const isLoading = isMyTurn && !isHuman && engineStatus === 'connecting';
+  const isLoading = isMyTurn && !isHuman && engineStatus === "connecting";
   const spinnerMode = hasError
     ? null
-    : (isThinking ? 'thinking' : isLoading ? 'loading' : null);
+    : isThinking
+      ? "thinking"
+      : isLoading
+        ? "loading"
+        : null;
 
-  let scoreDisplay = '';
+  let scoreDisplay = "";
   const isMate = isMateScore(score);
   if (score != null && Number.isFinite(Number(score))) {
     scoreDisplay = formatScoreForCard(score);
     const mate = mateInfo(score);
     if (mate && mate.dist === 0 && !state.winner && !state.isDraw) {
       const winningSeat = mate.sign > 0 ? seatIndex : 1 - seatIndex;
-      const dist = winningSeat === 0 ? state.eval?.whiteDist : state.eval?.blackDist;
+      const dist =
+        winningSeat === 0 ? state.eval?.whiteDist : state.eval?.blackDist;
       if (Number.isFinite(dist) && dist > 0) {
         scoreDisplay = mate.sign > 0 ? `Win in ${dist}` : `Lose in ${dist}`;
       } else {
-        scoreDisplay = mate.sign > 0 ? 'Winning' : 'Losing';
+        scoreDisplay = mate.sign > 0 ? "Winning" : "Losing";
       }
     }
   } else if (rootWinRate != null) {
     scoreDisplay = `${(rootWinRate * 100).toFixed(0)}%`;
   }
 
-  const showPlayNow = isThinking && canPlayNow({
-    ...state,
-    liveSearch: thinkingTelemetry(state, seatIndex) ?? state.liveSearch,
-    thinkingSeatIndex: seatIndex,
-    searchGeneration: state.searchGeneration,
-  });
+  const showPlayNow =
+    isThinking &&
+    canPlayNow({
+      ...state,
+      liveSearch: thinkingTelemetry(state, seatIndex) ?? state.liveSearch,
+      thinkingSeatIndex: seatIndex,
+      searchGeneration: state.searchGeneration,
+    });
 
   return {
     playerType,
@@ -328,7 +364,7 @@ function derivePlayerCardView(state, seatIndex) {
     nodesLine,
     thinkMs,
     showPlayNow,
-    clockText: state.gameClocks?.[seatIndex]?.label ?? '',
+    clockText: state.gameClocks?.[seatIndex]?.label ?? "",
     selectedWorkerNodes: snap?.selectedWorkerNodes,
     totalNodesAcrossWorkers: snap?.totalNodesAcrossWorkers,
     nodeSource: snap?.nodeSource,
@@ -339,38 +375,40 @@ function derivePlayerCardView(state, seatIndex) {
 /** Patch live telemetry without tearing down the card DOM (keeps spinner animation). */
 export function patchPlayerCardLive(container, state, seatIndex, controller) {
   const view = derivePlayerCardView(state, seatIndex);
-  const card = container.querySelector(`[data-player-card-seat="${seatIndex}"]`);
+  const card = container.querySelector(
+    `[data-player-card-seat="${seatIndex}"]`,
+  );
   if (!card) {
     return false;
   }
 
-  card.classList.toggle('player-card--active', view.isMyTurn);
-  card.classList.toggle('player-card--winner', state.winner === seatIndex + 1);
+  card.classList.toggle("player-card--active", view.isMyTurn);
+  card.classList.toggle("player-card--winner", state.winner === seatIndex + 1);
 
-  const statsEl = card.querySelector('.player-card__telemetry');
+  const statsEl = card.querySelector(".player-card__telemetry");
   if (statsEl) {
     statsEl.innerHTML = buildTelemetryHtml(view);
   } else if (buildTelemetryHtml(view)) {
-    const center = card.querySelector('.player-card__center');
+    const center = card.querySelector(".player-card__center");
     if (center) {
-      const telemetry = document.createElement('div');
-      telemetry.className = 'player-card__telemetry';
+      const telemetry = document.createElement("div");
+      telemetry.className = "player-card__telemetry";
       telemetry.innerHTML = buildTelemetryHtml(view);
       center.appendChild(telemetry);
     }
   }
-  const clockEl = card.querySelector('[data-player-card-clock]');
+  const clockEl = card.querySelector("[data-player-card-clock]");
   if (clockEl) clockEl.textContent = view.clockText;
 
   const playBtn = card.querySelector('[data-action="play-now"]');
   if (view.showPlayNow && !playBtn) {
-    const right = card.querySelector('.player-card__right');
-    const btn = document.createElement('button');
-    btn.className = 'btn btn--playnow';
-    btn.dataset.action = 'play-now';
-    btn.title = 'Stop search and play current best move';
-    btn.textContent = 'Play now';
-    btn.addEventListener('click', () => controller.playNow?.());
+    const right = card.querySelector(".player-card__right");
+    const btn = document.createElement("button");
+    btn.className = "btn btn--playnow";
+    btn.dataset.action = "play-now";
+    btn.title = "Stop search and play current best move";
+    btn.textContent = "Play now";
+    btn.addEventListener("click", () => controller.playNow?.());
     right?.appendChild(btn);
   } else if (!view.showPlayNow && playBtn) {
     playBtn.remove();
@@ -381,25 +419,27 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
 }
 
 function bindPlayerCardActions(container, state, seatIndex, controller) {
-  container.querySelector('[data-action="play-now"]')?.addEventListener('click', () => {
-    controller.playNow?.();
-  });
+  container
+    .querySelector('[data-action="play-now"]')
+    ?.addEventListener("click", () => {
+      controller.playNow?.();
+    });
 
   // Click the pawn icon to see full engine logs (chain-of-thought), same
   // content as the old standalone Logs button -- works even when the engine
   // hasn't errored, not just as an error-recovery affordance.
-  const pawnEl = container.querySelector('.player-card__pawn');
+  const pawnEl = container.querySelector(".player-card__pawn");
   if (pawnEl) {
-    pawnEl.classList.add('player-card__pawn--clickable');
-    pawnEl.title = 'Click for full engine logs';
-    pawnEl.addEventListener('click', () => {
+    pawnEl.classList.add("player-card__pawn--clickable");
+    pawnEl.title = "Click for full engine logs";
+    pawnEl.addEventListener("click", () => {
       openLogsDialog(controller.getState());
     });
   }
 
   container
     .querySelector('[data-action="copy-engine-error"]')
-    ?.addEventListener('click', (event) => {
+    ?.addEventListener("click", (event) => {
       event.stopPropagation();
       openLogsDialog(controller.getState());
     });
@@ -426,27 +466,27 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
   const telemetryHtml = buildTelemetryHtml(view);
 
   container.innerHTML = `
-    <div class="player-card player-card--seat${seatIndex}${view.isMyTurn ? ' player-card--active' : ''}${state.winner === seatIndex + 1 ? ' player-card--winner' : ''}" data-player-card-seat="${seatIndex}">
+    <div class="player-card player-card--seat${seatIndex}${view.isMyTurn ? " player-card--active" : ""}${state.winner === seatIndex + 1 ? " player-card--winner" : ""}" data-player-card-seat="${seatIndex}">
       <div class="player-card__main">
         <div class="player-card__left">
           <div class="player-card__token">
             <div class="player-card__color player-card__color--seat${seatIndex}">${escHtml(view.colorName)}</div>
             <div class="player-card__pawn pawn-icon pawn-icon--seat${seatIndex}">${
-            view.hasError
-              ? `<button type="button" class="pawn-icon__error" data-action="copy-engine-error" data-seat="${seatIndex}" title="Engine error — click for full game logs:&#10;${escAttr(view.engineError)}" aria-label="Engine error, click for full game logs">!</button>`
-              : ''
-          }</div>
+              view.hasError
+                ? `<button type="button" class="pawn-icon__error" data-action="copy-engine-error" data-seat="${seatIndex}" title="Engine error — click for full game logs:&#10;${escAttr(view.engineError)}" aria-label="Engine error, click for full game logs">!</button>`
+                : ""
+            }</div>
           </div>
           <div class="player-card__info">
             <div class="player-card__config">${escHtml(view.configSummary)}</div>
           </div>
         </div>
         <div class="player-card__center">
-          ${view.clockText ? `<div class="player-card__clock" data-player-card-clock>${escHtml(view.clockText)}</div>` : ''}
-          ${telemetryHtml ? `<div class="player-card__telemetry">${telemetryHtml}</div>` : ''}
+          ${view.clockText ? `<div class="player-card__clock" data-player-card-clock>${escHtml(view.clockText)}</div>` : ""}
+          ${telemetryHtml ? `<div class="player-card__telemetry">${telemetryHtml}</div>` : ""}
         </div>
         <div class="player-card__right">
-          ${view.showPlayNow ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ''}
+          ${view.showPlayNow ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ""}
         </div>
       </div>
     </div>

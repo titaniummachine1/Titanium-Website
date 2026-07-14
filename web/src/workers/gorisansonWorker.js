@@ -149,9 +149,134 @@ const bootstrap = new Function(
     }
   }
 
-  function mctsMainLinePv(mcts, maxPlies) {
+  function nodeDepthFromRoot(node) {
+    let depth = 0;
+    let current = node;
+    while (current && current.parent) {
+      depth += 1;
+      current = current.parent;
+    }
+    return depth;
+  }
+
+  function patchGorisansonRolloutTelemetry() {
+    if (MonteCarloTreeSearch.__rolloutTelemetryPatched) {
+      return;
+    }
+    MonteCarloTreeSearch.__rolloutTelemetryPatched = true;
+
+    const origDoMove = Game.prototype.doMove;
+    Game.prototype.doMove = function(move, flag) {
+      const tracker = Game.__rolloutTracker;
+      if (tracker && tracker._currentRolloutPlies != null) {
+        tracker._currentRolloutPlies += 1;
+      }
+      return origDoMove.call(this, move, flag);
+    };
+
+    const origMovePawn = Game.prototype.movePawn;
+    Game.prototype.movePawn = function(row, col) {
+      const tracker = Game.__rolloutTracker;
+      if (tracker && tracker._currentRolloutPlies != null) {
+        tracker._currentRolloutPlies += 1;
+      }
+      return origMovePawn.call(this, row, col);
+    };
+
+    const origRollout = MonteCarloTreeSearch.prototype.rollout;
+    MonteCarloTreeSearch.prototype.rollout = function(node) {
+      if (!this._remainingPliesStats) {
+        this._remainingPliesStats = { sum: 0, count: 0 };
+      }
+      const depthAtNode = nodeDepthFromRoot(node);
+      const prevTracker = Game.__rolloutTracker;
+      Game.__rolloutTracker = this;
+      this._currentRolloutPlies = 0;
+      try {
+        origRollout.call(this, node);
+      } finally {
+        Game.__rolloutTracker = prevTracker;
+        const rolloutPlies = this._currentRolloutPlies ?? 0;
+        this._currentRolloutPlies = null;
+        if (rolloutPlies > 0) {
+          const totalRemaining = depthAtNode + rolloutPlies;
+          this._remainingPliesStats.sum += totalRemaining;
+          this._remainingPliesStats.count += 1;
+        }
+      }
+    };
+  }
+
+  patchGorisansonRolloutTelemetry();
+
+  let globalCatMoveWeights = null;
+
+  function weightedChoice(items, weightFn) {
+    if (!items?.length) {
+      return null;
+    }
+    let total = 0;
+    const weights = items.map((item) => {
+      const w = Math.max(1, weightFn(item));
+      total += w;
+      return w;
+    });
+    let r = Math.random() * total;
+    for (let i = 0; i < items.length; i++) {
+      r -= weights[i];
+      if (r <= 0) {
+        return items[i];
+      }
+    }
+    return items[items.length - 1];
+  }
+
+  function catWeightForMove(move) {
+    if (!globalCatMoveWeights || !move) {
+      return 1;
+    }
+    const alg = moveToAlgebraicSafe(move);
+    if (!alg) {
+      return 1;
+    }
+    const w = globalCatMoveWeights[alg];
+    return w > 0 ? w : 1;
+  }
+
+  function patchGorisansonCatPolicy() {
+    if (MonteCarloTreeSearch.__catPolicyPatched) {
+      return;
+    }
+    MonteCarloTreeSearch.__catPolicyPatched = true;
+    const origSearch = MonteCarloTreeSearch.prototype.search;
+    MonteCarloTreeSearch.prototype.search = function(numOfSimulations) {
+      if (!globalCatMoveWeights) {
+        return origSearch.call(this, numOfSimulations);
+      }
+      const origRC = randomChoice;
+      randomChoice = function(arr) {
+        if (!globalCatMoveWeights || !arr?.length) {
+          return origRC(arr);
+        }
+        if (arr[0]?.move != null) {
+          return weightedChoice(arr, (node) => catWeightForMove(node.move));
+        }
+        return origRC(arr);
+      };
+      try {
+        return origSearch.call(this, numOfSimulations);
+      } finally {
+        randomChoice = origRC;
+      }
+    };
+  }
+
+  patchGorisansonCatPolicy();
+
+  function mctsMainLinePv(mcts, game, maxPlies) {
     const moves = [];
     let node = mcts.root;
+    const simGame = Game.clone(game);
     for (let i = 0; i < (maxPlies || 48); i++) {
       if (!node?.children?.length) {
         break;
@@ -165,9 +290,55 @@ const bootstrap = new Function(
         break;
       }
       moves.push(algebraic);
+      simGame.doMove(best.move, true);
+      if (simGame.winner !== null) {
+        break;
+      }
       node = best;
     }
     return moves.join(' ');
+  }
+
+  function mctsSimulationRemainingPlies(mcts) {
+    const stats = mcts._remainingPliesStats;
+    if (stats && stats.count > 0) {
+      return Math.max(1, Math.round(stats.sum / stats.count));
+    }
+    let termDepthSum = 0;
+    let termWeight = 0;
+    function walk(node, depth) {
+      if (node.isTerminal && node.numSims > 0) {
+        termDepthSum += depth * node.numSims;
+        termWeight += node.numSims;
+      }
+      for (const child of node.children) {
+        if (child?.move) {
+          walk(child, depth + 1);
+        }
+      }
+    }
+    walk(mcts.root, 0);
+    if (termWeight > 0) {
+      return Math.max(1, Math.round(termDepthSum / termWeight));
+    }
+    return null;
+  }
+
+  function gorisansonSearchTelemetry(mcts, game, simulations) {
+    const pv = mctsMainLinePv(mcts, game);
+    const remainingPlies = mctsSimulationRemainingPlies(mcts);
+    const snap = snapshotMctsRoot(mcts);
+    const bestWr = snap.rootWinRate;
+    if (remainingPlies == null && !pv) {
+      return [];
+    }
+    return [{
+      depth: remainingPlies ?? (pv ? pv.trim().split(/\s+/).length : 1),
+      nodes: simulations,
+      score: bestWr != null ? Math.round(bestWr * 100) : null,
+      pv,
+      remainingPlies,
+    }];
   }
 
   function snapshotMctsRoot(mcts) {
@@ -236,7 +407,9 @@ const bootstrap = new Function(
     return false;
   }
 
-  function searchForTime(game, uctConst, timeMs, maxSimulations) {
+  function searchForTime(game, uctConst, timeMs, maxSimulations, catMoveWeights) {
+    globalCatMoveWeights = catMoveWeights ?? null;
+    try {
     const opening = chooseOpeningPawnMove(game);
     if (opening) {
       return { move: opening, simulations: 0, stoppedBy: 'opening' };
@@ -276,8 +449,8 @@ const bootstrap = new Function(
         const elapsed = performance.now() - started;
         const snap = snapshotMctsRoot(mcts);
         const dist = pathDistances(game);
-        const pv = mctsMainLinePv(mcts);
-        const bestWr = snap.rootWinRate;
+        const pv = mctsMainLinePv(mcts, game);
+        const depthLog = gorisansonSearchTelemetry(mcts, game, simulations);
         postMessage({
           type: 'progress',
           value: Math.min(0.99, elapsed / timeMs),
@@ -285,14 +458,7 @@ const bootstrap = new Function(
           ...snap,
           ...dist,
           pv,
-          depthLog: pv
-            ? [{
-                depth: 1,
-                nodes: simulations,
-                score: bestWr != null ? Math.round(bestWr * 100) : null,
-                pv,
-              }]
-            : [],
+          depthLog,
         });
       }
     }
@@ -308,8 +474,8 @@ const bootstrap = new Function(
     }
     const snap = snapshotMctsRoot(mcts);
     const dist = pathDistances(game);
-    const pv = mctsMainLinePv(mcts);
-    const bestWr = snap.rootWinRate;
+    const pv = mctsMainLinePv(mcts, game);
+    const depthLog = gorisansonSearchTelemetry(mcts, game, simulations);
     return {
       move,
       simulations,
@@ -317,15 +483,11 @@ const bootstrap = new Function(
       ...snap,
       ...dist,
       pv,
-      depthLog: pv
-        ? [{
-            depth: 1,
-            nodes: simulations,
-            score: bestWr != null ? Math.round(bestWr * 100) : null,
-            pv,
-          }]
-        : [],
+      depthLog,
     };
+    } finally {
+      globalCatMoveWeights = null;
+    }
   }
 
   return { Game, AI, searchForTime };
@@ -342,7 +504,7 @@ const { Game, AI, searchForTime } = bootstrap(
 );
 
 self.onmessage = (event) => {
-  const { algebraicMoves = [], simulations, timeMs, maxSimulations, uctConst } = event.data;
+  const { algebraicMoves = [], simulations, timeMs, maxSimulations, uctConst, catMoveWeights } = event.data;
   const game = new Game(true);
   for (const move of algebraicMoves) {
     game.doMove(actionToGorisansonMove(parseAlgebraic(move)), true);
@@ -355,7 +517,7 @@ self.onmessage = (event) => {
 
   if (Number.isFinite(timeMs) && timeMs > 0) {
     try {
-      const result = searchForTime(game, uctConst ?? 0.2, timeMs, maxSimulations);
+      const result = searchForTime(game, uctConst ?? 0.2, timeMs, maxSimulations, catMoveWeights);
       self.postMessage({
         type: 'bestmove',
         move: result.move,
@@ -366,6 +528,8 @@ self.onmessage = (event) => {
         rootMoves: result.rootMoves,
         whiteDist: result.whiteDist,
         blackDist: result.blackDist,
+        depthLog: result.depthLog,
+        pv: result.pv,
         timeMs,
       });
     } catch (err) {

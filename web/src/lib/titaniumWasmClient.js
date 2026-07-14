@@ -9,7 +9,7 @@
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
-import { resolveMaxNodes, resolveCatLmrCeiling } from './timeControl.js';
+import { resolveMaxNodes, resolveCatLmrCeiling, resolveTitaniumMaxDepth } from './timeControl.js';
 import { resolveTitaniumSearchCores } from './titaniumRuntime.js';
 import { enrichNodeFields } from './searchNodes.js';
 import { setRustIdentityFromWasm } from './wasmBuildInfo.js';
@@ -531,6 +531,7 @@ export class TitaniumWasmEngineClient {
 
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
+    const maxDepth = resolveTitaniumMaxDepth(aiSettings);
     const engineMode = this.config?.engineMode ?? 'titanium-v17';
     const catLmrCeiling =
       engineMode === 'titanium-v16' || engineMode === 'titanium-v17'
@@ -589,6 +590,7 @@ export class TitaniumWasmEngineClient {
       algebraicMoves: this.algebraicMoves,
       timeMs,
       maxNodes,
+      maxDepth,
       isFreshGame: Boolean(isFreshGame),
       engineMode,
       catLmrCeiling,

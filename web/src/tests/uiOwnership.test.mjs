@@ -51,7 +51,8 @@ assert(dialogSrc.includes('renderTimeModeControls'), 'remote thinking mode in di
 assert(dialogSrc.includes('renderTimeSlider'), 'time slider in dialog');
 assert(dialogSrc.includes('renderAceTierControls'), 'ACE tier in dialog');
 assert(dialogSrc.includes('renderRemoteStrengthControls'), 'remote strength in dialog');
-assert(dialogSrc.includes('renderTitaniumNetControls'), 'titanium net in dialog');
+assert(dialogSrc.includes('renderTitaniumDepthControls'), 'titanium depth limit in dialog');
+assert(dialogSrc.includes('renderGorisansonTierControls'), 'gorisanson tier in dialog');
 assert(dialogSrc.includes('changePlayers'), 'settings apply via changePlayers');
 assert(dialogSrc.includes('Vision overlay'), 'vision mode in dialog');
 assert(dialogSrc.includes('data-vision-mode'), 'Off/CAT/LMR mode switch in dialog');
@@ -78,7 +79,7 @@ const tiSummary = compactPlayerConfigSummary({
   isTitanium: true,
   isLocalMcts: true,
   playerType: PlayerType.TitaniumV16,
-  titaniumNet: 'hard',
+  searchDepthLimit: 0,
   wallClockSeconds: 3,
 });
 assert(
@@ -91,7 +92,7 @@ const ti16Summary = compactPlayerConfigSummary({
   isTitanium: true,
   isLocalMcts: true,
   playerType: PlayerType.TitaniumV16,
-  titaniumNet: 'hard',
+  searchDepthLimit: 0,
   wallClockSeconds: 5,
 });
 assert(
@@ -104,7 +105,7 @@ const tiFallbackSummary = compactPlayerConfigSummary(
     isTitanium: true,
     isLocalMcts: true,
     playerType: PlayerType.TitaniumV16,
-    titaniumNet: 'hard',
+    searchDepthLimit: 0,
     wallClockSeconds: 5,
     cores: 8,
   },
@@ -115,7 +116,7 @@ assert(tiFallbackSummary === 'Titanium v16', tiFallbackSummary);
 assert(compactPlayerConfigSummary({ isHuman: true }) === 'Human', 'human summary');
 
 console.log('\n[ui] live node estimates are marked');
-assert(playerCardSrc.includes("'n~'"), 'estimated live node totals use n~ prefix');
+assert(playerCardSrc.includes('n~'), 'estimated live node totals use n~ prefix');
 assert(playerCardSrc.includes('estimatedTotalNodes'), 'card consumes estimatedTotalNodes flag');
 assert(controllerSrc.includes('estimatedTotalNodes: false'), 'completed searches clear estimate flag');
 

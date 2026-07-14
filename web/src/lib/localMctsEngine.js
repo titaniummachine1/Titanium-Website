@@ -6,6 +6,8 @@ import GorisansonWorker from '../workers/gorisansonWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
 import { resolveOnBestMoveResult } from './onBestMoveResult.js';
 import { LOCAL_VISITS_RANGE, resolveMaxNodes, uctFromStrengthLevel } from './timeControl.js';
+import { fetchCatSnapshot } from './catHeatmap.js';
+import { buildCatMoveWeights, isGorisansonCatPolicy } from './gorisansonCatPolicy.js';
 
 export class LocalMctsEngineClient {
   constructor(engineConfig, { resolveUct, WorkerClass = GorisansonWorker } = {}) {
@@ -67,8 +69,7 @@ export class LocalMctsEngineClient {
           return;
         }
         const action = parseAlgebraic(data.algebraicMove);
-        this.algebraicMoves.push(data.algebraicMove);
-        resolveOnBestMoveResult(this, pending.onBestMove?.(action));
+        pending.onBestMove?.(action);
       }
     };
 
@@ -144,7 +145,7 @@ export class LocalMctsEngineClient {
       this.queuedRequest = params;
       return;
     }
-    this.startRequest(params);
+    void this.startRequest(params);
   }
 
   drainQueuedRequest() {
@@ -153,10 +154,10 @@ export class LocalMctsEngineClient {
     }
     const next = this.queuedRequest;
     this.queuedRequest = null;
-    this.startRequest(next);
+    void this.startRequest(next);
   }
 
-  startRequest({ aiSettings, moveHistory, isFreshGame }) {
+  async startRequest({ aiSettings, moveHistory, isFreshGame, onSearchStart }) {
     if (isFreshGame) {
       this.algebraicMoves = [];
     } else if (moveHistory?.length) {
@@ -170,6 +171,17 @@ export class LocalMctsEngineClient {
     this.setStatus('searching');
     const started = performance.now();
     this.ensureWorker();
+    onSearchStart?.();
+
+    let catMoveWeights = null;
+    if (isGorisansonCatPolicy(aiSettings?.gorisansonNet)) {
+      try {
+        const snap = await fetchCatSnapshot(this.algebraicMoves);
+        catMoveWeights = buildCatMoveWeights(this.algebraicMoves, snap);
+      } catch (err) {
+        console.warn('Gorisanson CAT policy unavailable; using vanilla MCTS', err);
+      }
+    }
 
     this.pendingRequest = {
       started,
@@ -213,6 +225,7 @@ export class LocalMctsEngineClient {
       timeMs,
       maxSimulations,
       uctConst,
+      catMoveWeights,
     };
     this.worker.postMessage(payload);
   }

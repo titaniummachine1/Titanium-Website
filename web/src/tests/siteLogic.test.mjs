@@ -250,7 +250,7 @@ console.log("\n[clock] time forfeit ends the game");
 const clockSession = new GameSession();
 assert(clockSession.forfeitOnTime(1), "white flag awards black the win");
 assertEqual(clockSession.winner, 2, "opponent wins on time");
-assertEqual(clockSession.endReason, 'time', "time forfeit records end reason");
+assertEqual(clockSession.endReason, "time", "time forfeit records end reason");
 assertEqual(
   clockSession.getSnapshot().validActions.length,
   0,
@@ -447,7 +447,10 @@ assert(
 console.log("\n[clock] remote engines are not on whole-game clock");
 const engineConfigs = getAllEngineConfigs();
 const kaSettings = defaultPlayerAiSettings(PlayerType.KaAI, engineConfigs);
-const zeroInkSettings = defaultPlayerAiSettings(PlayerType.ZeroInk, engineConfigs);
+const zeroInkSettings = defaultPlayerAiSettings(
+  PlayerType.ZeroInk,
+  engineConfigs,
+);
 assert(
   !hasSeatClock(PlayerType.KaAI, engineConfigs, kaSettings),
   "Ka has no seat clock",
@@ -467,16 +470,16 @@ assert(
 
 console.log("\n[gameEnd] descriptive headlines");
 assertEqual(
-  formatGameEndHeadline({ winner: 1, endReason: 'time' }),
-  'White wins on time',
+  formatGameEndHeadline({ winner: 1, endReason: "time" }),
+  "White wins on time",
   "time win headline",
 );
 assertEqual(
   formatGameEndHeadline({
     gameHalted: true,
-    engineErrors: { 1: 'worker crashed' },
+    engineErrors: { 1: "worker crashed" },
   }),
-  'Game halted — Black engine error',
+  "Game halted — Black engine error",
   "engine halt headline",
 );
 
@@ -545,6 +548,41 @@ assertEqual(
   4,
   "shorter race distance raises horizon above depleted plan tail",
 );
+
+console.log("\n[notation] wallz prefix walls and move-history paste");
+import {
+  tokenizeAlgebraicNotation,
+  decodeReplayCode,
+} from "../lib/replayCode.js";
+import { toAlgebraic } from "../lib/gameLogic.js";
+
+assertEqual(
+  tokenizeAlgebraicNotation("e2 ve4 e8").join(" "),
+  "e2 e4v e8",
+  "ve4 prefix wall tokenizes to e4v",
+);
+assertEqual(
+  tokenizeAlgebraicNotation("e2 v e4 e8").join(" "),
+  "e2 e4v e8",
+  "split v e4 wall",
+);
+assertEqual(
+  tokenizeAlgebraicNotation("1. e2 e8\n2. e3 hd3").join(" "),
+  "e2 e8 e3 d3h",
+  "numbered wallz lines",
+);
+assertEqual(
+  toAlgebraic(parseAlgebraic("ve4")),
+  "e4v",
+  "parseAlgebraic accepts ve4 prefix",
+);
+assertEqual(
+  toAlgebraic(parseAlgebraic("hd3")),
+  "d3h",
+  "parseAlgebraic accepts hd3 prefix",
+);
+const decoded = decodeReplayCode("e2 ve4 hd3 e8");
+assertEqual(decoded.algebraic.join(" "), "e2 e4v d3h e8", "decodeReplayCode normalizes walls");
 
 console.log("\n════════════════════════════════");
 console.log(
