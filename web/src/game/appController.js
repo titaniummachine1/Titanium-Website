@@ -24,7 +24,6 @@ import {
   ReviewAnalysisSession,
   classifyReviewMoves,
 } from "./reviewAnalysisSession.js";
-import { defaultAnalysisThreadCount } from "../lib/timeControl.js";
 import {
   LMR_AGGRESSION_DEFAULT,
   fetchCatSnapshot,
@@ -406,7 +405,10 @@ import {
   clampTitaniumDepthLimit,
   allocateWholeGameTime,
   chargeThinkMsForSeat,
+  clockLogUsedMs,
+  trimThinkLogToPly,
   tightenThinkAllocation,
+  defaultAnalysisThreadCount,
   supportsWholeGameTime,
   hasSeatClock,
   isGorisansonEngine,
@@ -523,6 +525,9 @@ export class AppController {
     this.engineErrors = {};
     this.searchInfoBySeat = [null, null];
     this.moveThinkLog = [];
+    // Completed history remains visible after a clock reset, while this credit
+    // makes the replacement clock start at its full configured value.
+    this._clockResetCreditMs = [0, 0];
     this._humanThinkStartedAt = null;
     this._humanTimedOut = [false, false];
     this.settingsChangelog = [];
@@ -1171,6 +1176,11 @@ export class AppController {
   }
 
   _finishUndo({ requestAi = false } = {}) {
+    this.moveThinkLog = trimThinkLogToPly(
+      this.moveThinkLog,
+      this.session.actions.length,
+    );
+    this._humanTimedOut = [false, false];
     this.liveSearch = null;
     this.engineErrors = {};
     for (const engine of this.engines.values()) {
@@ -1447,6 +1457,7 @@ export class AppController {
         engine?.resetConnection?.();
       }
     }
+    this._resumeAfterTimeSettingsChange();
     this.persistPlaySettings();
     this.onChange?.();
     const isActiveSeat =
@@ -1780,12 +1791,11 @@ export class AppController {
       }
       return Math.max(0, performance.now() - this._humanThinkStartedAt);
     }
-    let usedMs = this.moveThinkLog.reduce((sum, entry) => {
-      const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
-      return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
-        ? sum + Math.max(0, entry.thinkMs)
-        : sum;
-    }, 0);
+    const completedMs = clockLogUsedMs(this.moveThinkLog, seatIndex);
+    let usedMs = Math.max(
+      0,
+      completedMs - Math.max(0, this._clockResetCreditMs?.[seatIndex] ?? 0),
+    );
     if (!includeActiveTurn) {
       return usedMs;
     }
@@ -1805,6 +1815,27 @@ export class AppController {
       usedMs += Math.max(0, performance.now() - this._thinkStartedAt);
     }
     return usedMs;
+  }
+
+  _resumeAfterTimeSettingsChange() {
+    const sessionForfeit = this.session.endReason === "time";
+    const flaggedSeat = this._humanTimedOut?.some(Boolean) ?? false;
+    if (!sessionForfeit && !flaggedSeat) {
+      return false;
+    }
+    this._clockResetCreditMs = [
+      clockLogUsedMs(this.moveThinkLog, 0),
+      clockLogUsedMs(this.moveThinkLog, 1),
+    ];
+    this._humanTimedOut = [false, false];
+    this._humanThinkStartedAt = null;
+    this._gameHalted = false;
+    this._terminalOverlayDismissed = false;
+    if (sessionForfeit) {
+      this.session.clearTimeForfeit();
+    }
+    this._syncHumanClockTurn();
+    return true;
   }
 
   _gameClockStates() {
@@ -2596,6 +2627,7 @@ export class AppController {
     this.engineStatus = {};
     this.replay = null;
     this.moveThinkLog = [];
+    this._clockResetCreditMs = [0, 0];
     this._humanThinkStartedAt = null;
     this._humanTimedOut = [false, false];
     this._illegalRetriesByPly = {};
@@ -4873,6 +4905,7 @@ export class AppController {
         engine?.resetConnection?.();
       }
     }
+    this._resumeAfterTimeSettingsChange();
     this.persistPlaySettings();
     this.onChange && this.onChange();
     this.maybeRequestAiMove();

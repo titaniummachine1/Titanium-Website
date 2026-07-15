@@ -203,6 +203,21 @@ export class GameSession {
     return true;
   }
 
+  /** Resume the current board after settings replace a time-forfeited clock. */
+  clearTimeForfeit() {
+    if (this.endReason !== 'time') {
+      return false;
+    }
+    this.winner = null;
+    this.isDraw = false;
+    this.endReason = null;
+    this.lastAction = this.actions.length
+      ? structuredClone(this.actions[this.actions.length - 1])
+      : null;
+    this.notify();
+    return true;
+  }
+
   lineActions() {
     return [
       ...this.actions.map((action) => structuredClone(action)),

@@ -31,6 +31,8 @@ import {
 import {
   allocateWholeGameTime,
   chargeThinkMsForSeat,
+  clockLogUsedMs,
+  trimThinkLogToPly,
   resolveExpectedMovesLeft,
   WHOLE_GAME_PLAN_MOVES,
   supportsWholeGameTime,
@@ -256,6 +258,25 @@ assertEqual(
   0,
   "terminal after flag",
 );
+assert(clockSession.clearTimeForfeit(), "settings can clear a time-only result");
+assertEqual(clockSession.winner, null, "clearing time forfeit resumes current board");
+assertEqual(clockSession.endReason, null, "clearing time forfeit clears reason");
+assertEqual(
+  clockSession.getSnapshot().validActions.length > 0,
+  true,
+  "moves are legal again after replacing the clock",
+);
+
+console.log("\n[clock] undo returns completed move time");
+const clockLog = [
+  { ply: 1, thinkMs: 1200 },
+  { ply: 2, thinkMs: 900 },
+  { ply: 3, thinkMs: 700 },
+];
+const trimmedClockLog = trimThinkLogToPly(clockLog, 1);
+assertEqual(trimmedClockLog.length, 1, "undo removes later clock entries");
+assertEqual(clockLogUsedMs(trimmedClockLog, 0), 1200, "white gets ply 3 time back");
+assertEqual(clockLogUsedMs(trimmedClockLog, 1), 0, "black gets ply 2 time back");
 
 console.log("\n[training] finished game payload");
 const trainingPayload = finishedGamePayload({

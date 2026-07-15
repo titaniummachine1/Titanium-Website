@@ -140,6 +140,24 @@ export function chargeThinkMsForSeat({
   return wall;
 }
 
+/** Sum completed think time for one seat from canonical, one-based ply logs. */
+export function clockLogUsedMs(entries, seatIndex) {
+  return (entries ?? []).reduce((sum, entry) => {
+    const entrySeat = Number.isFinite(entry?.ply) ? (entry.ply - 1) % 2 : -1;
+    return entrySeat === seatIndex && Number.isFinite(entry?.thinkMs)
+      ? sum + Math.max(0, Number(entry.thinkMs))
+      : sum;
+  }, 0);
+}
+
+/** Drop telemetry for moves that no longer exist after undo/jump-to-ply. */
+export function trimThinkLogToPly(entries, plyCount) {
+  const lastPly = Math.max(0, Math.trunc(Number(plyCount) || 0));
+  return (entries ?? []).filter(
+    (entry) => Number.isFinite(entry?.ply) && entry.ply <= lastPly,
+  );
+}
+
 export function wallClockFromSlider(position) {
   const t = Math.max(
     0,
