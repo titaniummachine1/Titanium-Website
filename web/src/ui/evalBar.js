@@ -33,10 +33,18 @@ export function renderEvalBar(container, props) {
   const useWinRate = evalData?.evalKind === "winrate" && !hasRootScore;
   const winRateLabel = useWinRate ? whiteWinRateLabel(evalData) : null;
   const pending = evalData?.pending === true;
-  const scoreLabel = pending
+  const unavailable = evalData?.evalUnavailable === true;
+  const scoreLabel = unavailable
+    ? '…'
+    : pending
     ? '...'
     : hasRootScore
-      ? formatEngineScore(evalData.rootScore)
+      ? formatEngineScore(evalData.rootScore, {
+        rootScoreText: evalData.rootScoreText,
+        scoreKind: evalData.scoreKind,
+        scoreProven: evalData.scoreProven,
+        unavailable,
+      })
       : winRateLabel
         ? winRateLabel
         : (margin > 0 ? `+${margin}` : margin < 0 ? String(margin) : '=');
@@ -51,7 +59,7 @@ export function renderEvalBar(container, props) {
         : '';
 
   container.innerHTML = `
-    <div class="eval-bar${settings.rotateBoard ? ' eval-bar--rotated' : ''}" title="${pending ? 'Eval pending' : `White advantage: ${scoreLabel}`}">
+    <div class="eval-bar${settings.rotateBoard ? ' eval-bar--rotated' : ''}" title="${unavailable || pending ? 'Eval pending' : `White advantage: ${scoreLabel}`}">
       <div class="eval-bar__track"></div>
       <div class="eval-bar__fill" style="--scale: ${scale}"></div>
       <div class="eval-bar__center">

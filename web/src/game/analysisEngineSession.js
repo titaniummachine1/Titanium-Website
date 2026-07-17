@@ -13,6 +13,7 @@
 
 import { TitaniumWasmEngineClient } from '../lib/titaniumWasmClient.js';
 import { toAlgebraic } from '../lib/gameLogic.js';
+import { hasCompletedSearchIteration } from '../lib/searchTelemetry.js';
 
 export class AnalysisEngineSession {
   constructor() {
@@ -151,6 +152,10 @@ export class AnalysisEngineSession {
         whiteDist: info.whiteDist,
         blackDist: info.blackDist,
         rootScore: info.rootScore,
+        depthLog: info.depthLog,
+        rootScoreText: info.rootScoreText,
+        scoreKind: info.scoreKind,
+        scoreProven: info.scoreProven,
         playerToMove: this._playerToMove,
         depth: info.searchDepth,
         pv: info.pv,
@@ -178,7 +183,13 @@ export function analysisResultToEvalState(result) {
   }
   const hasDist = Number.isFinite(result.whiteDist) && Number.isFinite(result.blackDist);
   const margin = hasDist ? result.blackDist - result.whiteDist : 0;
-  const hasScore = Number.isFinite(Number(result.rootScore));
+  const raw = result.rootScore;
+  const hasRawScore =
+    raw != null && raw !== '' && Number.isFinite(Number(raw));
+  const hasCompletedDepth = hasCompletedSearchIteration(result);
+  // Engines emit rootScore=0 as a bootstrap value. It is a real evaluation
+  // only after a completed depth; null/absent scores remain unavailable.
+  const hasScore = hasRawScore && (Number(raw) !== 0 || hasCompletedDepth);
 
   let p1;
   let whiteScore = null;
@@ -201,6 +212,10 @@ export function analysisResultToEvalState(result) {
     // Always White's perspective, matching p1 above -- the raw engine score
     // is negamax-style (relative to the side to move).
     rootScore: whiteScore,
+    evalUnavailable: !hasScore,
+    rootScoreText: result.rootScoreText ?? null,
+    scoreKind: result.scoreKind ?? null,
+    scoreProven: result.scoreProven ?? null,
     playerToMove: result.playerToMove,
     depth: result.depth ?? null,
     pv: result.pv ? result.pv.split(' ').filter(Boolean) : [],

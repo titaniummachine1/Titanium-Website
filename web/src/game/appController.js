@@ -337,7 +337,7 @@ function searchPayloadToEvalState(payload, playerToMove) {
     rootWinRate: payload.rootWinRate,
   });
   const hasScore =
-    payload.evalKind === "score" ||
+    (payload.evalKind === "score" && scoreCandidate != null) ||
     (payload.evalKind !== "winrate" && scoreCandidate != null);
   const hasWinRate =
     !hasScore &&
@@ -366,6 +366,10 @@ function searchPayloadToEvalState(payload, playerToMove) {
     whiteDist: payload.whiteDist,
     blackDist: payload.blackDist,
     rootScore: whiteScore,
+    evalUnavailable: payload.evalUnavailable === true,
+    rootScoreText: payload.rootScoreText ?? null,
+    scoreKind: payload.scoreKind ?? null,
+    scoreProven: payload.scoreProven ?? null,
     playerToMove,
     depth: payload.depth ?? payload.searchDepth ?? deep?.depth ?? null,
     pv: pvArrayFromPayload(payload),

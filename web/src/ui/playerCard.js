@@ -309,6 +309,13 @@ function derivePlayerCardView(state, seatIndex) {
   const score = resolvePayloadScore(snap);
   const thinkMs = liveSnap?.elapsedMs ?? snap?.thinkMs ?? null;
   const rootWinRate = snap?.rootWinRate ?? null;
+  const scoreMeta = {
+    rootScoreText: snap?.rootScoreText ?? state.eval?.rootScoreText,
+    scoreKind: snap?.scoreKind ?? state.eval?.scoreKind,
+    scoreProven: snap?.scoreProven ?? state.eval?.scoreProven,
+    unavailable:
+      snap?.evalUnavailable === true || state.eval?.evalUnavailable === true,
+  };
 
   const isLoading = isMyTurn && !isHuman && engineStatus === "connecting";
   const spinnerMode = hasError
@@ -322,7 +329,7 @@ function derivePlayerCardView(state, seatIndex) {
   let scoreDisplay = "";
   const isMate = isMateScore(score);
   if (score != null && Number.isFinite(Number(score))) {
-    scoreDisplay = formatScoreForCard(score);
+    scoreDisplay = formatScoreForCard(score, scoreMeta);
     const mate = mateInfo(score);
     if (mate && mate.dist === 0 && !state.winner && !state.isDraw) {
       const winningSeat = mate.sign > 0 ? seatIndex : 1 - seatIndex;
@@ -334,6 +341,8 @@ function derivePlayerCardView(state, seatIndex) {
         scoreDisplay = mate.sign > 0 ? "Winning" : "Losing";
       }
     }
+  } else if (scoreMeta.unavailable || (isThinking && rootWinRate == null)) {
+    scoreDisplay = "…";
   } else if (rootWinRate != null) {
     scoreDisplay = `${(rootWinRate * 100).toFixed(0)}%`;
   }

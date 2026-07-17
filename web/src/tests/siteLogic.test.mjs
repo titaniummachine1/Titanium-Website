@@ -13,6 +13,7 @@ import {
   formatScoreForCard,
   ACE_MATE_VALUE,
   TITANIUM_MATE_VALUE,
+  RACE_WIN_FLOOR,
   quoridorMovesFromMatePlies,
 } from "../lib/engineScore.js";
 import { canonicalPositionKeyFromActions } from "../lib/canonicalState.js";
@@ -666,6 +667,8 @@ console.log("\n[eval] placeholder rootScore must not mask depth score");
 import {
   resolveDisplayScore,
   mergeThinkSnapshots,
+  hasCompletedSearchIteration,
+  retainedEvalForPosition,
 } from "../lib/searchTelemetry.js";
 
 assertEqual(
@@ -690,6 +693,58 @@ const merged = mergeThinkSnapshots(
   },
 );
 assertEqual(merged.rootScore, 524, "incoming bootstrap 0 does not erase prior eval");
+assertEqual(
+  resolveDisplayScore({ rootScore: 0, depth: 0 }),
+  null,
+  "bootstrap zero is unavailable before completed depth",
+);
+assertEqual(
+  formatEngineScore(resolveDisplayScore({ rootScore: 0, depth: 0 }), { unavailable: true }),
+  "…",
+  "unavailable eval uses ellipsis",
+);
+assertEqual(
+  resolveDisplayScore({ rootScore: 0, depth: 1 }),
+  0,
+  "zero after completed depth is genuine",
+);
+assertEqual(formatEngineScore(0), "0.00", "genuine zero formats as 0.00");
+assertEqual(
+  formatScoreForCard(RACE_WIN_FLOOR, { rootScoreText: "proven race win" }),
+  "Proven win",
+  "semantic proven race win uses card label",
+);
+assertEqual(
+  formatScoreForCard(-RACE_WIN_FLOOR, { rootScoreText: "proven race loss" }),
+  "Proven loss",
+  "semantic proven race loss uses card label",
+);
+assertEqual(formatScoreForCard(RACE_WIN_FLOOR), "Proven win", "bound fallback is proven win");
+assertEqual(formatScoreForCard(-RACE_WIN_FLOOR), "Proven loss", "bound fallback is proven loss");
+assertEqual(formatScoreForCard(32_000 - 25), "Win in 25", "exact race DTM remains intact");
+assertEqual(formatEngineScore(125), "+1.25", "ordinary cp remains intact");
+assertEqual(
+  mergeThinkSnapshots(
+    { depthLog: [{ depth: 4, score: 700 }], rootScore: 700, score: 700 },
+    { rootScore: 0, depth: 0, cancelled: true },
+  ).rootScore,
+  700,
+  "cancelled pre-depth snapshot retains prior eval",
+);
+assertEqual(
+  retainedEvalForPosition({
+    positionKey: "new",
+    previousKey: "old",
+    previousScore: 700,
+    incoming: { rootScore: 0, depth: 0 },
+  }),
+  null,
+  "position change clears retained eval",
+);
+assert(
+  hasCompletedSearchIteration({ depthLog: [{ depth: 1, score: 0 }] }),
+  "depth log records completed zero iteration",
+);
 
 console.log("\n════════════════════════════════");
 console.log(

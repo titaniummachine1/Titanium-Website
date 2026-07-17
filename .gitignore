@@ -28,3 +28,7 @@ KaAiData/
 "KaAiData/"
 KA\ AI\ DATA/
 "KA AI DATA/"
+
+# Temporary local probe scripts
+web/scripts/tmp-*.mjs
+

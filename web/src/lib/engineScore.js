@@ -7,6 +7,7 @@ export const TITANIUM_MATE_VALUE = 100_000;
 export const TITANIUM_MATE_THRESHOLD = TITANIUM_MATE_VALUE - 1_000;
 export const RACE_MATE_VALUE = 32_000;
 export const RACE_MATE_THRESHOLD = RACE_MATE_VALUE - 1_000;
+export const RACE_WIN_FLOOR = 30_976;
 
 /**
  * Convert engine forced-result distance to the displayed move count.
@@ -51,7 +52,40 @@ export function isMateScore(score) {
   return mateInfo(score) != null;
 }
 
-export function formatEngineScore(score) {
+function provenRaceKind(score, meta = {}) {
+  const text = String(meta.rootScoreText ?? '').trim().toLowerCase();
+  const kind = String(meta.scoreKind ?? '').trim().toLowerCase();
+  const proven = String(meta.scoreProven ?? '').trim().toLowerCase();
+  if (
+    text === 'proven race win' ||
+    kind === 'proven_race_win' ||
+    (kind === 'race_bound' && (meta.win === true || meta.sign > 0)) ||
+    proven === 'proven race win' ||
+    proven === 'race win' ||
+    proven === 'win' ||
+    (meta.scoreProven === true && Number(score) > 0)
+  ) return 'win';
+  if (
+    text === 'proven race loss' ||
+    kind === 'proven_race_loss' ||
+    (kind === 'race_bound' && (meta.win === false || meta.sign < 0)) ||
+    proven === 'proven race loss' ||
+    proven === 'race loss' ||
+    proven === 'loss' ||
+    (meta.scoreProven === true && Number(score) < 0)
+  ) return 'loss';
+  const n = Number(score);
+  if (n === RACE_WIN_FLOOR) return 'win';
+  if (n === -RACE_WIN_FLOOR) return 'loss';
+  return null;
+}
+
+export function formatEngineScore(score, meta = {}) {
+  if (meta.unavailable === true || score === null || score === undefined || score === '') {
+    return meta.unavailable === true ? '…' : '?';
+  }
+  const proven = provenRaceKind(score, meta);
+  if (proven) return proven === 'win' ? '+Proven' : '-Proven';
   if (score == null || !Number.isFinite(Number(score))) {
     return '?';
   }
@@ -69,9 +103,11 @@ export function formatEngineScore(score) {
 }
 
 /** Human-friendly score for the player card. */
-export function formatScoreForCard(score) {
+export function formatScoreForCard(score, meta = {}) {
+  const proven = provenRaceKind(score, meta);
+  if (proven) return proven === 'win' ? 'Proven win' : 'Proven loss';
   if (score == null || !Number.isFinite(Number(score))) {
-    return null;
+    return meta.unavailable === true ? '…' : null;
   }
   const n = Number(score);
   const mate = mateInfo(n);

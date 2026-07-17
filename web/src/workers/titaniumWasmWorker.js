@@ -262,6 +262,14 @@ async function handleSearch(eventData) {
   let effectiveThreads = canThread ? Math.max(1, threads) : 1;
   let fallbackReason = threadFallbackReason(threads);
   let wasm = await ensureEngine(engineMode, catLmrCeiling, effectiveThreads);
+  // Ranked root-move dump (not full MultiPV PVs). multipv>1 also opens root windows.
+  if (typeof wasm.set_root_scores === 'function') {
+    wasm.set_root_scores(eventData.rootScores !== false);
+  }
+  if (typeof wasm.set_multipv === 'function') {
+    const multipv = Math.max(1, Math.min(64, Number(eventData.multipv) || 1));
+    wasm.set_multipv(multipv);
+  }
   if (isStale()) {
     return;
   }
@@ -415,6 +423,8 @@ async function handleSearch(eventData) {
     whiteDist: lastProgress?.whiteDist,
     blackDist: lastProgress?.blackDist,
     depthLog: lastProgress?.depthLog,
+    rootMoves: lastProgress?.rootMoves,
+    multiPv: lastProgress?.multiPv,
     elapsedMs: lastProgress?.elapsedMs,
     pv: lastProgress?.depthLog?.length
       ? lastProgress.depthLog[lastProgress.depthLog.length - 1]?.pv
