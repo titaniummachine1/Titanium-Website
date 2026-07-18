@@ -1,74 +1,118 @@
 /* AceV13 groove grid geometry — classic tan Quoridor look */
 
 .board-panel {
+  --coord-header: 1.35em;
+  --coord-gutter: 1.45em;
+  --wall-rack-width: 36px;
   position: relative;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  width: 100%;
-  max-width: min(760px, 100%);
+  /* Height hugs the square board. Wall rack is absolutely positioned so its
+     10+10 slots cannot stretch the tan shell. */
+  display: block;
+  width: min(100%, var(--board-max, 720px));
+  max-width: var(--board-max, min(720px, 100%));
+  height: fit-content;
+  max-height: calc(100dvh - var(--play-chrome, 156px));
   margin-inline: auto;
+  padding: 0 var(--wall-rack-width) 0 0;
   touch-action: manipulation;
   isolation: isolate;
   background: var(--board-bg, #f0d9b5);
   border-radius: 4%;
 }
 
+.board-panel--coords {
+  /* Room for a–i above and 1–9 left; labels hang off the square via absolute. */
+  padding: var(--coord-header) var(--wall-rack-width) 0 var(--coord-gutter);
+}
+
 .board-panel__coords-wrap {
-  flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.board-panel__coords-row {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-}
-
-.board-coords {
-  display: grid;
-  grid-template-columns: repeat(9, 1fr);
-  align-items: center;
-  justify-items: center;
-  pointer-events: none;
-  user-select: none;
-  color: rgba(88, 49, 1, 0.55);
-  font-family: 'Roboto Mono', monospace;
-  font-size: clamp(0.45rem, 1.6cqw, 0.62rem);
-  font-weight: 600;
-  line-height: 1;
-}
-
-.board-coords--top {
-  height: 1.1em;
-  margin-bottom: 2px;
-  padding-left: 1.1em;
-}
-
-.board-coords--left {
-  width: 1.1em;
-  grid-template-columns: 1fr;
-  grid-template-rows: repeat(9, 1fr);
-  margin-right: 2px;
-  align-self: stretch;
-}
-
-.board-coords__label {
+  width: 100%;
   display: block;
 }
 
+/* Legacy wrapper if present */
+.board-panel__coords-row {
+  display: contents;
+}
+
+.board-coords {
+  pointer-events: none;
+  user-select: none;
+  color: #3d2208;
+  font-family: 'Roboto Mono', ui-monospace, monospace;
+  font-size: clamp(0.55rem, 2.2vw, 0.78rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-shadow:
+    0 0 2px rgba(240, 217, 181, 0.95),
+    0 1px 0 rgba(240, 217, 181, 0.7);
+}
+
+/* Overlay the board square; each label is absolutely centered on its Ace cell. */
+.board-coords--top {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: var(--coord-header);
+  margin: 0;
+  padding: 0;
+}
+
+.board-coords--left {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: var(--coord-gutter);
+  margin: 0;
+  padding: 0;
+}
+
+.board-coords--top .board-coords__label,
+.board-coords--left .board-coords__label {
+  position: absolute;
+  /* Centers are set in px from measured cell boxes (syncCoordLabelPositions). */
+}
+
+.board-coords--top .board-coords__label {
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.board-coords--left .board-coords__label {
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.board-coords__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
 .board-panel__grid-wrap {
-  flex: 1;
   min-width: 0;
-  aspect-ratio: 1;
-  container-type: size;
+  min-height: 0;
+  aspect-ratio: 1 / 1;
+  width: min(
+    100%,
+    calc(100dvh - var(--play-chrome, 156px) - var(--board-frame, 22px))
+  );
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - var(--play-chrome, 156px) - var(--board-frame, 22px));
   position: relative;
   border-radius: 4%;
-  overflow: hidden;
+  overflow: visible;
+  /* Ace geometry for the board (coords use the same formula in JS). */
+  --cell: calc(100% / 12);
+  --groove: calc(var(--cell) * 0.3);
 }
 
 .board-flip-btn {
@@ -107,13 +151,23 @@
 }
 
 .board-wall-rack {
-  flex-shrink: 0;
-  width: 36px;
+  position: absolute;
+  /* Align to the board square only (not the a–i letter strip). */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--wall-rack-width, 36px);
   display: grid;
-  grid-template-rows: 1fr auto 1fr;
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  padding: 7% 8px 7% 4px;
+  padding: 4% 6px 4% 2px;
   pointer-events: none;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.board-panel--coords .board-wall-rack {
+  top: var(--coord-header);
 }
 
 .board-wall-rack__section {
@@ -122,7 +176,9 @@
   justify-content: center;
   align-items: center;
   min-height: 0;
+  overflow: hidden;
   width: 100%;
+  height: 100%;
 }
 
 .board-wall-rack__section--top {
@@ -136,29 +192,41 @@
 }
 
 .wall-marks {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
+  justify-items: center;
+  gap: clamp(1px, 2%, 4px);
   width: 100%;
-  height: auto;
+  height: 100%;
+  min-height: 0;
   pointer-events: auto;
   cursor: pointer;
+  box-sizing: border-box;
+}
+
+.wall-marks--p2 {
+  grid-template-rows: auto repeat(10, minmax(2px, 1fr));
+}
+
+.wall-marks--p1 {
+  grid-template-rows: repeat(10, minmax(2px, 1fr)) auto;
 }
 
 .board-wall-rack__section .wall-marks {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .wall-marks__slot {
-  height: 4px;
   width: 72%;
-  flex-shrink: 0;
-  border-radius: 3px;
+  height: 100%;
+  max-height: 5px;
+  min-height: 2px;
+  border-radius: 2px;
   opacity: 0;
   transition: opacity 0.5s ease;
-  box-shadow: 1px 2px 2px rgba(0, 0, 0, 0.28);
+  box-shadow: 1px 1px 1px rgba(0, 0, 0, 0.28);
+  justify-self: center;
 }
 
 .wall-marks__slot--available {
@@ -175,13 +243,14 @@
 
 .wall-marks__count {
   user-select: none;
-  color: #583101;
+  color: #3d2208;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: 'Roboto Mono', monospace;
+  font-family: 'Roboto Mono', ui-monospace, monospace;
   font-weight: 700;
-  font-size: 1rem;
+  font-size: clamp(0.7rem, 2.5vw, 1rem);
+  line-height: 1;
   opacity: 0;
   transition: opacity 0.4s ease;
 }
@@ -195,8 +264,8 @@
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  /* 9 cells + 8 grooves + 2 padding grooves = 12 cell-units (Ace proportions) */
-  --cell: calc(100cqmin / 12);
+  /* Inherit Ace --cell/--groove from .board-panel__grid-wrap (same tracks as coords). */
+  --cell: calc(100% / 12);
   --groove: calc(var(--cell) * 0.3);
   /* ── Ghost best-move hint tuning (edit these) ── */
   --ghost-pawn-fill-p1: rgba(237, 224, 212, 0.45);
@@ -224,8 +293,11 @@
   grid-template-rows: repeat(8, var(--cell) var(--groove)) var(--cell);
   place-items: stretch;
   position: relative;
+  container-type: size; /* for overlay font-size cqw only — not for --cell */
   user-select: none;
   touch-action: manipulation;
+  overflow: hidden;
+  border-radius: 4%;
 }
 
 @supports not (width: 1cqmin) {

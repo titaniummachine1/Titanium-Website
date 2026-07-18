@@ -79,7 +79,7 @@ export function renderWasmDebugPanel(container) {
   }
   const id = mergedBuildIdentity();
   container.innerHTML =
-    '<details class="wasm-debug-panel" open>' +
+    '<details class="wasm-debug-panel">' +
     '<summary>Titanium WASM build</summary>' +
     '<pre class="wasm-debug-panel__body">' +
     formatBuildIdentityLines(id)

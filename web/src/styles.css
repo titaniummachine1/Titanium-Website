@@ -12,6 +12,14 @@
   --muted: #b8aea3;
   --card: #3d3a36;
   --border: #524e48;
+  /* Cards + controls + gaps. Board square height ≈ width, so subtract label strip. */
+  --play-chrome: 156px;
+  --board-frame: 22px;
+  --board-max: min(
+    100%,
+    760px,
+    calc(100dvh - var(--play-chrome) - var(--board-frame))
+  );
   font-family: Roboto, system-ui, sans-serif;
 }
 
@@ -37,14 +45,14 @@ body {
 
 .layout {
   display: grid;
-  gap: 12px;
-  padding: 8px;
+  gap: 8px;
+  padding: 6px;
   grid-template-areas: 'board sidebar';
-  grid-template-columns: minmax(320px, min(72vw, 760px)) minmax(220px, 340px);
+  grid-template-columns: minmax(280px, min(72vw, var(--board-max))) minmax(200px, 320px);
   grid-template-rows: auto;
   align-items: start;
   justify-content: center;
-  max-width: 1280px;
+  max-width: 1200px;
   margin: 0 auto;
   width: 100%;
 }
@@ -70,11 +78,13 @@ body {
   display: grid;
   /* Eval column is always reserved at a fixed width -- showing/hiding the
      eval bar must never reflow/shift the board (see evalBar.js). */
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 6px;
   align-items: stretch;
   width: 100%;
+  max-width: var(--board-max);
   min-width: 0;
+  margin-inline: auto;
 }
 
 .board-row__eval {
@@ -673,16 +683,20 @@ body {
 }
 
 @media (max-width: 900px) {
+  :root {
+    --play-chrome: 162px;
+  }
+
   .layout {
     grid-template-areas:
       'board'
       'sidebar';
-    grid-template-columns: minmax(0, min(100%, 720px));
+    grid-template-columns: minmax(0, min(100%, var(--board-max)));
     grid-template-rows: auto auto;
     align-content: start;
     justify-items: stretch;
-    gap: 8px;
-    padding: 6px;
+    gap: 6px;
+    padding: 4px;
   }
 
   .layout__sidebar {
@@ -693,26 +707,30 @@ body {
 }
 
 @media (max-width: 720px) {
+  :root {
+    --play-chrome: 170px;
+  }
+
   .board-row {
-    max-width: 100%;
+    max-width: var(--board-max);
     width: 100%;
-    margin: 0;
+    margin: 0 auto;
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
-    gap: 4px;
+    gap: 3px;
   }
 
   .board-row__eval {
     grid-column: 1;
     grid-row: 1;
-    height: 20px;
-    min-height: 20px;
+    height: 18px;
+    min-height: 18px;
   }
 
   .board-row__grid {
     grid-column: 1;
     grid-row: 2;
-    gap: 3px;
+    gap: 2px;
   }
 }
 
@@ -1335,14 +1353,46 @@ body {
   align-items: center;
   min-height: 100vh;
   min-height: 100dvh;
-  padding-bottom: 24px;
+  padding-bottom: 4px;
+}
+
+/* Dev-only Titanium build identity — overlay, NOT part of play chrome / board sizing. */
+.wasm-debug-slot {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  z-index: 40;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: 28vh;
+  overflow: auto;
+  pointer-events: none;
+}
+
+.wasm-debug-panel {
+  pointer-events: auto;
+  margin: 0;
+  padding: 4px 8px;
+  background: rgba(30, 28, 26, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.wasm-debug-panel__body {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.65rem;
+  max-height: 20vh;
+  overflow: auto;
 }
 
 .board-row__grid {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   width: 100%;
 }
 
@@ -1353,6 +1403,9 @@ body {
 .board-slot {
   width: 100%;
   min-width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
 
 .controls-slot {
@@ -1769,17 +1822,17 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   align-items: stretch;
-  gap: 8px;
-  padding: 4px 0;
+  gap: 6px;
+  padding: 2px 0;
 }
 
 .game-controls__btn {
   text-align: center;
   box-sizing: border-box;
   width: 100%;
-  height: 48px;
+  height: 40px;
   padding: 0;
-  font-size: 1.3rem;
+  font-size: 1.15rem;
   font-weight: 700;
   line-height: 1;
   border-radius: 6px;
@@ -2271,7 +2324,7 @@ body {
   }
 
   .game-controls__btn {
-    height: 44px;
+    height: 40px;
   }
 
   .game-controls__icon {

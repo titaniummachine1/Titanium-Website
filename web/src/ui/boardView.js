@@ -43,6 +43,8 @@ function boardStructureKey(state) {
     rotate: state.settings?.rotateBoard,
     showWalls: state.settings?.displayRemainingWalls,
     showCoords: state.settings?.displayCoordinates !== false,
+    // Bump when coord DOM wiring changes so stale boards rebuild.
+    coordsLayout: 3,
   });
 }
 
@@ -61,24 +63,70 @@ function renderBoardCoords(rotateBoard) {
   const top = document.createElement('div');
   top.className = 'board-coords board-coords--top';
   top.setAttribute('aria-hidden', 'true');
-  for (const file of viewFiles) {
+  const topLabels = viewFiles.map((file) => {
     const span = document.createElement('span');
     span.className = 'board-coords__label';
     span.textContent = file;
     top.appendChild(span);
-  }
+    return span;
+  });
 
   const left = document.createElement('div');
   left.className = 'board-coords board-coords--left';
   left.setAttribute('aria-hidden', 'true');
-  for (const rank of viewRanks) {
+  const leftLabels = viewRanks.map((rank) => {
     const span = document.createElement('span');
     span.className = 'board-coords__label';
     span.textContent = String(rank);
     left.appendChild(span);
+    return span;
+  });
+
+  return { top, left, topLabels, leftLabels };
+}
+
+/** Pin each a–i / 1–9 label to the real center of its board square. */
+function syncCoordLabelPositions(dom) {
+  const board = dom.root;
+  const { topLabels, leftLabels, cellEls } = dom;
+  if (!board || !topLabels?.length || !leftLabels?.length || !cellEls?.length) {
+    return;
   }
 
-  return { top, left };
+  const boardRect = board.getBoundingClientRect();
+  if (boardRect.width < 8 || boardRect.height < 8) {
+    return;
+  }
+
+  for (let i = 0; i < 9; i++) {
+    const cell = cellEls[i];
+    const label = topLabels[i];
+    if (!cell || !label) continue;
+    const cr = cell.getBoundingClientRect();
+    label.style.left = `${(cr.left + cr.right) / 2 - boardRect.left}px`;
+  }
+
+  for (let i = 0; i < 9; i++) {
+    const cell = cellEls[i * 9];
+    const label = leftLabels[i];
+    if (!cell || !label) continue;
+    const cr = cell.getBoundingClientRect();
+    label.style.top = `${(cr.top + cr.bottom) / 2 - boardRect.top}px`;
+  }
+}
+
+function bindCoordLabelLayout(dom) {
+  if (dom._coordRo || !dom.gridWrap || !dom.topLabels) {
+    return;
+  }
+  const sync = () => syncCoordLabelPositions(dom);
+  const ro = new ResizeObserver(() => {
+    requestAnimationFrame(sync);
+  });
+  ro.observe(dom.gridWrap);
+  ro.observe(dom.root);
+  dom._coordRo = ro;
+  requestAnimationFrame(sync);
 }
 
 function liveGhostKey(state, validActions) {
@@ -1078,6 +1126,7 @@ function syncBoardDom(dom, state, controller) {
   ]);
 
   syncWallRack(dom, state, controller);
+  syncCoordLabelPositions(dom);
 
   dom.overlay?.remove();
   dom.overlay = null;
@@ -1155,6 +1204,10 @@ export function renderBoard(container, state, controller) {
     return;
   }
 
+  if (container._boardDom?._coordRo) {
+    container._boardDom._coordRo.disconnect();
+  }
+
   container.innerHTML = '';
   container.dataset.boardStructureKey = structureKey;
   container.className = 'board-panel';
@@ -1192,6 +1245,7 @@ export function renderBoard(container, state, controller) {
 
   const dom = buildBoardDom(boardEl);
   dom.root = boardEl;
+  dom.gridWrap = gridWrap;
   dom.pawnZ = PAWN_Z;
   dom.previewEl = null;
   dom.overlay = null;
@@ -1204,15 +1258,19 @@ export function renderBoard(container, state, controller) {
   gridWrap.appendChild(boardEl);
 
   if (showCoords) {
-    const { top, left } = renderBoardCoords(Boolean(state.settings?.rotateBoard));
-    const row = document.createElement('div');
-    row.className = 'board-panel__coords-row';
-    row.append(left, gridWrap);
-    coordsWrap.append(top, row);
+    container.classList.add('board-panel--coords');
+    const { top, left, topLabels, leftLabels } = renderBoardCoords(
+      Boolean(state.settings?.rotateBoard),
+    );
+    dom.topLabels = topLabels;
+    dom.leftLabels = leftLabels;
+    gridWrap.append(top, left);
+    bindCoordLabelLayout(dom);
   } else {
-    coordsWrap.appendChild(gridWrap);
+    container.classList.remove('board-panel--coords');
   }
 
+  coordsWrap.appendChild(gridWrap);
   container.append(coordsWrap, wallRack);
   container._boardDom = dom;
   bindBoardInput(container, () => controller.getState(), controller);
