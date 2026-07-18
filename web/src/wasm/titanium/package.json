@@ -1,0 +1,17 @@
+{
+  "name": "titanium",
+  "type": "module",
+  "description": "Titanium Engine — hybrid AI (alpha-beta + guided MCTS)",
+  "version": "0.2.0",
+  "license": "GPL-3.0-or-later",
+  "files": [
+    "titanium_bg.wasm",
+    "titanium.js",
+    "titanium.d.ts"
+  ],
+  "main": "titanium.js",
+  "types": "titanium.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
