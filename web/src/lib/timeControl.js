@@ -60,6 +60,9 @@ export function resolveExpectedMovesLeft({
  * messaging and deadline cleanup cannot flag an otherwise completed move.
  * Spread uses {@link resolveExpectedMovesLeft}: 30-move baseline, bumped by
  * PV length + leaf race (or engine/board race) when the position needs more.
+ *
+ * Non-Titanium engines only — Titanium uses {@link allocateTitaniumMoveBudget}
+ * (or native `go rem`) so the engine owns the think slice.
  */
 export function allocateWholeGameTime({
   totalMs,
@@ -92,6 +95,80 @@ export function allocateWholeGameTime({
     moveBudgetMs,
     expectedMovesLeft,
     handoffReserveMs,
+  };
+}
+
+/** Mirrors `engine/src/titanium/time_alloc.rs` plan / safety / spend bands. */
+export const TITANIUM_PLAN_OWN_MOVES = 30;
+export const TITANIUM_MIN_MOVE_MS = 50;
+export const TITANIUM_MAX_RATIO = 1.25;
+
+function titaniumSafetyMs(remainingMs) {
+  if (remainingMs <= 0) {
+    return 0;
+  }
+  return Math.min(remainingMs, Math.max(100, Math.floor(remainingMs / 200)));
+}
+
+function titaniumSpendPolicy(remainingMs) {
+  if (remainingMs >= 45_000) {
+    return { spendFactor: 1.35, shareCap: 0.2 };
+  }
+  if (remainingMs >= 15_000) {
+    return { spendFactor: 1.0, shareCap: 0.2 };
+  }
+  return { spendFactor: 0.75, shareCap: 0.1 };
+}
+
+/**
+ * Sudden-death move budget from remaining game clock (WASM / site mirror of
+ * native `go rem` allocation). Hard ceiling is optimum × MAX_RATIO.
+ */
+export function allocateTitaniumMoveBudget({
+  remainingMs,
+  ownMovesPlayed = 0,
+  distanceToWin = null,
+} = {}) {
+  const remaining = Math.max(0, Math.round(Number(remainingMs) || 0));
+  const played = Math.max(0, Number(ownMovesPlayed) || 0);
+  const planTail = Math.max(1, TITANIUM_PLAN_OWN_MOVES - played);
+  const dist = Number(distanceToWin);
+  const distFloor = Number.isFinite(dist) && dist > 0 ? Math.ceil(dist) : 0;
+  const expectedMovesLeft = Math.max(planTail, distFloor, 1);
+
+  const safetyMs = titaniumSafetyMs(remaining);
+  const spendable = Math.max(0, remaining - safetyMs);
+  const { spendFactor, shareCap } = titaniumSpendPolicy(remaining);
+
+  if (remaining === 0 || spendable === 0) {
+    return {
+      remainingMs: remaining,
+      moveBudgetMs: 1,
+      optimumMs: 1,
+      expectedMovesLeft,
+      handoffReserveMs: 0,
+      safetyMs,
+    };
+  }
+
+  const byShare = spendable * shareCap;
+  const byHorizon = (spendable / expectedMovesLeft) * spendFactor;
+  const gross = Math.min(byShare, byHorizon);
+  const handoffReserveMs = Math.min(300, Math.max(50, gross * 0.05));
+  let optimumMs = Math.max(1, Math.round(gross - handoffReserveMs));
+  const lo = Math.max(1, Math.min(TITANIUM_MIN_MOVE_MS, spendable));
+  optimumMs = Math.min(spendable, Math.max(lo, optimumMs));
+
+  let moveBudgetMs = Math.round(optimumMs * TITANIUM_MAX_RATIO);
+  moveBudgetMs = Math.max(optimumMs, Math.min(spendable, moveBudgetMs));
+
+  return {
+    remainingMs: remaining,
+    moveBudgetMs,
+    optimumMs,
+    expectedMovesLeft,
+    handoffReserveMs: Math.round(handoffReserveMs),
+    safetyMs,
   };
 }
 

@@ -95,9 +95,29 @@ export class TitaniumEngineClient {
     this.sessionOp({ op: 'reset' }).catch(() => {});
   }
 
-  /** Abort any search and replay the full position onto the native session. */
-  async recoverFromDesync({ moveHistory, isFreshGame } = {}) {
+  /**
+   * Abort any search and replay the full position onto the native session.
+   * @param {{ moveHistory?: unknown[], isFreshGame?: boolean, level?: number }} [opts]
+   * level 0: soft cancel + forceFull position
+   * level 1: reset session + forceFull position
+   * level 2: destroy session + forceFull position (last resort)
+   */
+  async recoverFromDesync({ moveHistory, isFreshGame, level = 0 } = {}) {
+    const escalate = Math.max(0, Math.min(2, Number(level) || 0));
     await this.cancelSearch();
+    if (escalate >= 2) {
+      try {
+        await this.sessionOp({ op: 'destroy' });
+      } catch {
+        /* session may already be gone */
+      }
+    } else if (escalate >= 1) {
+      try {
+        await this.sessionOp({ op: 'reset' });
+      } catch {
+        /* ignore */
+      }
+    }
     const history =
       isFreshGame || !moveHistory?.length
         ? []
@@ -242,7 +262,21 @@ export class TitaniumEngineClient {
         ? []
         : moveHistory.map((action) => toAlgebraic(action));
 
-    const timeSec = Math.max(0.5, Number(aiSettings?.wallClockSeconds) || 10);
+    const useEngineTm =
+      aiSettings?.useEngineTimeManagement === true ||
+      (aiSettings?.wholeGameRemainingSeconds != null &&
+        aiSettings?.wholeGameTime !== false);
+    const remainingSec = useEngineTm
+      ? Math.max(
+          0.05,
+          Number(aiSettings?.wholeGameRemainingSeconds) || 0.05,
+        )
+      : null;
+    // Per-move / non-TM: website wall slice. Whole-game TM: do not send a
+    // site-sliced movetime as the primary budget — native `go rem` owns it.
+    const timeSec = useEngineTm
+      ? remainingSec
+      : Math.max(0.5, Number(aiSettings?.wallClockSeconds) || 10);
     const maxBudget = clampVisits(aiSettings?.visitsBudget ?? LOCAL_VISITS_RANGE.default);
     const uct = uctFromStrengthLevel(aiSettings?.strengthLevel);
     const cores = resolveCores(aiSettings);
@@ -272,6 +306,8 @@ export class TitaniumEngineClient {
       abortController,
       signal,
       timeSec,
+      remainingSec,
+      useEngineTm,
       maxBudget,
       uct,
       engineMode,
@@ -321,15 +357,23 @@ export class TitaniumEngineClient {
           searchCtx.searchStarted = true;
           searchCtx.onSearchStart?.();
         }
-        return this.sessionOp(
-          {
-            op: 'go',
-            timeSec: searchCtx.timeSec,
-            maxNodes: searchCtx.maxBudget,
-            cores: searchCtx.cores,
-          },
-          { stream: true, signal },
-        );
+        const goBody = searchCtx.useEngineTm
+          ? {
+              op: 'go',
+              goMode: 'rem',
+              useEngineTimeManagement: true,
+              remainingSec: searchCtx.remainingSec,
+              timeSec: searchCtx.remainingSec,
+              maxNodes: searchCtx.maxBudget,
+              cores: searchCtx.cores,
+            }
+          : {
+              op: 'go',
+              timeSec: searchCtx.timeSec,
+              maxNodes: searchCtx.maxBudget,
+              cores: searchCtx.cores,
+            };
+        return this.sessionOp(goBody, { stream: true, signal });
       })
       .then(async (res) => {
         if (signal.aborted || !this.isActiveSearch(searchCtx)) {

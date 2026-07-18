@@ -615,10 +615,12 @@ class TitaniumSeatSession {
     return this.enqueue(`makemove ${move}`);
   }
 
-  go(timeSec, maxNodes, onStderrLine) {
+  go(timeSec, maxNodes, onStderrLine, { rem = false } = {}) {
     this.onStderrLine = onStderrLine ?? null;
-    // Native session REPL accepts `go TIME_SEC` only (see engine session.rs).
-    return this.enqueue(`go ${timeSec}`);
+    // Native session REPL: `go TIME_SEC` or `go rem REMAINING_SEC` (engine TM).
+    const sec = Math.max(0.05, Number(timeSec) || 0.05);
+    const cmd = rem ? `go rem ${sec}` : `go ${sec}`;
+    return this.enqueue(cmd);
   }
 
   destroy() {
@@ -712,7 +714,22 @@ async function handleSessionOp(payload, res, wantsStream, req) {
   }
 
   if (op === 'go') {
-    const timeSec = Math.max(0.1, Number(payload.timeSec ?? payload.timeMs / 1000) || 10);
+    const useRem =
+      payload.goMode === 'rem' ||
+      payload.timeMode === 'rem' ||
+      payload.remainingSec != null ||
+      payload.useEngineTimeManagement === true;
+    const timeSec = useRem
+      ? Math.max(
+          0.05,
+          Number(
+            payload.remainingSec ??
+              payload.wholeGameRemainingSeconds ??
+              payload.timeSec ??
+              payload.timeMs / 1000,
+          ) || 0.05,
+        )
+      : Math.max(0.1, Number(payload.timeSec ?? payload.timeMs / 1000) || 10);
     const maxNodes = Math.max(1, Number(payload.maxNodes ?? payload.maxSimulations) || 2_000_000_000);
 
     const writeEvent = wantsStream
@@ -747,7 +764,7 @@ async function handleSessionOp(payload, res, wantsStream, req) {
     }
 
     try {
-      const line = await session.go(timeSec, maxNodes, onStderr);
+      const line = await session.go(timeSec, maxNodes, onStderr, { rem: useRem });
       const match = /^bestmove\s+(\S+)/.exec(line);
       if (!match || match[1] === '(none)') {
         if (wantsStream) {

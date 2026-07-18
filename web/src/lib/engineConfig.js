@@ -115,10 +115,10 @@ function getEngineList() {
       tooltip: 'AI developed by Ka',
       uri: 'wss://quoridor-ai.com/ka',
       visits: {
-        [TimeToMove.Intuition]: 1,
-        [TimeToMove.Short]: 1000,
+        [TimeToMove.Intuition]: 2,
+        [TimeToMove.Short]: 3200,
         [TimeToMove.Medium]: 5000,
-        [TimeToMove.Long]: 20_000,
+        [TimeToMove.Long]: 1_000_000,
       },
       notation: Notation.Official,
     },

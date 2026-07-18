@@ -256,11 +256,15 @@ async function runTests() {
       moveHistory: REPORTED_MOVES,
       isFreshGame: false,
     });
-    await sleep(100);
+    // Incremental makemove sync is one fetch per ply before go — wait for go.
+    for (let i = 0; i < 50 && !goStreamBody; i += 1) {
+      await sleep(20);
+    }
 
     assert(sessionCallCount >= 2, 'position sync + go');
     assert(goStreamBody?.timeSec === 5, 'go received configured time');
     assert(goStreamBody?.cores === 4, 'go received configured cores');
+    assert(goStreamBody?.goMode !== 'rem', 'per-move wallClock does not force go rem');
     restoreFetch();
   }
 

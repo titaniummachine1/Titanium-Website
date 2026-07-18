@@ -6,7 +6,7 @@
   flex-direction: row;
   align-items: stretch;
   width: 100%;
-  max-width: min(680px, 100%);
+  max-width: min(760px, 100%);
   margin-inline: auto;
   touch-action: manipulation;
   isolation: isolate;

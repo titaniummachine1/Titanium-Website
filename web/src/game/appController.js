@@ -41,9 +41,9 @@ import { TitaniumWasmEngineClient } from "../lib/titaniumWasmClient.js";
 import { resolveOnBestMoveResult } from "../lib/onBestMoveResult.js";
 import {
   positionKeyFromActions,
-  resolveLiveBestMoveKey,
-  pvFirstMoveFromLiveSearch,
+  resolvePlayNowMoveKey,
   coalesceRootMoves,
+  normalizeGhostKey,
 } from "../lib/liveBestMove.js";
 import {
   positionKeyFromHistory as historyPositionKey,
@@ -78,6 +78,7 @@ import {
   finishedGameSignature,
   submitFinishedGame,
 } from "../lib/trainingSubmit.js";
+import { rememberRecentGame, formatRecentGameLabel } from "../lib/recentGames.js";
 import { AceV10JsEngineClient } from "../lib/aceV10JsEngine.js";
 import { AceV13JsEngineClient } from "../lib/aceV13JsEngine.js";
 import { AceRustWasmEngineClient } from "../lib/aceRustWasmClient.js";
@@ -408,6 +409,7 @@ import {
   migrateTitaniumDepthLimit,
   clampTitaniumDepthLimit,
   allocateWholeGameTime,
+  allocateTitaniumMoveBudget,
   chargeThinkMsForSeat,
   clockLogUsedMs,
   trimThinkLogToPly,
@@ -933,6 +935,18 @@ export class AppController {
         resolvedEval?.depth ?? this.analysisEval?.depth ?? null,
       analysisEvalError: this.analysisEvalError,
       gameClocks: this._gameClockStates(),
+      seatClockFlagged: [0, 1].map(
+        (seat) =>
+          this.engineStatus[seat] === "flagged" ||
+          Boolean(this._humanTimedOut?.[seat]),
+      ),
+      canResetClock:
+        this.session.endReason === "time" ||
+        [0, 1].some(
+          (seat) =>
+            this.engineStatus[seat] === "flagged" ||
+            Boolean(this._humanTimedOut?.[seat]),
+        ),
       reviewAnalysis: {
         ...this.reviewAnalysis,
         visiblePosition: this.replay
@@ -1661,6 +1675,35 @@ export class AppController {
       clockSearchHint,
       includeActiveThink: false,
     });
+
+    // Titanium whole-game: website owns the remaining clock; native `go rem`
+    // (or WASM allocateTitaniumMoveBudget) allocates think time. Do not
+    // overwrite wallClockSeconds with a website-sliced move budget.
+    if (isTitaniumEngine(playerType, this.engineConfigs)) {
+      const ownMovesPlayed = this.session.actions.reduce(
+        (count, _action, plyIndex) =>
+          count + (plyIndex % 2 === seatIndex ? 1 : 0),
+        0,
+      );
+      const titanium = allocateTitaniumMoveBudget({
+        remainingMs,
+        ownMovesPlayed,
+        distanceToWin,
+      });
+      return {
+        ...aiSettings,
+        wallClockSeconds:
+          aiSettings.wallClockSeconds ??
+          totalMs / 1000,
+        wholeGameTotalSeconds: totalMs / 1000,
+        wholeGameRemainingSeconds: remainingMs / 1000,
+        wholeGameExpectedMovesLeft: titanium.expectedMovesLeft,
+        wholeGameDistanceToWin: distanceToWin,
+        wholeGameHandoffReserveMs: titanium.handoffReserveMs,
+        useEngineTimeManagement: true,
+      };
+    }
+
     return {
       ...aiSettings,
       wallClockSeconds: moveBudgetMs / 1000,
@@ -1713,6 +1756,24 @@ export class AppController {
       },
       includeActiveThink: true,
     });
+
+    // Titanium engine-TM: only refresh remaining clock — do not overwrite
+    // wallClockSeconds with a site-sliced movetime.
+    if (
+      isTitaniumEngine(playerType, this.engineConfigs) &&
+      (think.useEngineTimeManagement || ai.wholeGameTime !== false)
+    ) {
+      this._thinkAiSettings = {
+        ...think,
+        wholeGameRemainingSeconds: allocation.remainingMs / 1000,
+        wholeGameExpectedMovesLeft: allocation.expectedMovesLeft,
+        wholeGameDistanceToWin: allocation.distanceToWin,
+        wholeGameHandoffReserveMs:
+          think.wholeGameHandoffReserveMs ?? allocation.handoffReserveMs,
+      };
+      return true;
+    }
+
     const prevBudgetMs = Math.round((think.wallClockSeconds ?? 0) * 1000);
     const tightened = tightenThinkAllocation(prevBudgetMs, allocation);
 
@@ -2010,7 +2071,8 @@ export class AppController {
     this._gameGeneration += 1;
     this._activeAiAbort?.abort();
     this._activeAiAbort = null;
-    this.destroyEngineForSeat(seatIndex); // hard-stop a synchronous WASM search
+    // Soft-cancel only — keep warm engine/TT; do not destroy the seat client.
+    void this._stopSeatEngineSearch(seatIndex);
     this.aiThinking = false;
     this.thinkingPlayerType = null;
     this.thinkingSeatIndex = null;
@@ -2024,6 +2086,43 @@ export class AppController {
       this.maybeSubmitFinishedGame();
     }
     this.onChange?.();
+  }
+
+  /**
+   * Reset seat clock(s) after a time forfeit / flag, using the same used-time
+   * credit as a mid-game time-settings change. Clears flagged status and
+   * resumes AI when appropriate.
+   */
+  resetSeatClock(seatIndex = null) {
+    const seats =
+      seatIndex == null || !Number.isFinite(Number(seatIndex))
+        ? [0, 1]
+        : [Math.max(0, Math.min(1, Math.trunc(Number(seatIndex))))];
+
+    this._clockResetCreditMs = this._clockResetCreditMs ?? [0, 0];
+    for (const seat of seats) {
+      this._clockResetCreditMs[seat] = clockLogUsedMs(this.moveThinkLog, seat);
+      if (this.engineStatus[seat] === "flagged") {
+        this.engineStatus[seat] = "idle";
+      }
+      if (this._humanTimedOut) {
+        this._humanTimedOut[seat] = false;
+      }
+    }
+
+    const sessionForfeit = this.session.endReason === "time";
+    if (sessionForfeit) {
+      this.session.clearTimeForfeit();
+    }
+    this._humanThinkStartedAt = null;
+    this._gameHalted = false;
+    this._terminalOverlayDismissed = false;
+    this._syncHumanClockTurn();
+    this.onChange?.();
+    if (!this.enginesPaused && !this.aiThinking) {
+      this.maybeRequestAiMove();
+    }
+    return true;
   }
 
   setPlayerVisitsBudget(playerNum, visits, { silent = false } = {}) {
@@ -3391,8 +3490,10 @@ export class AppController {
                 this._thinkAiSettings.wholeGameExpectedMovesLeft,
               wholeGameDistanceToWin:
                 this._thinkAiSettings.wholeGameDistanceToWin,
-              wholeGameMoveBudgetSeconds:
-                this._thinkAiSettings.wallClockSeconds,
+              wholeGameMoveBudgetSeconds: this._thinkAiSettings
+                .useEngineTimeManagement
+                ? this._thinkAiSettings.wholeGameRemainingSeconds
+                : this._thinkAiSettings.wallClockSeconds,
             };
           }
           const liveDepth =
@@ -3616,6 +3717,24 @@ export class AppController {
       return;
     }
     this._submittedFinishedGames.add(signature);
+    try {
+      const notation = (payload.moves ?? []).join(" ");
+      const label = formatRecentGameLabel({
+        notation,
+        winner: payload.winner,
+        plies: payload.moves?.length ?? this.session.actions.length,
+        at: Date.now(),
+      });
+      rememberRecentGame({
+        notation,
+        winner: payload.winner,
+        plies: payload.moves?.length ?? this.session.actions.length,
+        at: Date.now(),
+        label,
+      });
+    } catch (err) {
+      console.debug?.("recent-game remember skipped", err);
+    }
     void submitFinishedGame(payload).catch((err) => {
       console.debug?.("finished-game training submit skipped", err);
     });
@@ -3928,7 +4047,11 @@ export class AppController {
     try {
       const engine = this.getEngineForSeat(seatIndex);
       if (engine?.recoverFromDesync) {
-        await engine.recoverFromDesync(recoveryCtx);
+        const key = this._engineFailureRetryKey(seatIndex);
+        const attempt = this._engineFailureRetryBySeat[key]?.attempt ?? 1;
+        // attempt 1 → soft (0), 2 → reset (1), 3+ → destroy (2)
+        const level = Math.min(2, Math.max(0, attempt - 1));
+        await engine.recoverFromDesync({ ...recoveryCtx, level });
       }
     } catch (err) {
       console.warn("Engine restart before retry failed", err);
@@ -4691,16 +4814,15 @@ export class AppController {
         requestAiSettings.wholeGameExpectedMovesLeft ?? null,
       wholeGameDistanceToWin:
         requestAiSettings.wholeGameDistanceToWin ?? null,
-      wholeGameMoveBudgetSeconds: requestAiSettings.wallClockSeconds ?? null,
+      wholeGameMoveBudgetSeconds: requestAiSettings.useEngineTimeManagement
+        ? (requestAiSettings.wholeGameRemainingSeconds ?? null)
+        : (requestAiSettings.wallClockSeconds ?? null),
     };
     if (this._seatUsesWholeGameClock(seatIndex)) {
       const remMs = Math.round(
         (requestAiSettings.wholeGameRemainingSeconds ?? 0) * 1000,
       );
-      const budgetMs = Math.round(
-        (requestAiSettings.wallClockSeconds ?? 0) * 1000,
-      );
-      if (remMs <= 0 && budgetMs <= 0) {
+      if (remMs <= 0) {
         this._flagEngineOnTime(seatIndex);
         return;
       }
@@ -4924,74 +5046,142 @@ export class AppController {
 
   /**
    * Stop current search and play the best move found so far (Stockfish-style: clock expired).
+   * Always attempts a commit while thinking — never silently no-ops without engineError.
    */
   playNow() {
     if (this._playNowLock || !this.aiThinking) return;
     const seatIndex = this.thinkingSeatIndex;
     if (seatIndex == null) return;
 
-    const snapshot = this.session.getSnapshot();
-    const liveSearchSnap = this.liveSearch
-      ? {
-          ...this.liveSearch,
-          depthLog: [...(this.liveSearch.depthLog ?? [])],
-        }
-      : null;
-    const validKeys = new Set(
-      snapshot.validActions.map((mv) => toAlgebraic(mv)),
-    );
-
-    const stateForCheck = {
-      aiThinking: true,
-      liveSearch: liveSearchSnap,
-      thinkingSeatIndex: seatIndex,
-      winner: snapshot.winner,
-      isDraw: snapshot.isDraw,
-      playerToMove: snapshot.playerToMove,
-      settings: this.settings,
-      actions: snapshot.actions,
-      validActions: snapshot.validActions,
-      searchGeneration: this._activeSearchSeq,
-    };
-
-    let bestAlgebraic = resolveLiveBestMoveKey(stateForCheck);
-    if (!bestAlgebraic) {
-      const searchInfo = this.searchInfoBySeat[seatIndex] ?? {};
-      const fallback = pvFirstMoveFromLiveSearch({
-        ...(liveSearchSnap ?? {}),
-        depthLog: liveSearchSnap?.depthLog ?? searchInfo.depthLog ?? [],
-        rootMoves: liveSearchSnap?.rootMoves ?? searchInfo.rootMoves ?? [],
-        pv: liveSearchSnap?.pv,
-      });
-      if (fallback && validKeys.has(fallback)) {
-        bestAlgebraic = fallback;
-      }
-    }
-    if (!bestAlgebraic) return;
-
-    let action;
-    try {
-      action = parseAlgebraic(bestAlgebraic);
-    } catch {
-      return;
-    }
-
-    if (!validKeys.has(bestAlgebraic)) return;
-
-    const playerType = this.settings.players[seatIndex];
-    const requestPly = snapshot.actions.length;
-    const requestPlayerToMove = snapshot.playerToMove;
-    const requestHistory = snapshot.actions
-      .map((a) => toAlgebraic(a))
-      .join(" ");
-    const requestPositionKey = this.currentPositionKey();
-    const gameGeneration = this._gameGeneration;
-    const engine = this.getEngineForSeat(seatIndex);
-    const requestSeq = this._moveRequestSeq;
-
     this._playNowLock = true;
     void (async () => {
+      const failNoMove = () => {
+        this.engineErrors[seatIndex] =
+          "Play now: no best move yet — wait a moment";
+        this.onChange?.();
+      };
+
       try {
+        const capturePlayNowState = () => {
+          const snapshot = this.session.getSnapshot();
+          const liveSearchSnap = this.liveSearch
+            ? {
+                ...this.liveSearch,
+                depthLog: [...(this.liveSearch.depthLog ?? [])],
+              }
+            : null;
+          const searchInfo = this.searchInfoBySeat[seatIndex] ?? null;
+          return {
+            snapshot,
+            liveSearchSnap,
+            stateForCheck: {
+              aiThinking: true,
+              liveSearch: liveSearchSnap,
+              thinkingSeatIndex: seatIndex,
+              winner: snapshot.winner,
+              isDraw: snapshot.isDraw,
+              playerToMove: snapshot.playerToMove,
+              settings: this.settings,
+              actions: snapshot.actions,
+              validActions: snapshot.validActions,
+              searchGeneration: this._activeSearchSeq,
+              searchInfoBySeat: this.searchInfoBySeat,
+              activeSearchInfo: searchInfo,
+              lastCompletedThinkBySeat: this.lastCompletedThinkBySeat,
+            },
+          };
+        };
+
+        const matchLegalAlgebraic = (raw, validKeys) => {
+          if (!raw) return null;
+          const candidate = String(raw).trim().toLowerCase();
+          if (!candidate || candidate === "(none)") return null;
+          if (validKeys.has(candidate)) return candidate;
+          const normalized = normalizeGhostKey(candidate);
+          if (validKeys.has(normalized)) return normalized;
+          for (const key of validKeys) {
+            if (normalizeGhostKey(key) === normalized) return key;
+          }
+          return null;
+        };
+
+        let { snapshot, stateForCheck } = capturePlayNowState();
+        const validKeys = new Set(
+          snapshot.validActions.map((mv) => toAlgebraic(mv)),
+        );
+        const engine = this.getEngineForSeat(seatIndex);
+
+        let bestAlgebraic = null;
+
+        // Prefer native stop-and-return APIs when the client exposes them.
+        const enginePlayNow =
+          typeof engine?.playNow === "function"
+            ? engine.playNow.bind(engine)
+            : typeof engine?.stopForBestMove === "function"
+              ? engine.stopForBestMove.bind(engine)
+              : typeof engine?.playNowBest === "function"
+                ? engine.playNowBest.bind(engine)
+                : null;
+        if (enginePlayNow) {
+          try {
+            const result = await enginePlayNow();
+            const raw =
+              typeof result === "string"
+                ? result
+                : (result?.move ?? result?.bestmove ?? result?.algebraic);
+            bestAlgebraic = matchLegalAlgebraic(raw, validKeys);
+          } catch (err) {
+            console.warn("Play now engine API failed; using telemetry", err);
+          }
+        }
+
+        if (!bestAlgebraic) {
+          bestAlgebraic = resolvePlayNowMoveKey(stateForCheck);
+        }
+
+        // Brief wait for the first info tick when search just started.
+        if (!bestAlgebraic) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          if (!this.aiThinking || this.thinkingSeatIndex !== seatIndex) {
+            return;
+          }
+          ({ snapshot, stateForCheck } = capturePlayNowState());
+          for (const mv of snapshot.validActions) {
+            validKeys.add(toAlgebraic(mv));
+          }
+          bestAlgebraic = resolvePlayNowMoveKey(stateForCheck);
+        }
+
+        if (!bestAlgebraic) {
+          failNoMove();
+          return;
+        }
+
+        let action;
+        try {
+          action = parseAlgebraic(bestAlgebraic);
+        } catch {
+          failNoMove();
+          return;
+        }
+
+        if (!validKeys.has(bestAlgebraic)) {
+          failNoMove();
+          return;
+        }
+
+        const playerType = this.settings.players[seatIndex];
+        const requestPly = snapshot.actions.length;
+        const requestPlayerToMove = snapshot.playerToMove;
+        const requestHistory = snapshot.actions
+          .map((a) => toAlgebraic(a))
+          .join(" ");
+        const requestPositionKey = this.currentPositionKey();
+        const gameGeneration = this._gameGeneration;
+        const requestSeq = this._moveRequestSeq;
+
+        this.engineErrors[seatIndex] = null;
+
         if (this._activeAiAbort && this.thinkingSeatIndex === seatIndex) {
           this._activeAiAbort.abort();
           this._activeAiAbort = null;

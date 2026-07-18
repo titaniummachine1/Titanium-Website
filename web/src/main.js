@@ -17,6 +17,7 @@ import { renderSidebar } from './ui/sidebarView.js';
 import { renderEvalBar } from './ui/evalBar.js';
 import { updateVisionTuningPanel } from './ui/visionTuningPanel.js';
 import { renderWasmDebugPanel, logBuildIdentity } from './lib/wasmBuildInfo.js';
+import { createRenderScheduler } from './lib/renderScheduler.js';
 
 const appRoot = document.getElementById('app');
 const controller = new AppController();
@@ -63,6 +64,9 @@ function bottomSeat(state) {
 var lastControlsKey = '';
 var lastCardStructureKey = '';
 var lastTerminal = false;  // true once we've seen a game-over state
+var lastEvalSnapshotKey = '';
+var lastEvalRenderAt = 0;
+var UI_REFRESH_MS = 100;
 
 function cardStructureKey(state) {
   return (
@@ -101,20 +105,61 @@ function evalBarVisible(state) {
   return state.settings.displayEvalBar !== false;
 }
 
+function evalBarProps(state) {
+  return {
+    settings: { ...state.settings, displayEvalBar: evalBarVisible(state) },
+    eval: state.eval,
+    analysisEngineActive: state.analysisEngineActive || state.eval?.source === 'play-live',
+    analysisEvalDepth: state.analysisEvalDepth,
+  };
+}
+
+function evalSnapshotKey(state) {
+  const evalData = state.eval;
+  return JSON.stringify({
+    visible: evalBarVisible(state),
+    rotate: state.settings.rotateBoard,
+    p1: evalData?.p1,
+    margin: evalData?.margin,
+    rootScore: evalData?.rootScore,
+    rootScoreText: evalData?.rootScoreText,
+    scoreKind: evalData?.scoreKind,
+    scoreProven: evalData?.scoreProven,
+    depth: evalData?.depth,
+    analysisDepth: state.analysisEvalDepth,
+    analysisActive: state.analysisEngineActive || evalData?.source === 'play-live',
+    pending: evalData?.pending,
+    unavailable: evalData?.evalUnavailable,
+    evalKind: evalData?.evalKind,
+    rootWinRate: evalData?.rootWinRate,
+    playerToMove: evalData?.playerToMove,
+  });
+}
+
+function maybeRenderEvalBar(state, now, force) {
+  const key = evalSnapshotKey(state);
+  const ts = now ?? performance.now();
+  if (
+    !force &&
+    key === lastEvalSnapshotKey &&
+    ts - lastEvalRenderAt < UI_REFRESH_MS
+  ) {
+    return;
+  }
+  lastEvalSnapshotKey = key;
+  lastEvalRenderAt = ts;
+  renderEvalBar(evalSlot, evalBarProps(state));
+}
+
 var lastSidebarKey = '';
 
-function render() {
+function render(now, forceEval) {
   var state = controller.getState();
 
   // The eval bar's column is always reserved (fixed width) so toggling it
   // on/off never shifts the board's horizontal position -- only its inner
   // content fades in/out (see .eval-panel / .eval-panel--visible in evalBar.js).
-  renderEvalBar(evalSlot, {
-    settings: { ...state.settings, displayEvalBar: evalBarVisible(state) },
-    eval: state.eval,
-    analysisEngineActive: state.analysisEngineActive || state.eval?.source === 'play-live',
-    analysisEvalDepth: state.analysisEvalDepth,
-  });
+  maybeRenderEvalBar(state, now, forceEval);
 
   renderBoard(boardSlot, state, controller);
 
@@ -156,23 +201,30 @@ function render() {
   lastTerminal = isTerminal;
 }
 
-function renderLiveUpdate() {
+function renderLivePatch(now) {
   var state = controller.getState();
-  renderEvalBar(evalSlot, {
-    settings: { ...state.settings, displayEvalBar: evalBarVisible(state) },
-    eval: state.eval,
-    analysisEngineActive: state.analysisEngineActive || state.eval?.source === 'play-live',
-    analysisEvalDepth: state.analysisEvalDepth,
-  });
+  maybeRenderEvalBar(state, now, false);
   renderBoard(boardSlot, state, controller);
   renderPlayerCards(state);
   updateVisionTuningPanel(boardRowEl, state, controller);
 }
 
-function renderAndRefreshDialog() {
-  render();
+function renderAndRefreshDialog(now) {
+  render(now, false);
   refreshOpenPlayerDialog(controller.getState());
 }
+
+var uiScheduler = createRenderScheduler({
+  uiIntervalMs: UI_REFRESH_MS,
+  animIntervalMs: 42,
+  onFrame: function(kind, now) {
+    if (kind === 'full') {
+      renderAndRefreshDialog(now);
+      return;
+    }
+    renderLivePatch(now);
+  },
+});
 
 function isTextEditingTarget(target) {
   if (!(target instanceof Element)) {
@@ -224,15 +276,19 @@ document.addEventListener('keydown', function(event) {
   }
 });
 
-controller.onChange = renderAndRefreshDialog;
-controller.onLiveUpdate = renderLiveUpdate;
+controller.onChange = function() {
+  uiScheduler.scheduleFull();
+};
+controller.onLiveUpdate = function() {
+  uiScheduler.scheduleLive();
+};
 
 void controller.initializeLegalityOracle();
 
 renderGameControls(controlsSlot, controller.getState(), controller);
 logBuildIdentity();
 renderWasmDebugPanel(document.getElementById('wasm-debug-slot'));
-render();
+uiScheduler.flushNow();
 
 // Open player dialog on every load.
 // AI starts only after user clicks "Start game" — maybeRequestAiMove is called

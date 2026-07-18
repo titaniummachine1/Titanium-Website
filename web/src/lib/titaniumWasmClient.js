@@ -9,7 +9,7 @@
 
 import TitaniumWasmWorker from '../workers/titaniumWasmWorker.js?worker';
 import { parseAlgebraic, toAlgebraic } from './gameLogic.js';
-import { resolveMaxNodes, resolveCatLmrCeiling, resolveTitaniumMaxDepth } from './timeControl.js';
+import { resolveMaxNodes, resolveCatLmrCeiling, resolveTitaniumMaxDepth, allocateTitaniumMoveBudget } from './timeControl.js';
 import { resolveTitaniumSearchCores } from './titaniumRuntime.js';
 import { enrichNodeFields } from './searchNodes.js';
 import { localBuildMeta, setRustIdentityFromWasm } from './wasmBuildInfo.js';
@@ -503,18 +503,22 @@ export class TitaniumWasmEngineClient {
   }
 
   /**
-   * Hard recovery after a worker trap/crash: kill the worker, rebuild WASM,
-   * and replay the full move list to the current position.
+   * Recovery after desync / failure. Escalates by level:
+   * 0: soft cancel + force sync (keep warm worker/TT)
+   * 1: reset move list + force sync
+   * 2: destroy worker + rebuild WASM + full sync (last resort)
    */
   async recoverFromDesync({
     moveHistory,
     isFreshGame,
     aiSettings,
+    level = 0,
   } = {}) {
+    const escalate = Math.max(0, Math.min(2, Number(level) || 0));
     this.queuedRequest = null;
     this.pendingRequest = null;
-    this.terminateWorkers();
-    this.algebraicMoves =
+
+    const algebraicMoves =
       isFreshGame || !moveHistory?.length
         ? []
         : moveHistory.map((action) =>
@@ -532,8 +536,23 @@ export class TitaniumWasmEngineClient {
       ? 1
       : resolveTitaniumSearchCores(aiSettings ?? {});
 
-    this.setStatus('connecting');
-    await this.initWorkers(engineMode, { catLmrCeiling, threads: this.threads });
+    if (escalate >= 2) {
+      this.terminateWorkers();
+      this.algebraicMoves = algebraicMoves;
+      this.setStatus('connecting');
+      await this.initWorkers(engineMode, { catLmrCeiling, threads: this.threads });
+    } else {
+      await this.cancelSearch();
+      if (escalate >= 1) {
+        this.algebraicMoves = [];
+      }
+      this.algebraicMoves = algebraicMoves;
+      if (!this.workerReady(engineMode, catLmrCeiling, this.threads)) {
+        this.setStatus('connecting');
+        await this.initWorkers(engineMode, { catLmrCeiling, threads: this.threads });
+      }
+    }
+
     if (this.worker) {
       this.worker.postMessage({
         op: 'sync',
@@ -591,7 +610,27 @@ export class TitaniumWasmEngineClient {
     // SharedArrayBuffer limits) sticks the session to single-thread.
     this.threads = this._degradeToSingleThread ? 1 : resolveTitaniumSearchCores(aiSettings);
 
-    const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
+    const useEngineTm =
+      aiSettings?.useEngineTimeManagement === true ||
+      (aiSettings?.wholeGameRemainingSeconds != null &&
+        aiSettings?.wholeGameTime !== false);
+    let timeMs;
+    if (useEngineTm) {
+      // WASM has no CLI `go rem` — allocate a site movetime from remaining.
+      const remainingMs = Math.max(
+        50,
+        Math.round((Number(aiSettings.wholeGameRemainingSeconds) || 0) * 1000),
+      );
+      const ownMovesPlayed = Math.floor((this.algebraicMoves?.length ?? 0) / 2);
+      const budget = allocateTitaniumMoveBudget({
+        remainingMs,
+        ownMovesPlayed,
+        distanceToWin: aiSettings?.wholeGameDistanceToWin ?? null,
+      });
+      timeMs = Math.max(50, Math.round(budget.moveBudgetMs));
+    } else {
+      timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
+    }
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
     const maxDepth = resolveTitaniumMaxDepth(aiSettings);
     const engineMode = this.config?.engineMode ?? 'titanium-v18';

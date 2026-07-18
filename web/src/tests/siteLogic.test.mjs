@@ -5,6 +5,7 @@
 
 import {
   resolveLiveBestMoveKey,
+  resolvePlayNowMoveKey,
   canPlayNow,
   pvFirstMoveFromLiveSearch,
 } from "../lib/liveBestMove.js";
@@ -180,6 +181,54 @@ assertEqual(
   "illegal pv rejected",
 );
 assert(canPlayNow(baseState), "canPlayNow when live pv legal");
+
+console.log("\n[liveBestMove] resolvePlayNowMoveKey is less strict");
+assertEqual(
+  resolvePlayNowMoveKey({
+    ...baseState,
+    liveSearch: { ...baseState.liveSearch, requestSeq: 6 },
+  }),
+  "e3",
+  "play-now accepts mismatched requestSeq",
+);
+assertEqual(
+  resolveLiveBestMoveKey({
+    ...baseState,
+    liveSearch: { ...baseState.liveSearch, requestSeq: 6 },
+  }),
+  null,
+  "highlight still rejects stale generation",
+);
+assertEqual(
+  resolvePlayNowMoveKey({
+    ...baseState,
+    liveSearch: null,
+    searchInfoBySeat: {
+      0: { seatIndex: 0, rootMove: "e3", rootMoves: [{ move: "e3", score: 10 }] },
+    },
+    activeSearchInfo: {
+      seatIndex: 0,
+      rootMove: "e3",
+      rootMoves: [{ move: "e3", score: 10 }],
+    },
+  }),
+  "e3",
+  "play-now uses searchInfoBySeat when liveSearch empty",
+);
+assertEqual(
+  resolvePlayNowMoveKey({
+    aiThinking: true,
+    thinkingSeatIndex: 0,
+    winner: null,
+    isDraw: false,
+    settings: baseState.settings,
+    actions: [],
+    validActions: baseState.validActions,
+    liveSearch: null,
+  }),
+  null,
+  "play-now null when no telemetry yet",
+);
 
 console.log("\n[mate] Quoridor moves from engine plies (AceV13 parity)");
 assertEqual(quoridorMovesFromMatePlies(1), 1, "mate in 1 ply = 1 move");

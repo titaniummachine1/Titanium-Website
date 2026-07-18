@@ -166,8 +166,8 @@ const engineCargo = readFileSync(
   'utf8',
 );
 assert(
-  engineWasm.includes('grafted_v16'),
-  'titanium-v16 WASM tier uses CAT LMR grafted_v16',
+  engineWasm.includes('grafted_v17_with_ceiling'),
+  'titanium-v16 WASM tier uses CAT LMR grafted_v17_with_ceiling',
 );
 assert(
   engineCargo.includes('wasm-threads') && engineWasm.includes('think_with_threads'),

@@ -212,3 +212,110 @@ export function resolveLiveBestMoveKey(state, { validActions = null } = {}) {
 export function canPlayNow(state) {
   return resolveLiveBestMoveKey(state) != null;
 }
+
+/**
+ * Aggressive Play-now resolver: commit any legal best the engine currently
+ * reports for the thinking seat. Unlike resolveLiveBestMoveKey, does not
+ * require requestSeq / positionKey / playerType identity matches when the
+ * payload clearly belongs to that seat (seatIndex match or unset).
+ *
+ * Source order: rootMove → best legal rootMoves → depthLog PV head → pv →
+ * searchInfoBySeat / activeSearchInfo → lastCompletedThinkBySeat (same pos).
+ */
+export function resolvePlayNowMoveKey(state, { validActions = null } = {}) {
+  if (!state.aiThinking) return null;
+  if (state.winner || state.isDraw) return null;
+
+  const seat = state.thinkingSeatIndex;
+  if (seat == null) return null;
+
+  const legal = validActions ?? state.validActions ?? [];
+  const validKeySet = buildValidKeySet(legal);
+  const posKey = positionKeyFromActions(state.actions ?? []);
+
+  const belongsToSeat = (payload) => {
+    if (!payload) return false;
+    return payload.seatIndex == null || payload.seatIndex === seat;
+  };
+
+  const tryPayload = (payload) => {
+    if (!belongsToSeat(payload)) return null;
+
+    const fromRootMove = matchLegalKey(payload.rootMove, validKeySet);
+    if (fromRootMove) return fromRootMove;
+
+    const rootMoves = mergedRootMoves(payload, state);
+    const fromRoot = bestLegalRootMoveKey(
+      rootMoves.length ? rootMoves : payload.rootMoves,
+      validKeySet,
+    );
+    if (fromRoot) return fromRoot;
+
+    const deep = deepestDepthEntry(payload.depthLog ?? []);
+    if (typeof deep?.pv === 'string' && deep.pv.trim()) {
+      const fromDepth = matchLegalKey(firstPvTokenFromString(deep.pv), validKeySet);
+      if (fromDepth) return fromDepth;
+    }
+
+    if (Array.isArray(payload.pv) && payload.pv.length > 0) {
+      const head = payload.pv[0];
+      const tok =
+        typeof head === 'string' ? firstPvTokenFromString(head) : toAlgebraic(head);
+      const matched = matchLegalKey(tok, validKeySet);
+      if (matched) return matched;
+    }
+    if (typeof payload.pv === 'string' && payload.pv.trim()) {
+      const matched = matchLegalKey(firstPvTokenFromString(payload.pv), validKeySet);
+      if (matched) return matched;
+    }
+
+    if (payload.move && payload.move !== '(none)') {
+      const matched = matchLegalKey(payload.move, validKeySet);
+      if (matched) return matched;
+    }
+
+    return null;
+  };
+
+  const finalize = (key) => {
+    if (!key) return null;
+    try {
+      parseAlgebraic(key);
+      return key;
+    } catch {
+      return null;
+    }
+  };
+
+  const live = state.liveSearch;
+  const active = state.activeSearchInfo;
+  const seatInfo = state.searchInfoBySeat?.[seat];
+
+  // Prefer a merged live view (live overlays active/seat info).
+  if (live || active || seatInfo) {
+    const merged = {
+      ...(seatInfo ?? {}),
+      ...(active ?? {}),
+      ...(live ?? {}),
+      seatIndex: live?.seatIndex ?? active?.seatIndex ?? seat,
+    };
+    const key = finalize(tryPayload(merged));
+    if (key) return key;
+  }
+
+  for (const payload of [live, active, seatInfo]) {
+    const key = finalize(tryPayload(payload));
+    if (key) return key;
+  }
+
+  const completed = state.lastCompletedThinkBySeat?.[seat];
+  if (completed) {
+    const completedPos = completed.positionKey;
+    if (completedPos == null || completedPos === posKey) {
+      const key = finalize(tryPayload(completed));
+      if (key) return key;
+    }
+  }
+
+  return null;
+}

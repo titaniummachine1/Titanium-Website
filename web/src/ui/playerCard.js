@@ -21,7 +21,6 @@ import {
   mateInfo,
 } from "../lib/engineScore.js";
 import { resolveDisplayNodes } from "../lib/searchNodes.js";
-import { canPlayNow, resolveLiveBestMoveKey } from "../lib/liveBestMove.js";
 import { mergeThinkSnapshots } from "../lib/searchTelemetry.js";
 import { aceStrengthPresetsForPlayerType } from "../lib/aceTier.js";
 import { openLogsDialog } from "./gameControls.js";
@@ -107,27 +106,37 @@ function formatTelemetryNodes(view) {
   return "";
 }
 
+function buildEvalHtml(view) {
+  if (!view.scoreDisplay) return "";
+  return `<div class="player-card__eval${view.isMate ? " player-card__eval--mate" : ""}">${escHtml(view.scoreDisplay)}</div>`;
+}
+
+function buildDepthHtml(view) {
+  if (view.depth == null) return "";
+  return `<div class="player-card__depth" title="Search depth">d${view.depth}</div>`;
+}
+
+/** Eval + depth on one centered row under the clock. */
+function buildScorelineHtml(view) {
+  const evalHtml = buildEvalHtml(view);
+  const depthHtml = buildDepthHtml(view);
+  if (!evalHtml && !depthHtml) return "";
+  return `<div class="player-card__scoreline">${evalHtml}${depthHtml}</div>`;
+}
+
 function buildTelemetryHtml(view) {
   const nodes = formatTelemetryNodes(view);
-  const hasEval = Boolean(view.scoreDisplay);
-  const hasDepth = view.depth != null;
-  if (!nodes && !hasEval && !hasDepth && view.thinkMs == null) {
+  if (!nodes && view.thinkMs == null) {
     return "";
   }
-  const depthHtml = hasDepth
-    ? `<span class="player-card__telemetry-depth" title="Search depth">d${view.depth}</span>`
-    : "";
-  const evalHtml = hasEval
-    ? `<span class="player-card__telemetry-eval${view.isMate ? " player-card__telemetry-eval--mate" : ""}">${escHtml(view.scoreDisplay)}</span>`
-    : "";
   const nodesHtml = nodes
     ? `<span class="player-card__telemetry-nodes">${escHtml(nodes)}</span>`
-    : '<span class="player-card__telemetry-nodes player-card__telemetry-nodes--empty"></span>';
+    : "";
   const timeHtml =
     view.thinkMs != null
       ? `<span class="player-card__telemetry-time">${escHtml(formatMs(view.thinkMs))}</span>`
       : "";
-  return `${nodesHtml}${evalHtml}${depthHtml}${timeHtml}`;
+  return `${nodesHtml}${timeHtml}`;
 }
 
 function resolveDepth(snap) {
@@ -250,6 +259,21 @@ function updatePawnSpinner(container, mode, seatIndex) {
   }
 }
 
+function seatLostOnTime(state, seatIndex) {
+  return (
+    state.endReason === "time" &&
+    state.winner != null &&
+    state.winner !== seatIndex + 1
+  );
+}
+
+function seatNeedsClockReset(state, seatIndex) {
+  return (
+    state.engineStatus?.[seatIndex] === "flagged" ||
+    seatLostOnTime(state, seatIndex)
+  );
+}
+
 /** Stable card layout key — excludes live depth/nodes/pv so we can patch in place. */
 export function playerCardStructureKey(state, seatIndex) {
   const playerType = state.settings.players[seatIndex];
@@ -266,6 +290,8 @@ export function playerCardStructureKey(state, seatIndex) {
   const activeSnap = thinkingTelemetry(state, seatIndex);
   const snap = activeSnap ?? completedSnap;
   const isLoading = isMyTurn && !isHuman && engineStatus === "connecting";
+  const flagged = engineStatus === "flagged";
+  const showResetTime = seatNeedsClockReset(state, seatIndex);
 
   return JSON.stringify({
     seatIndex,
@@ -276,6 +302,9 @@ export function playerCardStructureKey(state, seatIndex) {
     isMyTurn,
     winner: state.winner,
     isDraw: state.isDraw,
+    endReason: state.endReason ?? null,
+    flagged,
+    showResetTime,
     configSummary: compactPlayerConfigSummary(ui, snap),
     hasError,
     engineError: hasError ? engineError : "",
@@ -350,14 +379,7 @@ function derivePlayerCardView(state, seatIndex) {
     scoreDisplay = `${(rootWinRate * 100).toFixed(0)}%`;
   }
 
-  const showPlayNow =
-    isThinking &&
-    canPlayNow({
-      ...state,
-      liveSearch: thinkingTelemetry(state, seatIndex) ?? state.liveSearch,
-      thinkingSeatIndex: seatIndex,
-      searchGeneration: state.searchGeneration,
-    });
+  const showPlayNow = isThinking;
 
   return {
     playerType,
@@ -376,6 +398,7 @@ function derivePlayerCardView(state, seatIndex) {
     nodesLine,
     thinkMs,
     showPlayNow,
+    showResetTime: seatNeedsClockReset(state, seatIndex),
     clockText: state.gameClocks?.[seatIndex]?.label ?? "",
     selectedWorkerNodes: snap?.selectedWorkerNodes,
     totalNodesAcrossWorkers: snap?.totalNodesAcrossWorkers,
@@ -398,16 +421,69 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
   card.classList.toggle("player-card--winner", state.winner === seatIndex + 1);
 
   const statsEl = card.querySelector(".player-card__telemetry");
-  if (statsEl) {
-    statsEl.innerHTML = buildTelemetryHtml(view);
-  } else if (buildTelemetryHtml(view)) {
-    const center = card.querySelector(".player-card__center");
-    if (center) {
-      const telemetry = document.createElement("div");
-      telemetry.className = "player-card__telemetry";
-      telemetry.innerHTML = buildTelemetryHtml(view);
-      center.appendChild(telemetry);
+  const scorelineEl = card.querySelector(".player-card__scoreline");
+  const evalEl = card.querySelector(".player-card__eval");
+  const depthEl = card.querySelector(".player-card__depth");
+  const scorelineHtml = buildScorelineHtml(view);
+  const telemetryHtml = buildTelemetryHtml(view);
+  const center = card.querySelector(".player-card__center");
+
+  if (scorelineEl) {
+    if (scorelineHtml) {
+      if (evalEl) {
+        if (view.scoreDisplay) {
+          evalEl.className = `player-card__eval${view.isMate ? " player-card__eval--mate" : ""}`;
+          evalEl.textContent = view.scoreDisplay;
+        } else {
+          evalEl.remove();
+        }
+      } else if (view.scoreDisplay) {
+        const evalNode = document.createElement("div");
+        evalNode.className = `player-card__eval${view.isMate ? " player-card__eval--mate" : ""}`;
+        evalNode.textContent = view.scoreDisplay;
+        scorelineEl.insertBefore(evalNode, scorelineEl.firstChild);
+      }
+      if (depthEl) {
+        if (view.depth != null) {
+          depthEl.textContent = `d${view.depth}`;
+        } else {
+          depthEl.remove();
+        }
+      } else if (view.depth != null) {
+        const depthNode = document.createElement("div");
+        depthNode.className = "player-card__depth";
+        depthNode.title = "Search depth";
+        depthNode.textContent = `d${view.depth}`;
+        scorelineEl.appendChild(depthNode);
+      }
+    } else {
+      scorelineEl.remove();
     }
+  } else if (scorelineHtml && center) {
+    const wrap = document.createElement("div");
+    wrap.className = "player-card__scoreline";
+    wrap.innerHTML = buildEvalHtml(view) + buildDepthHtml(view);
+    const clockEl = center.querySelector("[data-player-card-clock]");
+    if (clockEl?.nextSibling) {
+      center.insertBefore(wrap, clockEl.nextSibling);
+    } else if (clockEl) {
+      center.appendChild(wrap);
+    } else {
+      center.insertBefore(wrap, center.firstChild);
+    }
+  }
+
+  if (statsEl) {
+    if (telemetryHtml) {
+      statsEl.innerHTML = telemetryHtml;
+    } else {
+      statsEl.remove();
+    }
+  } else if (telemetryHtml && center) {
+    const telemetry = document.createElement("div");
+    telemetry.className = "player-card__telemetry";
+    telemetry.innerHTML = telemetryHtml;
+    center.appendChild(telemetry);
   }
   const clockEl = card.querySelector("[data-player-card-clock]");
   if (clockEl) clockEl.textContent = view.clockText;
@@ -426,6 +502,21 @@ export function patchPlayerCardLive(container, state, seatIndex, controller) {
     playBtn.remove();
   }
 
+  const resetBtn = card.querySelector('[data-action="reset-time"]');
+  if (view.showResetTime && !resetBtn) {
+    const right = card.querySelector(".player-card__right");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn--reset-time";
+    btn.dataset.action = "reset-time";
+    btn.title = "Reset this seat's clock";
+    btn.textContent = "Reset time";
+    btn.addEventListener("click", () => controller.resetSeatClock?.(seatIndex));
+    right?.appendChild(btn);
+  } else if (!view.showResetTime && resetBtn) {
+    resetBtn.remove();
+  }
+
   updatePawnSpinner(container, view.spinnerMode, seatIndex);
   return true;
 }
@@ -435,6 +526,12 @@ function bindPlayerCardActions(container, state, seatIndex, controller) {
     .querySelector('[data-action="play-now"]')
     ?.addEventListener("click", () => {
       controller.playNow?.();
+    });
+
+  container
+    .querySelector('[data-action="reset-time"]')
+    ?.addEventListener("click", () => {
+      controller.resetSeatClock?.(seatIndex);
     });
 
   // Click the pawn icon to see full engine logs (chain-of-thought), same
@@ -475,6 +572,7 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
     spinner.remove();
   }
 
+  const scorelineHtml = buildScorelineHtml(view);
   const telemetryHtml = buildTelemetryHtml(view);
 
   container.innerHTML = `
@@ -495,10 +593,12 @@ export function renderPlayerCard(container, state, seatIndex, controller) {
         </div>
         <div class="player-card__center">
           ${view.clockText ? `<div class="player-card__clock" data-player-card-clock>${escHtml(view.clockText)}</div>` : ""}
+          ${scorelineHtml}
           ${telemetryHtml ? `<div class="player-card__telemetry">${telemetryHtml}</div>` : ""}
         </div>
         <div class="player-card__right">
           ${view.showPlayNow ? `<button class="btn btn--playnow" data-action="play-now" title="Stop search and play current best move">Play now</button>` : ""}
+          ${view.showResetTime ? `<button type="button" class="btn btn--reset-time" data-action="reset-time" title="Reset this seat's clock">Reset time</button>` : ""}
         </div>
       </div>
     </div>
