@@ -64,13 +64,17 @@ function tierForEngineMode(engineMode, catLmrCeiling) {
 }
 
 function engineCacheKey(engineMode, catLmrCeiling) {
-  if (engineMode === 'titanium-v16' || engineMode === 'titanium-v17') {
+  if (
+    engineMode === 'titanium-v16' ||
+    engineMode === 'titanium-v17' ||
+    engineMode === 'titanium-v18'
+  ) {
     return `${engineMode}@${catLmrCeiling ?? 800}`;
   }
   return engineMode;
 }
 
-function ensureEngineInstance(engineMode = 'titanium-v17', catLmrCeiling = 800) {
+function ensureEngineInstance(engineMode = 'titanium-v18', catLmrCeiling = 800) {
   const key = engineCacheKey(engineMode, catLmrCeiling);
   if (engines.has(key)) {
     return engines.get(key);
@@ -86,14 +90,16 @@ function ensureEngineInstance(engineMode = 'titanium-v17', catLmrCeiling = 800) 
   }
   const tier = tierForEngineMode(engineMode, catLmrCeiling);
   const engine =
-    engineMode === 'titanium-v17' && typeof WasmEngine.new_v17 === 'function'
-      ? WasmEngine.new_v17(tier)
-      : new WasmEngine(tier);
+    engineMode === 'titanium-v18' && typeof WasmEngine.new_v18 === 'function'
+      ? WasmEngine.new_v18(tier)
+      : engineMode === 'titanium-v17' && typeof WasmEngine.new_v17 === 'function'
+        ? WasmEngine.new_v17(tier)
+        : new WasmEngine(tier);
   engines.set(key, engine);
   return engine;
 }
 
-function replaceEngineInstance(engineMode = 'titanium-v17', catLmrCeiling = 800) {
+function replaceEngineInstance(engineMode = 'titanium-v18', catLmrCeiling = 800) {
   const key = engineCacheKey(engineMode, catLmrCeiling);
   const stale = engines.get(key);
   stale?.free?.();
@@ -134,7 +140,7 @@ async function ensureInit() {
   await initPromise;
 }
 
-async function ensureEngine(engineMode = 'titanium-v17', catLmrCeiling = 800, threads = 1) {
+async function ensureEngine(engineMode = 'titanium-v18', catLmrCeiling = 800, threads = 1) {
   await ensureInit();
   const engine = ensureEngineInstance(engineMode, catLmrCeiling);
   await ensureThreadPool(threads);
@@ -230,7 +236,7 @@ function syncEnginePosition(wasm, history, isFreshGame) {
 async function handleSync(eventData) {
   const {
     algebraicMoves,
-    engineMode = 'titanium-v17',
+    engineMode = 'titanium-v18',
     catLmrCeiling = 800,
     threads = 1,
   } = eventData;
@@ -250,7 +256,7 @@ async function handleSearch(eventData) {
     maxNodes,
     maxDepth,
     isFreshGame,
-    engineMode = 'titanium-v17',
+    engineMode = 'titanium-v18',
     catLmrCeiling = 800,
     threads = 1,
     streamProgress = true,
@@ -412,7 +418,7 @@ async function handleSearch(eventData) {
     stoppedBy: stopReason ?? engineMode,
     mode: stopReason ?? engineMode,
     catLmrCeiling:
-      engineMode === 'titanium-v16' || engineMode === 'titanium-v17' ? catLmrCeiling : undefined,
+      engineMode === 'titanium-v16' || engineMode === 'titanium-v17' || engineMode === 'titanium-v18' ? catLmrCeiling : undefined,
     nodeSource: 'bestmove_final',
     totalNodes: lastProgress?.totalNodes,
     totalNodesAcrossWorkers: lastProgress?.totalNodesAcrossWorkers,
@@ -434,7 +440,7 @@ async function handleSearch(eventData) {
 
 self.onmessage = async (event) => {
   const data = event.data ?? {};
-  const engineMode = data.engineMode ?? 'titanium-v17';
+  const engineMode = data.engineMode ?? 'titanium-v18';
   const catLmrCeiling = data.catLmrCeiling ?? 800;
   try {
     if (data.op === 'init') {

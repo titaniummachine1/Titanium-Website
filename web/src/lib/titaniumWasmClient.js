@@ -47,12 +47,12 @@ export class TitaniumWasmEngineClient {
     this.workerCrashRetries = 0;
     this._initInFlight = null;
     this._requestSeq = 0;
-    this._lastEngineMode = this.config?.engineMode ?? 'titanium-v17';
+    this._lastEngineMode = this.config?.engineMode ?? 'titanium-v18';
     this._lastCatLmrCeiling = 800;
   }
 
   _workerProfileKey(
-    engineMode = this.config?.engineMode ?? 'titanium-v17',
+    engineMode = this.config?.engineMode ?? 'titanium-v18',
     catLmrCeiling = 800,
     threads = this.threads,
   ) {
@@ -60,7 +60,7 @@ export class TitaniumWasmEngineClient {
   }
 
   workerReady(
-    engineMode = this.config?.engineMode ?? 'titanium-v17',
+    engineMode = this.config?.engineMode ?? 'titanium-v18',
     catLmrCeiling = 800,
     threads = this.threads,
   ) {
@@ -81,7 +81,7 @@ export class TitaniumWasmEngineClient {
   }
 
   async initWorkers(
-    engineMode = this.config?.engineMode ?? 'titanium-v17',
+    engineMode = this.config?.engineMode ?? 'titanium-v18',
     { timeoutMs = 60_000, catLmrCeiling = 800, threads = this.threads } = {},
   ) {
     if (this._initInFlight) {
@@ -121,7 +121,7 @@ export class TitaniumWasmEngineClient {
   }
 
   async prewarm(
-    engineMode = this.config?.engineMode ?? 'titanium-v17',
+    engineMode = this.config?.engineMode ?? 'titanium-v18',
     catLmrCeiling = 800,
     threads = this.threads,
   ) {
@@ -158,7 +158,7 @@ export class TitaniumWasmEngineClient {
   }
 
   _mergeInfo(data) {
-    const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v17';
+    const stoppedBy = data.stoppedBy ?? this.config?.engineMode ?? 'titanium-v18';
     let depthLog = data.depthLog;
     if ((!depthLog || depthLog.length === 0) && data.searchDepth != null && data.rootScore != null) {
       depthLog = [
@@ -347,8 +347,8 @@ export class TitaniumWasmEngineClient {
       fallbackReason: meta.fallbackReason,
       nodeSource: nodeFields.nodeSource ?? 'engine_total',
       estimatedTotalNodes: false,
-      stoppedBy: meta.stoppedBy ?? bestmove.stoppedBy ?? this.config?.engineMode ?? 'titanium-v17',
-      mode: meta.mode ?? bestmove.mode ?? this.config?.engineMode ?? 'titanium-v17',
+      stoppedBy: meta.stoppedBy ?? bestmove.stoppedBy ?? this.config?.engineMode ?? 'titanium-v18',
+      mode: meta.mode ?? bestmove.mode ?? this.config?.engineMode ?? 'titanium-v18',
       searchDepth,
       depthLog,
       whiteDist: meta.whiteDist,
@@ -521,9 +521,9 @@ export class TitaniumWasmEngineClient {
             typeof action === 'string' ? action : toAlgebraic(action),
           );
 
-    const engineMode = this.config?.engineMode ?? this._lastEngineMode ?? 'titanium-v17';
+    const engineMode = this.config?.engineMode ?? this._lastEngineMode ?? 'titanium-v18';
     const catLmrCeiling =
-      engineMode === 'titanium-v16' || engineMode === 'titanium-v17'
+      engineMode === 'titanium-v16' || engineMode === 'titanium-v17' || engineMode === 'titanium-v18'
         ? resolveCatLmrCeiling(aiSettings ?? {})
         : 800;
     this._lastEngineMode = engineMode;
@@ -594,9 +594,9 @@ export class TitaniumWasmEngineClient {
     const timeMs = Math.round((aiSettings?.wallClockSeconds ?? 10) * 1000);
     const maxNodes = resolveMaxNodes(aiSettings?.visitsBudget ?? 0);
     const maxDepth = resolveTitaniumMaxDepth(aiSettings);
-    const engineMode = this.config?.engineMode ?? 'titanium-v17';
+    const engineMode = this.config?.engineMode ?? 'titanium-v18';
     const catLmrCeiling =
-      engineMode === 'titanium-v16' || engineMode === 'titanium-v17'
+      engineMode === 'titanium-v16' || engineMode === 'titanium-v17' || engineMode === 'titanium-v18'
         ? resolveCatLmrCeiling(aiSettings)
         : 800;
     this._lastEngineMode = engineMode;

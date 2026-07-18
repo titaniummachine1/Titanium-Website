@@ -181,8 +181,8 @@ if (threadedWasm) {
 
 const variants = [
   {
-    id: 'v16',
-    engineVersion: 'titanium-v16',
+    id: 'v18',
+    engineVersion: 'titanium-v18',
     outSubdir: 'titanium',
     wasmFeatures: threadedWasm ? 'wasm-threads,embed-tables' : 'wasm,embed-tables',
     lutMode: 'embedded',

@@ -25,6 +25,7 @@ export const wasmengine_legal_moves: (a: number) => [number, number];
 export const wasmengine_make_move: (a: number, b: number, c: number) => number;
 export const wasmengine_new: (a: number) => number;
 export const wasmengine_new_v17: (a: number) => number;
+export const wasmengine_new_v18: (a: number) => number;
 export const wasmengine_position: (a: number, b: number, c: number) => [number, number, number];
 export const wasmengine_reset: (a: number) => void;
 export const wasmengine_set_multipv: (a: number, b: number) => void;

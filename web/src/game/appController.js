@@ -456,7 +456,7 @@ export class AppController {
     this.engineConfigs = getAllEngineConfigs();
 
     const titaniumDefault = defaultPlayerAiSettings(
-      PlayerType.TitaniumV17,
+      PlayerType.TitaniumV18,
       this.engineConfigs,
     );
     const humanDefault = defaultPlayerAiSettings(
@@ -465,7 +465,7 @@ export class AppController {
     );
     const persisted = loadPersistedPlaySettings();
     const playDefaults = {
-      players: [PlayerType.Human, PlayerType.TitaniumV17],
+      players: [PlayerType.Human, PlayerType.TitaniumV18],
       playerAiSettings: [humanDefault, { ...titaniumDefault }],
       playerAiSettingsMemory: [{}, {}],
     };
@@ -1041,11 +1041,11 @@ export class AppController {
   restorePersistedPlayMatchup() {
     const persisted = loadPersistedPlaySettings();
     const titaniumDefault = defaultPlayerAiSettings(
-      PlayerType.TitaniumV17,
+      PlayerType.TitaniumV18,
       this.engineConfigs,
     );
     const playDefaults = {
-      players: [PlayerType.Human, PlayerType.TitaniumV17],
+      players: [PlayerType.Human, PlayerType.TitaniumV18],
       playerAiSettings: [null, { ...titaniumDefault }],
       playerAiSettingsMemory: [{}, {}],
     };
@@ -2508,7 +2508,7 @@ export class AppController {
           );
           const catLmrCeiling =
             playerType === PlayerType.TitaniumV16 ||
-            playerType === PlayerType.TitaniumV17
+            playerType === PlayerType.TitaniumV18
               ? resolveCatLmrCeiling(ai)
               : 800;
           const threads = resolveCores(ai);
@@ -3212,7 +3212,7 @@ export class AppController {
       );
       const cat =
         playerType === PlayerType.TitaniumV16 ||
-        playerType === PlayerType.TitaniumV17
+        playerType === PlayerType.TitaniumV18
           ? `|cat${resolveCatLmrCeiling(ai)}`
           : "";
       const cores = `|c${resolveCores(ai)}`;

@@ -358,6 +358,9 @@ export function resolveTitaniumEngineMode(
 ) {
   void aiSettings;
   void engineConfigs;
+  if (playerType === PlayerType.TitaniumV18) {
+    return "titanium-v18";
+  }
   if (playerType === PlayerType.TitaniumV17) {
     return "titanium-v17";
   }
@@ -459,7 +462,7 @@ export function normalizePlayerType(playerType) {
     playerType === "titanium-minimax" ||
     playerType === "titanium-v15-frozen"
   ) {
-    return PlayerType.TitaniumV17;
+    return PlayerType.TitaniumV18;
   }
   // Retired ACE/Quoridor variants migrate to the current Titanium line.
   if (
@@ -470,8 +473,9 @@ export function normalizePlayerType(playerType) {
     playerType === PlayerType.QuoridorV3 ||
     playerType === PlayerType.AceV10
   ) {
-    return PlayerType.TitaniumV17;
+    return PlayerType.TitaniumV18;
   }
+  // Keep TitaniumV17 as a selectable legacy compare target (do not remap to V18).
   return playerType;
 }
 
@@ -581,6 +585,7 @@ export function isTitaniumEngine(playerType, engineConfigs) {
   return (
     playerType === PlayerType.TitaniumV16 ||
     playerType === PlayerType.TitaniumV17 ||
+    playerType === PlayerType.TitaniumV18 ||
     getEngineConfig(playerType, engineConfigs)?.kind === "titanium"
   );
 }

@@ -69,14 +69,19 @@ export class WasmEngine {
   go(movetime_ms: number, _max_nodes: number, max_depth: number, on_progress?: Function | null): string;
   /**
    * `tier`: 3 = CAT 500, 4 = CAT 800, 5 = CAT 1000. Other values use CAT 800.
+   * Legacy Titanium v16 product entry (same search graft as v17/v18).
    */
   constructor(tier: number);
   reset(): void;
   winner(): number;
   /**
-   * Current strongest profile, packaged in the same WASM module as v16.
+   * Legacy website Titanium v17 — frozen NNUE snapshot for comparison vs v18.
    */
   static new_v17(tier: number): WasmEngine;
+  /**
+   * Production Titanium v18 — live NNUE weights (updated by deploy / training).
+   */
+  static new_v18(tier: number): WasmEngine;
   position(moves: string): number;
   make_move(mv: string): boolean;
 }
@@ -116,6 +121,7 @@ export interface InitOutput {
   readonly wasmengine_make_move: (a: number, b: number, c: number) => number;
   readonly wasmengine_new: (a: number) => number;
   readonly wasmengine_new_v17: (a: number) => number;
+  readonly wasmengine_new_v18: (a: number) => number;
   readonly wasmengine_position: (a: number, b: number, c: number) => [number, number, number];
   readonly wasmengine_reset: (a: number) => void;
   readonly wasmengine_set_multipv: (a: number, b: number) => void;

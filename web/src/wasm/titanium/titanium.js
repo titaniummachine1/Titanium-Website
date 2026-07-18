@@ -479,6 +479,7 @@ export class WasmEngine {
     }
     /**
      * `tier`: 3 = CAT 500, 4 = CAT 800, 5 = CAT 1000. Other values use CAT 800.
+     * Legacy Titanium v16 product entry (same search graft as v17/v18).
      * @param {number} tier
      */
     constructor(tier) {
@@ -498,12 +499,21 @@ export class WasmEngine {
         return ret;
     }
     /**
-     * Current strongest profile, packaged in the same WASM module as v16.
+     * Legacy website Titanium v17 — frozen NNUE snapshot for comparison vs v18.
      * @param {number} tier
      * @returns {WasmEngine}
      */
     static new_v17(tier) {
         const ret = wasm.wasmengine_new_v17(tier);
+        return WasmEngine.__wrap(ret);
+    }
+    /**
+     * Production Titanium v18 — live NNUE weights (updated by deploy / training).
+     * @param {number} tier
+     * @returns {WasmEngine}
+     */
+    static new_v18(tier) {
+        const ret = wasm.wasmengine_new_v18(tier);
         return WasmEngine.__wrap(ret);
     }
     /**
@@ -755,7 +765,7 @@ async function __wbg_init(module_or_path, memory) {
     }
 
     if (typeof module_or_path === 'undefined') {
-        module_or_path = new URL('titanium_bg.wasm?v=9faea528dcd78307', import.meta.url);
+        module_or_path = new URL('titanium_bg.wasm?v=2587b79a79407bf9', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
