@@ -3,7 +3,7 @@
  * Streams iterative-deepening progress like Titanium WASM.
  */
 
-import init, { WasmAceEngine, last_panic } from '../wasm/titanium/titanium.js';
+import init, { WasmAceEngine, last_panic } from '../wasm/titanium-v17/titanium.js';
 
 const WASM_THREAD_STACK_SIZE = 4 << 20;
 let engine = null;
