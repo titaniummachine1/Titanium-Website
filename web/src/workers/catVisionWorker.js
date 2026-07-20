@@ -118,6 +118,24 @@ async function handleSnapshot(id, moves) {
   });
 }
 
+async function handleSnapshotV7(id, moves) {
+  await ensureInit();
+  if (!catEngine) {
+    throw new Error('WASM build missing WasmCatEngine export - run npm run build:wasm');
+  }
+  if (typeof catEngine.snapshot_v7 !== 'function') {
+    throw new Error('WASM build missing WasmCatEngine.snapshot_v7 - run npm run build:wasm');
+  }
+  const json = catEngine.snapshot_v7((moves ?? []).join(' '));
+  self.postMessage({
+    type: 'snapshotV7',
+    id,
+    generation: catConfigGeneration,
+    pathBiasPercent,
+    data: JSON.parse(json),
+  });
+}
+
 async function handleLmrSnapshot(id, moves, timeMs, idDepth) {
   await ensureInit();
   if (!catEngine || typeof catEngine.lmr_snapshot !== 'function') {
@@ -160,6 +178,10 @@ self.onmessage = async (event) => {
     }
     if (data.op === 'snapshot') {
       await handleSnapshot(id, data.moves ?? []);
+      return;
+    }
+    if (data.op === 'v7' || data.op === 'snapshotV7') {
+      await handleSnapshotV7(id, data.moves ?? []);
       return;
     }
     if (data.op === 'lmr') {

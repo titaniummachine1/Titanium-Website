@@ -177,57 +177,6 @@ export function wbg_rayon_start_worker(receiver) {
     wasm.wbg_rayon_start_worker(receiver);
 }
 
-const WasmAceEngineFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_wasmaceengine_free(ptr >>> 0, 1));
-/**
- * ACE Rust port in WASM — one-shot genmove from a move list (GitHub Pages; no native binary).
- */
-export class WasmAceEngine {
-
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        WasmAceEngineFinalization.unregister(this);
-        return ptr;
-    }
-
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_wasmaceengine_free(ptr, 0);
-    }
-    constructor() {
-        const ret = wasm.wasmaceengine_new();
-        this.__wbg_ptr = ret >>> 0;
-        WasmAceEngineFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-    /**
-     * @param {string} moves
-     * @param {number} movetime_ms
-     * @param {number} max_depth
-     * @param {string} engine_mode
-     * @param {Function | null} [on_progress]
-     * @returns {string}
-     */
-    genmove(moves, movetime_ms, max_depth, engine_mode, on_progress) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const ptr0 = passStringToWasm0(moves, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(engine_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmaceengine_genmove(this.__wbg_ptr, ptr0, len0, movetime_ms, max_depth, ptr1, len1, isLikeNone(on_progress) ? 0 : addToExternrefTable0(on_progress));
-            deferred3_0 = ret[0];
-            deferred3_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-        }
-    }
-}
-
 const WasmCatEngineFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmcatengine_free(ptr >>> 0, 1));
@@ -249,6 +198,27 @@ export class WasmCatEngine {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_wasmcatengine_free(ptr, 0);
+    }
+    /**
+     * CAT v7 Plane 4 JSON (final reinforced attention) for the website overlay.
+     *
+     * Diagnostic-only: not wired into search. Reuses the warm board sync.
+     * @param {string} moves
+     * @returns {string}
+     */
+    snapshot_v7(moves) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(moves, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmcatengine_snapshot_v7(this.__wbg_ptr, ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
     }
     /**
      * LMR plan JSON — `lmr_aggression_percent` is viz tuning, -500..150.
@@ -714,7 +684,7 @@ function __wbg_get_imports() {
 }
 
 function __wbg_init_memory(imports, memory) {
-    imports.wbg.memory = memory || new WebAssembly.Memory({initial:58,maximum:4096,shared:true});
+    imports.wbg.memory = memory || new WebAssembly.Memory({initial:53,maximum:4096,shared:true});
 }
 
 function __wbg_finalize_init(instance, module, thread_stack_size) {
@@ -765,7 +735,7 @@ async function __wbg_init(module_or_path, memory) {
     }
 
     if (typeof module_or_path === 'undefined') {
-        module_or_path = new URL('titanium_bg.wasm?v=2587b79a79407bf9', import.meta.url);
+        module_or_path = new URL('titanium_bg.wasm?v=842ed9095ffbacec', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

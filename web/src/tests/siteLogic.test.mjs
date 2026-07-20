@@ -3,6 +3,9 @@
  * Run: node src/tests/siteLogic.test.mjs
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import {
   resolveLiveBestMoveKey,
   resolvePlayNowMoveKey,
@@ -80,6 +83,75 @@ function assertEqual(a, b, message) {
     `${message}: expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`,
   );
 }
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const catControllerSrc = readFileSync(
+  path.resolve(testDir, "../game/appController.js"),
+  "utf8",
+);
+const catBoardSrc = readFileSync(path.resolve(testDir, "../ui/boardView.js"), "utf8");
+const catHeatmapSrc = readFileSync(path.resolve(testDir, "../lib/catHeatmap.js"), "utf8");
+const catDialogSrc = readFileSync(path.resolve(testDir, "../ui/playerDialog.js"), "utf8");
+const catPanelSrc = readFileSync(
+  path.resolve(testDir, "../ui/visionTuningPanel.js"),
+  "utf8",
+);
+
+console.log("\n[cat-v7] normalized square attention scale");
+assert(
+  catControllerSrc.includes("const squares = isV7 ? data.catAttention ?? [] : data.squares ?? []"),
+  "CAT source branch selects v7 catAttention or current squares",
+);
+assert(
+  catControllerSrc.includes('const valueScale = isV7 ? "u8" : "cm";'),
+  "CAT v7 uses normalized u8 while current uses corridor cm",
+);
+assert(
+  catHeatmapSrc.includes("normalizeCatSnapshot(data, source = 'v7')") &&
+    catHeatmapSrc.includes("data.squares.length !== 81"),
+  "CAT payload validation remains source-specific",
+);
+assert(
+  catBoardSrc.includes("cold: 1") &&
+    catBoardSrc.includes("hot: 178") &&
+    catBoardSrc.includes("max: 255"),
+  "CAT board uses fixed normalized u8 scale 1/178/255",
+);
+assert(
+  catHeatmapSrc.includes("scale.valueScale === 'u8'") &&
+    catBoardSrc.includes("CAT impact ${title}"),
+  "CAT u8 scale reaches visible normalized square overlays and titles",
+);
+assert(
+  catControllerSrc.includes("catVisionSource: normalizeCatSource") &&
+    catControllerSrc.includes("setCatVisionSource") &&
+    catControllerSrc.includes("catVisionSource)}|"),
+  "CAT source setting and source-aware position key are wired",
+);
+assert(
+  catHeatmapSrc.includes("fetchCatSnapshot(algebraicMoves, { source = 'v7' } = {})") &&
+    catHeatmapSrc.includes("const op = normalizedSource === 'v7' ? 'snapshotV7' : 'snapshot'") &&
+    catHeatmapSrc.includes("wasmCatEngine[method]"),
+  "CAT fetch branches worker and WASM operations by source",
+);
+assert(
+  catControllerSrc.includes('const squares = isV7 ? data.catAttention ?? [] : data.squares ?? [];') &&
+    catControllerSrc.includes('valueScale = isV7 ? "u8" : "cm"') &&
+    catControllerSrc.includes('catVersion: isV7 ? "v7" : "current"'),
+  "CAT v7 uses u8 attention while current uses production corridor squares",
+);
+assert(
+  catDialogSrc.includes('data-cat-source="') &&
+    catDialogSrc.includes("Current CAT") &&
+    catDialogSrc.includes("CAT v7") &&
+    catDialogSrc.includes("pressure-only Lee bonus"),
+  "player dialog exposes source toggle and explains pressure-only 0.25",
+);
+assert(
+  catPanelSrc.includes("data-cat-vision-source") &&
+    catPanelSrc.includes("pressure-only Lee bonus"),
+  "development vision panel exposes source toggle and explanation",
+);
 
 console.log("\n[liveBestMove] PV extraction");
 assertEqual(

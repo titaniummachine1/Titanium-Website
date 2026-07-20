@@ -28,6 +28,7 @@ import {
   LMR_AGGRESSION_DEFAULT,
   fetchCatSnapshot,
   indexCatWalls,
+  normalizeCatSource,
   prewarmCatSnapshot,
   applyVisionTuning,
   getVisionTuning,
@@ -100,7 +101,7 @@ import {
 
 const DEFAULT_CAT_VISION_SETTINGS = Object.freeze({
   showSquares: true,
-  showWalls: false,
+  showWalls: true,
   squareOpacity: 1,
   wallOpacity: 1,
 });
@@ -484,6 +485,7 @@ export class AppController {
       displayEvalBar: restored.displayEvalBar !== false,
       showCatVision: false,
       catVision: { ...DEFAULT_CAT_VISION_SETTINGS },
+      catVisionSource: normalizeCatSource(restored.catVisionSource),
       showLmrVision: false,
       lmrVisionShallow: true,
       pathBiasPercent: visionTuning.pathBiasPercent,
@@ -2232,6 +2234,23 @@ export class AppController {
     this.onChange?.();
   }
 
+  setCatVisionSource(source = "v7") {
+    const next = normalizeCatSource(source);
+    if (this.settings.catVisionSource === next) {
+      return;
+    }
+    this.settings.catVisionSource = next;
+    this._catFetchSeq += 1;
+    this._catMovesKey = null;
+    this.catViz = null;
+    this.catVizError = null;
+    this.catVizLoading = false;
+    if (this.settings.showCatVision) {
+      this.refreshCatViz();
+    }
+    this.onChange?.();
+  }
+
   updateCatVisionSettings(patch) {
     this.settings.catVision = {
       ...DEFAULT_CAT_VISION_SETTINGS,
@@ -2553,7 +2572,9 @@ export class AppController {
   }
 
   catMovesKey() {
-    return this.session.actions.map((action) => toAlgebraic(action)).join("|");
+    return `${normalizeCatSource(this.settings.catVisionSource)}|${this.session.actions
+      .map((action) => toAlgebraic(action))
+      .join("|")}`;
   }
 
   currentPositionKey() {
@@ -2579,7 +2600,9 @@ export class AppController {
 
   prewarmCatVision() {
     const moves = this.session.actions.map((action) => toAlgebraic(action));
-    void prewarmCatSnapshot(moves);
+    void prewarmCatSnapshot(moves, {
+      source: normalizeCatSource(this.settings.catVisionSource),
+    });
   }
 
   /** Cold-start WASM + thread pool before first move (UCI-style isready). */
@@ -2869,12 +2892,15 @@ export class AppController {
     this.onChange?.();
 
     const moves = this.session.actions.map((action) => toAlgebraic(action));
+    const source = normalizeCatSource(this.settings.catVisionSource);
     try {
-      const data = await fetchCatSnapshot(moves);
+      const data = await fetchCatSnapshot(moves, { source });
       if (seq !== this._catFetchSeq) {
         return;
       }
-      const squares = data.squares ?? [];
+      const isV7 = source === "v7";
+      const squares = isV7 ? data.catAttention ?? [] : data.squares ?? [];
+      const valueScale = isV7 ? "u8" : "cm";
       const reachableRaw = data.reachable ?? [];
       const reachable =
         reachableRaw.length === 81
@@ -2884,6 +2910,10 @@ export class AppController {
 
       this.catViz = {
         squares,
+        valueScale,
+        cold: isV7 ? 1 : (data.coldCm ?? 1),
+        hot: isV7 ? 178 : (data.hotCm ?? 700),
+        max: isV7 ? 255 : (data.maxCm ?? 1000),
         reachable,
         wallIndex: indexCatWalls(walls),
         whiteDist: data.whiteDist,
@@ -2891,11 +2921,17 @@ export class AppController {
         hotCm: data.hotCm ?? 700,
         coldCm: data.coldCm ?? 1,
         maxCm: data.maxCm ?? 1000,
-        catVersion: data.catVersion ?? "v7",
-        catSchema: data.schema ?? null,
-        catPlane: data.plane ?? 4,
-        catPlaneName: data.planeName ?? "final reinforced CAT attention",
-        wallVision: data.wallVision === true,
+        catSource: source,
+        catVersion: isV7 ? "v7" : "current",
+        catSchema: isV7 ? (data.schema ?? null) : null,
+        catPlane: isV7 ? (data.plane ?? 4) : null,
+        catPlaneName: isV7
+          ? (data.planeName ?? "final reinforced CAT attention")
+          : "production corridor CAT",
+        wallVision: isV7 ? false : data.wallVision !== false,
+        pressure: isV7 ? data.pressure : null,
+        pathP1: isV7 ? data.pathP1 : null,
+        pathP2: isV7 ? data.pathP2 : null,
         skippedSquares:
           data.skippedSquares ?? reachable?.filter((r) => !r).length ?? 0,
         skippedWallCount: 0,

@@ -21,14 +21,6 @@ export function wasm_build_identity_json(): string;
 export function initThreadPool(num_threads: number): Promise<any>;
 export function wbg_rayon_start_worker(receiver: number): void;
 /**
- * ACE Rust port in WASM — one-shot genmove from a move list (GitHub Pages; no native binary).
- */
-export class WasmAceEngine {
-  free(): void;
-  constructor();
-  genmove(moves: string, movetime_ms: number, max_depth: number, engine_mode: string, on_progress?: Function | null): string;
-}
-/**
  * Warm, single-purpose CAT instance for the overlay worker. Holds the board
  * across plies: forward play applies only the appended move(s); undo/jump
  * rebuilds from the longest common prefix. No search, no thread pool — its only
@@ -36,6 +28,12 @@ export class WasmAceEngine {
  */
 export class WasmCatEngine {
   free(): void;
+  /**
+   * CAT v7 Plane 4 JSON (final reinforced attention) for the website overlay.
+   *
+   * Diagnostic-only: not wired into search. Reuses the warm board sync.
+   */
+  snapshot_v7(moves: string): string;
   /**
    * LMR plan JSON — `lmr_aggression_percent` is viz tuning, -500..150.
    */
@@ -96,20 +94,19 @@ export class wbg_rayon_PoolBuilder {
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
-  readonly __wbg_wasmaceengine_free: (a: number, b: number) => void;
   readonly __wbg_wasmcatengine_free: (a: number, b: number) => void;
   readonly __wbg_wasmengine_free: (a: number, b: number) => void;
   readonly cat_snapshot: (a: number, b: number) => [number, number];
   readonly helper_starts: () => number;
   readonly last_panic: () => [number, number];
   readonly wasm_build_identity_json: () => [number, number];
-  readonly wasmaceengine_genmove: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
   readonly wasmcatengine_default_cat_distance_bias_bp: () => number;
   readonly wasmcatengine_get_cat_distance_bias_bp: (a: number) => number;
   readonly wasmcatengine_lmr_snapshot: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
   readonly wasmcatengine_new: () => number;
   readonly wasmcatengine_set_cat_distance_bias_bp: (a: number, b: number) => void;
   readonly wasmcatengine_snapshot: (a: number, b: number, c: number) => [number, number];
+  readonly wasmcatengine_snapshot_v7: (a: number, b: number, c: number) => [number, number];
   readonly wasmengine_engine_mode: (a: number) => [number, number];
   readonly wasmengine_go: (a: number, b: number, c: number, d: number, e: number) => [number, number];
   readonly wasmengine_go_threads: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
@@ -127,7 +124,6 @@ export interface InitOutput {
   readonly wasmengine_set_multipv: (a: number, b: number) => void;
   readonly wasmengine_set_root_scores: (a: number, b: number) => void;
   readonly wasmengine_winner: (a: number) => number;
-  readonly wasmaceengine_new: () => number;
   readonly __wbg_wbg_rayon_poolbuilder_free: (a: number, b: number) => void;
   readonly initThreadPool: (a: number) => any;
   readonly wbg_rayon_poolbuilder_build: (a: number) => void;

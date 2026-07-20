@@ -56,8 +56,17 @@ assert(dialogSrc.includes('renderGorisansonTierControls'), 'gorisanson tier in d
 assert(dialogSrc.includes('changePlayers'), 'settings apply via changePlayers');
 assert(dialogSrc.includes('Vision overlay'), 'vision mode in dialog');
 assert(dialogSrc.includes('data-vision-mode'), 'Off/CAT/LMR mode switch in dialog');
+assert(dialogSrc.includes('data-cat-source'), 'Current CAT/CAT v7 source toggle in dialog');
+assert(dialogSrc.includes('Current CAT') && dialogSrc.includes('CAT v7'), 'CAT source labels');
+assert(dialogSrc.includes('pressure-only Lee bonus'), 'v7 pressure-only 0.25 explanation');
+assert(dialogSrc.includes('setCatVisionSource'), 'dialog wires CAT source changes');
 assert(dialogSrc.includes('lmrAggressionPercent'), 'LMR tuning slider in dialog');
 assert(!dialogSrc.includes('CAT path tilt'), 'CAT path tilt slider removed from dialog');
+
+console.log('\n[ui] development vision panel owns CAT source toggle');
+const visionPanelSrc = readSrc('ui/visionTuningPanel.js');
+assert(visionPanelSrc.includes('data-cat-vision-source'), 'CAT source toggle in vision panel');
+assert(visionPanelSrc.includes('pressure-only Lee bonus'), 'panel explains v7 pressure-only 0.25');
 
 console.log('\n[ui] live setting restart preserved in controller');
 const controllerSrc = readSrc('game/appController.js');

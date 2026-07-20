@@ -142,6 +142,10 @@ function visionModeFromSettings(settings = {}) {
   return "off";
 }
 
+function catVisionSourceFromSettings(settings = {}) {
+  return settings.catVisionSource === "current" ? "current" : "v7";
+}
+
 /** Classify a player type into a dialog control category. */
 function engineCategory(playerType) {
   const configs = getAllEngineConfigs();
@@ -298,6 +302,7 @@ export function openPlayerDialog(state, controller, { mode = "newgame" } = {}) {
     analysisWallClock: analysisEngine.wallClockSeconds ?? 5,
     analysisCores: analysisEngine.cores ?? defaultAnalysisThreadCount(),
     visionMode: visionModeFromSettings(state.settings),
+    catVisionSource: catVisionSourceFromSettings(state.settings),
     lmrVisionShallow: state.settings?.lmrVisionShallow !== false,
     catVision: {
       ...DEFAULT_CAT_VISION,
@@ -652,14 +657,55 @@ function renderLmrSourceToggle(selections) {
   );
 }
 
+function renderCatSourceToggle(selections) {
+  const source = selections.catVisionSource === "current" ? "current" : "v7";
+  const btn = (id, label) =>
+    '<button type="button" class="btn ' +
+    (source === id ? "btn--primary" : "btn--ghost") +
+    ' btn--small btn--fit" data-cat-source="' +
+    id +
+    '">' +
+    escHtml(label) +
+    "</button>";
+  return (
+    '<div class="player-dialog__field player-dialog__field--compact">' +
+    '<label class="player-dialog__label">CAT source</label>' +
+    '<div class="player-dialog__preset-group">' +
+    btn("current", "Current CAT") +
+    btn("v7", "CAT v7") +
+    "</div>" +
+    "</div>"
+  );
+}
+
+function renderCatVisionHint(source) {
+  if (source === "current") {
+    return (
+      '<p class="player-dialog__hint">' +
+      "Current CAT: production corridor CAT used by search/LMR. Wall overlays are enabled from the production payload." +
+      "</p>"
+    );
+  }
+  return (
+    '<p class="player-dialog__hint">' +
+    "CAT v7 · Plane 4: research-only final attention, normalized 0..1 via u8. " +
+    "A non-path 0.25 is pressure-only Lee bonus (max 0.25), not path attention. " +
+    "Lee pressure is min-max normalized over nonzero squares then scaled to 0.25, so max-pressure or all-equal pressure becomes exactly 0.25; sealed late-game boards can paint many such squares by design, not a UI bug. Walls are disabled." +
+    "</p>"
+  );
+}
+
 function renderVisionDetail(selections) {
   if (selections.visionMode === "cat") {
+    const source = catVisionSourceFromSettings(selections);
     const catVision = {
       ...DEFAULT_CAT_VISION,
       ...(selections.catVision ?? {}),
     };
     return (
       '<div class="player-dialog__vision-detail">' +
+      renderCatSourceToggle(selections) +
+      renderCatVisionHint(source) +
       '<label class="player-dialog__option-row">' +
       '<input type="checkbox" data-cat-setting="showSquares"' +
       (catVision.showSquares ? " checked" : "") +
@@ -668,9 +714,10 @@ function renderVisionDetail(selections) {
       "</label>" +
       '<label class="player-dialog__option-row">' +
       '<input type="checkbox" data-cat-setting="showWalls"' +
-      (catVision.showWalls ? " checked" : "") +
+      (source === "v7" ? " disabled" : "") +
+      (source === "current" && catVision.showWalls ? " checked" : "") +
       ">" +
-      " Walls" +
+      (source === "v7" ? " Walls (disabled for v7)" : " Walls") +
       "</label>" +
       renderVisionSlider(
         "squareOpacity",
@@ -1086,6 +1133,18 @@ function wireVisionSettings(overlay, selections, controller) {
 }
 
 function wireVisionDetail(overlay, selections, controller) {
+  overlay.querySelectorAll("[data-cat-source]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selections.catVisionSource = btn.dataset.catSource === "current" ? "current" : "v7";
+      controller.setCatVisionSource?.(selections.catVisionSource);
+      const host = overlay.querySelector("[data-vision-detail]");
+      if (host) {
+        host.innerHTML = renderVisionDetail(selections);
+        wireVisionDetail(overlay, selections, controller);
+      }
+    });
+  });
+
   overlay.querySelectorAll("[data-lmr-source]").forEach((btn) => {
     btn.addEventListener("click", () => {
       selections.lmrVisionShallow = btn.dataset.lmrSource !== "live";
@@ -1407,6 +1466,7 @@ function applyVisionSettings(selections, controller) {
     ...DEFAULT_CAT_VISION,
     ...(selections.catVision ?? {}),
   });
+  controller.setCatVisionSource?.(catVisionSourceFromSettings(selections));
   controller.setPathBiasPercent?.(selections.pathBiasPercent ?? 0);
   controller.setLmrAggressionPercent?.(
     selections.lmrAggressionPercent ?? LMR_AGGRESSION_DEFAULT,

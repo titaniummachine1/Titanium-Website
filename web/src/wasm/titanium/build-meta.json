@@ -1,13 +1,12 @@
-﻿{
-    "engine_version":  "titanium-v18",
-    "note":  "v16+v17 legacy selectors + v18 live; v17 NNUE frozen at website-era epoch_0003",
-    "build_timestamp":  "2026-07-18T10:27:13.905Z",
-    "wasm_threads":  true,
-    "wasm_sha256":  "2587b79a79407bf9cf4dabd2da91cdc412fc9470ea9c1f1d614fc90243f7c290",
-    "features":  "wasm-threads,embed-tables",
-    "wasm_bytes":  3094586,
-    "weights_live_sha256":  "869ad228cfea8bb8964d98d05d6cf5e67a21b27661a36259a3976f60d486be56",
-    "weights_v17_sha256":  "869ad228cfea8bb8964d98d05d6cf5e67a21b27661a36259a3976f60d486be56",
-    "git_commit":  "5ee2ed5f762fbff2bcbbc7bb5253e23ad0033841",
-    "lut_mode":  "embedded"
+{
+  "engine_version": "titanium-v18",
+  "git_commit": "2ea9b286f9d1135b9640df89a275ce3013aa77c3",
+  "build_timestamp": "2026-07-20T00:33:24.880Z",
+  "wasm_sha256": "842ed9095ffbacec0f8ab4751b1bebae3fd4bf18ce5359ab43e77ef41495131c",
+  "wasm_bytes": 2731384,
+  "weights_live_sha256": "869ad228cfea8bb8964d98d05d6cf5e67a21b27661a36259a3976f60d486be56",
+  "features": "wasm-threads,embed-tables",
+  "wasm_threads": true,
+  "lut_mode": "embedded",
+  "engine_dir": "C:\\gitProjects\\Quoridor best AI\\engine"
 }

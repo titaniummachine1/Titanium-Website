@@ -2555,8 +2555,11 @@ body {
   border-radius: 14px;
   width: 100%;
   max-width: 420px;
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .load-dialog__header {
@@ -2602,6 +2605,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .load-dialog__hint {
@@ -2641,6 +2646,9 @@ body {
   margin-top: 6px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .load-dialog__recent-heading {
@@ -2675,8 +2683,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: min(32rem, 50vh);
+  /* Same scroll budget as `.moves-card__list` so 100 games stay on-screen. */
+  max-height: 260px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
 }
 
 .load-dialog__recent-empty {

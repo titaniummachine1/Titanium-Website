@@ -8,7 +8,9 @@ function visionTuningStructureKey(state) {
   if (s.uiMode === 'replay') {
     return '';
   }
-  return s.showCatVision ? 'cat' : 'lmr';
+  return s.showCatVision
+    ? `cat-${s.catVisionSource === 'current' ? 'current' : 'v7'}`
+    : 'lmr';
 }
 
 function syncVisionTuningValues(host, state) {
@@ -28,20 +30,34 @@ export function renderVisionTuningPanelHtml(state) {
   if (settings.uiMode === 'replay') {
     return '';
   }
+  const source = settings.catVisionSource === 'current' ? 'current' : 'v7';
   const hint = settings.showLmrVision
     ? 'Fixed 10-ply LMR plan: v15 baseline plus depth-1 dead-tail/backward overrides.'
-    : 'CAT path vision uses the engine heatmap for this position.';
+    : source === 'current'
+      ? 'Current CAT: production corridor CAT used by search/LMR; wall overlays come from the production payload.'
+      : 'CAT v7 · Plane 4: research-only normalized 0..1 via u8. Non-path 0.25 is pressure-only Lee bonus (max 0.25), not path attention. Lee pressure is min-max normalized over nonzero squares then scaled to 0.25, so max-pressure or all-equal pressure becomes exactly 0.25; sealed late-game boards can paint many such squares by design, not a UI bug. Walls disabled.';
+  const sourceToggle =
+    settings.showLmrVision
+      ? ''
+      : `<div class="vision-tuning__sources" role="group" aria-label="CAT source">
+          <button type="button" class="btn btn--small ${source === 'current' ? 'btn--primary' : 'btn--ghost'}" data-cat-vision-source="current">Current CAT</button>
+          <button type="button" class="btn btn--small ${source === 'v7' ? 'btn--primary' : 'btn--ghost'}" data-cat-vision-source="v7">CAT v7</button>
+        </div>`;
 
   return `
     <div class="vision-tuning" data-vision-tuning>
       <p class="vision-tuning__title">Vision tuning <span class="vision-tuning__badge">local only</span></p>
       <p class="vision-tuning__hint">${hint}</p>
+      ${sourceToggle}
     </div>`;
 }
 
 function wireVisionTuningPanel(host, controller) {
-  void host;
-  void controller;
+  host.querySelectorAll('[data-cat-vision-source]').forEach((button) => {
+    button.addEventListener('click', () => {
+      controller.setCatVisionSource?.(button.dataset.catVisionSource);
+    });
+  });
 }
 
 /** Mount or refresh the live tuning strip above the board controls. Dev builds only. */

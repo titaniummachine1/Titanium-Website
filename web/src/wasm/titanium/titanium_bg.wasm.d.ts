@@ -1,19 +1,18 @@
 /* tslint:disable */
 /* eslint-disable */
-export const __wbg_wasmaceengine_free: (a: number, b: number) => void;
 export const __wbg_wasmcatengine_free: (a: number, b: number) => void;
 export const __wbg_wasmengine_free: (a: number, b: number) => void;
 export const cat_snapshot: (a: number, b: number) => [number, number];
 export const helper_starts: () => number;
 export const last_panic: () => [number, number];
 export const wasm_build_identity_json: () => [number, number];
-export const wasmaceengine_genmove: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const wasmcatengine_default_cat_distance_bias_bp: () => number;
 export const wasmcatengine_get_cat_distance_bias_bp: (a: number) => number;
 export const wasmcatengine_lmr_snapshot: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const wasmcatengine_new: () => number;
 export const wasmcatengine_set_cat_distance_bias_bp: (a: number, b: number) => void;
 export const wasmcatengine_snapshot: (a: number, b: number, c: number) => [number, number];
+export const wasmcatengine_snapshot_v7: (a: number, b: number, c: number) => [number, number];
 export const wasmengine_engine_mode: (a: number) => [number, number];
 export const wasmengine_go: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const wasmengine_go_threads: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
@@ -31,7 +30,6 @@ export const wasmengine_reset: (a: number) => void;
 export const wasmengine_set_multipv: (a: number, b: number) => void;
 export const wasmengine_set_root_scores: (a: number, b: number) => void;
 export const wasmengine_winner: (a: number) => number;
-export const wasmaceengine_new: () => number;
 export const __wbg_wbg_rayon_poolbuilder_free: (a: number, b: number) => void;
 export const initThreadPool: (a: number) => any;
 export const wbg_rayon_poolbuilder_build: (a: number) => void;

@@ -1,10 +1,13 @@
-/** CAT v3 heat → subtle board overlays (never solid black bars on walls). */
+/** CAT v7 Plane 4 heat → board overlays (final reinforced attention). */
 
 import CatVisionWorker from '../workers/catVisionWorker.js?worker';
 
 const VISION_TUNING_KEY = 'quoridor-vision-tuning-v1';
+/** Must match engine `CAT_V7_PLANE4_SCHEMA`. */
+export const CAT_V7_PLANE4_SCHEMA = 'cat-v7-plane4-v1';
 
 let wasmCatInitPromise = null;
+let wasmCatEngine = null;
 let catWorker = null;
 let catWorkerRequestId = 1;
 let catWorkerReadyPromise = null;
@@ -94,13 +97,49 @@ export function applyVisionTuning(patch = {}, { bumpGeneration = true } = {}) {
   return { ...visionTuning };
 }
 
-function catMovesKey(algebraicMoves) {
+export function normalizeCatSource(source) {
+  return source === 'current' ? 'current' : 'v7';
+}
+
+function catMovesKey(algebraicMoves, source = 'v7') {
+  const normalizedSource = normalizeCatSource(source);
   return [
+    normalizedSource,
     (algebraicMoves ?? []).join('|'),
     `pb${visionTuning.pathBiasPercent}`,
     `la${visionTuning.lmrAggressionPercent}`,
     `g${visionTuning.generation}`,
   ].join('|');
+}
+
+/** Reject legacy CAT payloads so they cannot be labeled or cached as v7. */
+export function assertCatV7Plane4(data) {
+  if (
+    !data ||
+    data.schema !== CAT_V7_PLANE4_SCHEMA ||
+    data.catVersion !== 'v7' ||
+    Number(data.plane) !== 4
+  ) {
+    throw new Error(
+      `CAT Vision requires v7 Plane 4 (${CAT_V7_PLANE4_SCHEMA}). Rebuild WASM with npm run build:wasm`,
+    );
+  }
+  if (!Array.isArray(data.squares) || data.squares.length !== 81) {
+    throw new Error('CAT v7 Plane 4 snapshot missing 81-square attention array');
+  }
+  return data;
+}
+
+/** Validate and preserve the payload shape selected by the caller. */
+export function normalizeCatSnapshot(data, source = 'v7') {
+  const normalizedSource = normalizeCatSource(source);
+  if (normalizedSource === 'v7') {
+    return assertCatV7Plane4(data);
+  }
+  if (!data || !Array.isArray(data.squares) || data.squares.length !== 81) {
+    throw new Error('Current CAT snapshot missing 81-square production corridor array');
+  }
+  return data;
 }
 
 async function pushVisionConfigToWorker() {
@@ -245,10 +284,12 @@ async function ensureCatWorkerReady() {
   return catWorkerReadyPromise;
 }
 
-async function fetchCatSnapshotFromWorker(algebraicMoves) {
+async function fetchCatSnapshotFromWorker(algebraicMoves, source = 'v7') {
   await ensureCatWorkerReady();
-  const result = await postCatWorkerMessage('snapshot', { moves: algebraicMoves ?? [] }, 30_000);
-  return result.data;
+  const normalizedSource = normalizeCatSource(source);
+  const op = normalizedSource === 'v7' ? 'snapshotV7' : 'snapshot';
+  const result = await postCatWorkerMessage(op, { moves: algebraicMoves ?? [] }, 30_000);
+  return normalizeCatSnapshot(result.data, normalizedSource);
 }
 
 /** LMR plan via the same warm CAT engine (no server needed — works on Pages). */
@@ -266,18 +307,28 @@ export async function fetchLmrFromWorker(algebraicMoves, timeSec = 10, idDepth =
   return result.data;
 }
 
-async function fetchCatSnapshotFromWasm(algebraicMoves) {
+async function fetchCatSnapshotFromWasm(algebraicMoves, source = 'v7') {
   if (!wasmCatInitPromise) {
     wasmCatInitPromise = import('../wasm/titanium/titanium.js').then(async (mod) => {
       await mod.default({ thread_stack_size: WASM_THREAD_STACK_SIZE });
+      if (typeof mod.WasmCatEngine !== 'function') {
+        throw new Error('WASM build missing WasmCatEngine — run npm run build:wasm');
+      }
+      wasmCatEngine = new mod.WasmCatEngine();
       return mod;
     });
   }
-  const mod = await wasmCatInitPromise;
-  if (typeof mod.cat_snapshot !== 'function') {
-    throw new Error('WASM build missing cat_snapshot export — run npm run build:wasm');
+  await wasmCatInitPromise;
+  const normalizedSource = normalizeCatSource(source);
+  const method =
+    normalizedSource === 'v7' ? 'snapshot_v7' : 'snapshot';
+  if (!wasmCatEngine || typeof wasmCatEngine[method] !== 'function') {
+    throw new Error(`WASM build missing WasmCatEngine.${method} — run npm run build:wasm`);
   }
-  return JSON.parse(mod.cat_snapshot((algebraicMoves ?? []).join(' ')));
+  return normalizeCatSnapshot(
+    JSON.parse(wasmCatEngine[method]((algebraicMoves ?? []).join(' '))),
+    normalizedSource,
+  );
 }
 
 /** Unreachable sealed square — only case that gets a dark skip overlay. */
@@ -291,8 +342,7 @@ const DEFAULT_HOT_CM = 160;
 const DEFAULT_MAX_CM = 240;
 
 // Fixed normalized position of the hot threshold on the color ramp.
-// The caller chooses the scale; boardView uses current-position maxima so the
-// strongest visible CAT scores in this position actually pop.
+// The caller supplies the value scale; v7 square attention uses a fixed u8 scale.
 
 const HOT_ANCHOR_T = 0.55;
 
@@ -305,22 +355,35 @@ function heatColorParts(heat, scale = {}) {
   return { t, hue, sat, light };
 }
 
-/**
- * CAT heat -> normalized 0..1 ramp position. The UI can pass `coldCm: 0`
- * to show every positive impact while choosing whether the max is fixed or
- * current-position relative.
- */
+function resolveCatHeatScale(scale = {}) {
+  const isU8 = scale.valueScale === 'u8';
+  const cold = isU8
+    ? (scale.cold ?? 1)
+    : (scale.cold ?? scale.coldCm ?? DEFAULT_COLD_CM);
+  const hot = isU8
+    ? (scale.hot ?? 178)
+    : (scale.hot ?? scale.hotCm ?? DEFAULT_HOT_CM);
+  const max = isU8
+    ? (scale.max ?? 255)
+    : (scale.max ?? scale.maxCm ?? DEFAULT_MAX_CM);
+  return {
+    cold: Number(cold) || 0,
+    hot: Math.max(Number(hot) || 0, (Number(cold) || 0) + 1),
+    max: Math.max(Number(max) || 0, (Number(hot) || 0) + 1),
+  };
+}
+
+/** CAT heat -> normalized 0..1 ramp position for any CAT value scale. */
 export function catHeatT(heat, scale = {}) {
-  const coldCm = scale.coldCm ?? DEFAULT_COLD_CM;
-  const hotCm = Math.max(scale.hotCm ?? DEFAULT_HOT_CM, coldCm + 1);
-  const maxCm = Math.max(scale.maxCm ?? DEFAULT_MAX_CM, hotCm + 1);
-  if (!Number.isFinite(heat) || heat < coldCm) {
+  const { cold, hot, max } = resolveCatHeatScale(scale);
+  const value = Number(heat);
+  if (!Number.isFinite(value) || value < cold) {
     return 0;
   }
-  if (heat >= hotCm) {
-    return HOT_ANCHOR_T + (1 - HOT_ANCHOR_T) * Math.min(1, (heat - hotCm) / (maxCm - hotCm));
+  if (value >= hot) {
+    return HOT_ANCHOR_T + (1 - HOT_ANCHOR_T) * Math.min(1, (value - hot) / (max - hot));
   }
-  return HOT_ANCHOR_T * ((heat - coldCm) / (hotCm - coldCm));
+  return HOT_ANCHOR_T * ((value - cold) / (hot - cold));
 }
 
 /** CAT heat -> color. Positive heat can be rendered faintly; callers choose the scale. */
@@ -328,14 +391,15 @@ export function catSquareOverlay(heat, reachable, scale = {}) {
   if (isSquareSkipped(reachable)) {
     return null;
   }
-  if (!Number.isFinite(heat) || heat <= 0) {
+  const value = Number(heat);
+  if (!Number.isFinite(value) || value <= 0) {
     return null;
   }
-  const coldCm = scale.coldCm ?? DEFAULT_COLD_CM;
-  if (heat < coldCm) {
+  const { cold } = resolveCatHeatScale(scale);
+  if (value < cold) {
     return null;
   }
-  const { t, hue, sat, light } = heatColorParts(heat, scale);
+  const { t, hue, sat, light } = heatColorParts(value, scale);
   // Yellow (55°) → orange → red (0°); alpha ramps so even the coolest warm
   // square reads against the background instead of vanishing into it.
   const alpha = Math.min(0.7, 0.1 + 0.58 * Math.pow(t, 0.9));
@@ -347,20 +411,21 @@ export function catSquareOverlay(heat, reachable, scale = {}) {
 
 /** Fill/glow for wall hints. Low positive scores stay faint; hot walls pop. */
 export function catWallOverlay(heat, scale = {}) {
-  if (!Number.isFinite(heat) || heat <= 0) {
+  const value = Number(heat);
+  if (!Number.isFinite(value) || value <= 0) {
     return {
       fill: 'rgba(120, 115, 105, 0.18)',
       glow: 'rgba(120, 115, 105, 0.08)',
     };
   }
-  const coldCm = scale.coldCm ?? DEFAULT_COLD_CM;
-  if (heat < coldCm) {
+  const { cold } = resolveCatHeatScale(scale);
+  if (value < cold) {
     return {
       fill: 'rgba(120, 115, 105, 0.18)',
       glow: 'rgba(120, 115, 105, 0.08)',
     };
   }
-  const { t, hue, sat, light } = heatColorParts(heat, scale);
+  const { t, hue, sat, light } = heatColorParts(value, scale);
   const fillAlpha = Math.min(0.76, 0.08 + 0.66 * Math.pow(t, 0.95));
   const glowAlpha = Math.min(0.48, 0.035 + 0.4 * Math.pow(t, 1.05));
   return {
@@ -371,34 +436,36 @@ export function catWallOverlay(heat, scale = {}) {
 
 /**
  * @param {string[]} algebraicMoves
+ * @param {{source?: 'current'|'v7'}} options
  */
-export async function fetchCatSnapshot(algebraicMoves) {
-  const key = catMovesKey(algebraicMoves);
+export async function fetchCatSnapshot(algebraicMoves, { source = 'v7' } = {}) {
+  const normalizedSource = normalizeCatSource(source);
+  const key = catMovesKey(algebraicMoves, normalizedSource);
   const cached = cachedCatSnapshot(key);
   if (cached) {
     return cached;
   }
 
   try {
-    return await rememberCatSnapshot(key, fetchCatSnapshotFromWorker(algebraicMoves));
+    return await rememberCatSnapshot(
+      key,
+      fetchCatSnapshotFromWorker(algebraicMoves, normalizedSource),
+    );
   } catch (workerErr) {
     try {
-      return await rememberCatSnapshot(key, fetchCatSnapshotFromWasm(algebraicMoves));
+      return await rememberCatSnapshot(
+        key,
+        fetchCatSnapshotFromWasm(algebraicMoves, normalizedSource),
+      );
     } catch (wasmErr) {
-    // Dev fallback: the Vite proxy shells out to the native binary. It is useful
-    // when wasm failed to initialize, but it is much slower than the in-process
-    // wasm call because it pays process startup on each request.
-      const res = await fetch('/api/titanium/cat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ moves: algebraicMoves }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error ?? `CAT request failed (${res.status})`);
-      }
-      catSnapshotCache.set(key, { data, promise: Promise.resolve(data) });
-      return data;
+      const method = normalizedSource === 'v7' ? 'snapshot_v7' : 'snapshot';
+      const message = [
+        `CAT Vision needs WasmCatEngine.${method} for ${normalizedSource} source.`,
+        'Run `npm run build:wasm` from site/web.',
+        `Worker: ${workerErr?.message ?? workerErr}`,
+        `WASM: ${wasmErr?.message ?? wasmErr}`,
+      ].join(' ');
+      throw new Error(message);
     }
   }
 }
@@ -408,16 +475,21 @@ export async function fetchCatSnapshot(algebraicMoves) {
  * Fire-and-forget callers should catch/log; foreground callers use fetchCatSnapshot.
  *
  * @param {string[]} algebraicMoves
+ * @param {{source?: 'current'|'v7'}} options
  */
-export async function prewarmCatSnapshot(algebraicMoves = []) {
-  const key = catMovesKey(algebraicMoves);
+export async function prewarmCatSnapshot(algebraicMoves = [], { source = 'v7' } = {}) {
+  const normalizedSource = normalizeCatSource(source);
+  const key = catMovesKey(algebraicMoves, normalizedSource);
   const cached = cachedCatSnapshot(key);
   if (cached) {
     await cached;
     return;
   }
   try {
-    await rememberCatSnapshot(key, fetchCatSnapshotFromWorker(algebraicMoves));
+    await rememberCatSnapshot(
+      key,
+      fetchCatSnapshotFromWorker(algebraicMoves, normalizedSource),
+    );
   } catch (err) {
     console.warn('CAT vision worker prewarm failed; foreground request will retry/fallback', err);
   }

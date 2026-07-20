@@ -314,7 +314,8 @@ function catVizFingerprint(viz) {
   }
   const wallKeys = [...(viz.wallIndex?.keys?.() ?? [])].sort().join(',');
   const squareSum = (viz.squares ?? []).reduce((sum, v) => sum + (Number(v) || 0), 0);
-  return `${viz.hotCm}|${viz.coldCm}|${squareSum}|${wallKeys}`;
+  const pressureSum = (viz.pressure ?? []).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  return `${viz.catSource}|${viz.valueScale}|${viz.cold}|${viz.hot}|${viz.max}|${squareSum}|${pressureSum}|${wallKeys}`;
 }
 
 function lmrVizFingerprint(viz) {
@@ -425,6 +426,16 @@ function catHeatLabel(heat) {
   return n > 0 ? String(Math.round(n)) : '';
 }
 
+function catSquareHeatLabel(heat, scale) {
+  const max = Math.max(1, Number(scale?.max) || 255);
+  const impact = clampNumber((Number(heat) || 0) / max, 0, 1);
+  const label = impact.toFixed(2);
+  return {
+    label,
+    title: `${label} (${Math.round(impact * 100)}%)`,
+  };
+}
+
 function resolveCatVisualSettings(state) {
   return {
     showSquares: true,
@@ -436,6 +447,30 @@ function resolveCatVisualSettings(state) {
 }
 
 function catPaintScale(values, fallback = {}) {
+  if (fallback.valueScale === 'u8') {
+    return {
+      valueScale: 'u8',
+      cold: 1,
+      hot: 178,
+      max: 255,
+    };
+  }
+  if (fallback.valueScale === 'milli') {
+    return {
+      valueScale: 'milli',
+      cold: Number(fallback.cold) || Number(fallback.coldCm) || 1,
+      hot: Number(fallback.hot) || Number(fallback.hotCm) || 700,
+      max: Number(fallback.max) || Number(fallback.maxCm) || 1000,
+    };
+  }
+  if (fallback.valueScale === 'cm') {
+    return {
+      valueScale: 'cm',
+      cold: Number(fallback.cold) || Number(fallback.coldCm) || 0,
+      hot: Number(fallback.hot) || Number(fallback.hotCm) || 1,
+      max: Number(fallback.max) || Number(fallback.maxCm) || 2,
+    };
+  }
   let maxHeat = 0;
   for (const value of values ?? []) {
     const heat = Number(value) || 0;
@@ -445,15 +480,17 @@ function catPaintScale(values, fallback = {}) {
   }
   if (maxHeat <= 0) {
     return {
-      coldCm: 0,
-      hotCm: fallback.hotCm ?? 1,
-      maxCm: fallback.maxCm ?? 2,
+      valueScale: 'cm',
+      cold: 0,
+      hot: fallback.hot ?? fallback.hotCm ?? 1,
+      max: fallback.max ?? fallback.maxCm ?? 2,
     };
   }
   return {
-    coldCm: 0,
-    hotCm: Math.max(1, maxHeat * 0.45),
-    maxCm: Math.max(2, maxHeat),
+    valueScale: 'cm',
+    cold: 0,
+    hot: Math.max(1, maxHeat * 0.45),
+    max: Math.max(2, maxHeat),
   };
 }
 
@@ -479,13 +516,23 @@ function addCatWallBar(dom, boardEl, type, viewSlot, entry, scale, visual, maxHe
   dom.catEls.push(el);
 }
 
-function addCatSquareHeat(dom, engineCell, heat, overlay, squareOpacity, isFlipped, maxHeat) {
+function addCatSquareHeat(
+  dom,
+  engineCell,
+  heat,
+  overlay,
+  squareOpacity,
+  isFlipped,
+  maxHeat,
+  scale,
+  pressureOnly = false,
+) {
   const viewCell = viewMove(engineCell, isFlipped);
   const cell = dom.cellEls[viewCell];
   if (!cell) {
     return;
   }
-  const label = catHeatLabel(heat);
+  const { label, title } = catSquareHeatLabel(heat, scale);
   const el = document.createElement('div');
   el.className =
     'cat-move-ghost cat-move-ghost--pawn lmr-move-ghost lmr-move-ghost--pawn cat-vision-ghost cat-vision-ghost--pawn';
@@ -493,7 +540,9 @@ function addCatSquareHeat(dom, engineCell, heat, overlay, squareOpacity, isFlipp
   el.style.opacity = String(clampNumber(overlay.opacity * squareOpacity, 0.05, 1));
   el.style.zIndex = String(visionStackZ(heat, maxHeat));
   el.textContent = label;
-  el.title = `${heat}cm`;
+  el.title = pressureOnly
+    ? `CAT pressure-only ${label} (Lee bonus; max 0.25)`
+    : `CAT impact ${title}`;
   cell.appendChild(el);
   dom.catEls.push(el);
   trackVisionCellZ(dom, cell, heat, maxHeat);
@@ -550,7 +599,12 @@ function renderCatVision(dom, state) {
   const squareScale = catPaintScale(viz.squares, viz);
   const wallScale = catPaintScale(
     [...(viz.wallIndex?.values?.() ?? [])].map((entry) => entry?.heat),
-    viz,
+    {
+      valueScale: 'cm',
+      hot: viz.hotCm,
+      cold: viz.coldCm,
+      max: viz.maxCm,
+    },
   );
   const isFlipped = state.settings.rotateBoard;
   const boardEl = dom.root;
@@ -569,16 +623,32 @@ function renderCatVision(dom, state) {
         continue;
       }
       maxSquareHeat = Math.max(maxSquareHeat, heat);
-      squareEntries.push({ engineCell, heat, overlay });
+      const pressureOnly =
+        viz.catSource === 'v7' &&
+        Number(viz.pressure?.[catIndex] ?? 0) > 0 &&
+        Number(viz.pathP1?.[catIndex] ?? 0) <= 0 &&
+        Number(viz.pathP2?.[catIndex] ?? 0) <= 0;
+      squareEntries.push({ engineCell, heat, overlay, pressureOnly });
     }
     squareEntries.sort((a, b) => a.heat - b.heat);
     const squareOpacity = clampNumber(visual.squareOpacity, 0.05, 1.5);
-    for (const { engineCell, heat, overlay } of squareEntries) {
-      addCatSquareHeat(dom, engineCell, heat, overlay, squareOpacity, isFlipped, maxSquareHeat);
+    const squarePriorityMax = Math.max(1, Number(squareScale.max) || maxSquareHeat);
+    for (const { engineCell, heat, overlay, pressureOnly } of squareEntries) {
+      addCatSquareHeat(
+        dom,
+        engineCell,
+        heat,
+        overlay,
+        squareOpacity,
+        isFlipped,
+        squarePriorityMax,
+        squareScale,
+        pressureOnly,
+      );
     }
   }
 
-  if (visual.showWalls) {
+  if (visual.showWalls && viz.wallVision !== false) {
     const wallEntries = [];
     for (const [alg, entry] of viz.wallIndex ?? []) {
       const heat = Number(entry.heat) || 0;
