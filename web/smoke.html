@@ -3,6 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <title>Titanium engine smoke</title>
+    <script>
+      const isSafariWebKit = () => {
+        const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+        return (
+          (/AppleWebKit/i.test(userAgent) &&
+            !/Chrome|Chromium|Edg|OPR|Firefox/i.test(userAgent)) ||
+          /iPhone|iPad|iPod/i.test(userAgent)
+        );
+      };
+      window.coi = {
+        // Safari/WebKit: credentialless unsupported → require-corp from the start
+        coepCredentialless: () => !isSafariWebKit(),
+        quiet: false,
+      };
+    </script>
     <script src="%BASE_URL%coi-serviceworker.js"></script>
   </head>
   <body>

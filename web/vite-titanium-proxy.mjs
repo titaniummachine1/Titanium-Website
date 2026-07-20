@@ -15,7 +15,7 @@ const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const monorepoRoot = path.resolve(siteRoot, '..');
 const binName = process.platform === 'win32' ? 'titanium.exe' : 'titanium';
 /** Live weights deployed by `training/deploy_trained_ws.py` — override stale embeds in dev. */
-const liveNetWeightsPath = path.join(monorepoRoot, 'engine', 'src', 'titanium', 'net_weights.bin');
+const liveNetWeightsPath = path.join(monorepoRoot, 'engine', 'src', 'weights', 'net_weights.bin');
 /** Live weights override — Titanium live nets; never ACE v13 frozen tiers. */
 function usesLiveNetOverride(engineMode) {
   const mode = String(engineMode ?? '');

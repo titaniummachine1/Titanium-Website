@@ -272,6 +272,21 @@ export const THREADS_HARD_MAX = 8;
 /** Default Titanium / local search thread count. */
 export const DEFAULT_THREAD_COUNT = 8;
 
+/** Keep the default worker fanout conservative on phones and touch devices. */
+export function isConstrainedDevice() {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches
+  ) {
+    return true;
+  }
+  return (
+    typeof navigator !== "undefined" &&
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "")
+  );
+}
+
 /** Max threads in the UI — machine logical CPUs, capped at 8; 8 if unknown. */
 export function threadsSliderMax() {
   if (typeof navigator !== "undefined" && navigator.hardwareConcurrency > 0) {
@@ -285,7 +300,8 @@ export function threadsSliderMax() {
 
 /** Default thread count for new Titanium seats (clamped to slider max). */
 export function defaultThreadCount() {
-  return Math.min(DEFAULT_THREAD_COUNT, threadsSliderMax());
+  const defaultThreads = isConstrainedDevice() ? 4 : DEFAULT_THREAD_COUNT;
+  return Math.min(defaultThreads, threadsSliderMax());
 }
 
 /**

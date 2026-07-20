@@ -8,16 +8,25 @@
       content="Play against the Titanium engine — Ishtar or Ka AI"
     />
     <title>Titanium</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Roboto:wght@400;500;700&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="/src/styles.css" />
     <!-- Enable crossOriginIsolated (SharedArrayBuffer / WASM threads) on GitHub
          Pages, which cannot send COOP/COEP headers. Must run before the app so
          the page reloads under the service worker before the engine loads. -->
+    <script>
+      const isSafariWebKit = () => {
+        const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+        return (
+          (/AppleWebKit/i.test(userAgent) &&
+            !/Chrome|Chromium|Edg|OPR|Firefox/i.test(userAgent)) ||
+          /iPhone|iPad|iPod/i.test(userAgent)
+        );
+      };
+      window.coi = {
+        // Safari/WebKit: credentialless unsupported → require-corp from the start
+        coepCredentialless: () => !isSafariWebKit(),
+        quiet: false,
+      };
+    </script>
     <script src="%BASE_URL%coi-serviceworker.js"></script>
   </head>
   <body>

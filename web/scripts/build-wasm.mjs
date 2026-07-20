@@ -139,7 +139,7 @@ function buildVariant({ engineVersion, outSubdir, wasmFeatures, lutMode }) {
 
   const wasmPath = path.join(outDir, 'titanium_bg.wasm');
   const wasmSha256 = sha256File(wasmPath);
-  const liveWeightsPath = path.join(engineDir, 'src', 'titanium', 'net_weights.bin');
+  const liveWeightsPath = path.join(engineDir, 'src', 'weights', 'net_weights.bin');
   const weightsLiveSha256 = sha256File(liveWeightsPath);
 
   const buildMeta = {

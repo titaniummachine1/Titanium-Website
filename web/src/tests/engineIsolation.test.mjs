@@ -99,7 +99,11 @@ console.log('\n[isolate] WASM workers — dedicated Worker per engine client');
 const tiWasmClient = readSrc('lib/titaniumWasmClient.js');
 const tiWasmWorker = readSrc('workers/titaniumWasmWorker.js');
 const workerBenchSrc = readSrc('bench/workerBench.mjs');
+const coiServiceWorkerSrc = readSrc('../public/coi-serviceworker.js');
+const timeControlSrc = readSrc('lib/timeControl.js');
+const indexHtmlSrc = readFileSync(path.resolve(WEB_SRC, '../index.html'), 'utf8');
 const benchHtmlSrc = readFileSync(path.resolve(WEB_SRC, '../bench.html'), 'utf8');
+const smokeHtmlSrc = readFileSync(path.resolve(WEB_SRC, '../smoke.html'), 'utf8');
 const viteConfigSrc = readFileSync(path.resolve(WEB_SRC, '../vite.config.js'), 'utf8');
 const aceWasmClient = readSrc('lib/aceRustWasmClient.js');
 assert(
@@ -125,6 +129,40 @@ assert(
 assert(
   tiWasmWorker.includes('initThreadPool') && tiWasmWorker.includes('crossOriginIsolated'),
   'titanium WASM worker initializes real wasm thread pool when exported',
+);
+assert(
+  coiServiceWorkerSrc.includes('coiCoepHasFailed') &&
+    coiServiceWorkerSrc.includes('coepdegrade') &&
+    coiServiceWorkerSrc.includes('require-corp') &&
+    coiServiceWorkerSrc.includes('Cross-Origin-Resource-Policy'),
+  'COI service worker retains credentialless failure degrade fallback',
+);
+assert(
+  coiServiceWorkerSrc.includes('serviceWorker.ready') &&
+    coiServiceWorkerSrc.includes('became ready'),
+  'COI service worker reloads after first-visit worker readiness',
+);
+for (const [name, html] of [
+  ['index', indexHtmlSrc],
+  ['bench', benchHtmlSrc],
+  ['smoke', smokeHtmlSrc],
+]) {
+  assert(
+    html.includes('window.coi') &&
+      html.indexOf('window.coi') < html.indexOf('coi-serviceworker.js'),
+    `${name}.html configures Safari COEP before the service worker`,
+  );
+}
+assert(
+  !indexHtmlSrc.includes('fonts.googleapis.com') &&
+    !indexHtmlSrc.includes('fonts.gstatic.com'),
+  'index.html uses self-hosted fonts under require-corp',
+);
+assert(
+  timeControlSrc.includes('isConstrainedDevice') &&
+    timeControlSrc.includes('pointer: coarse') &&
+    timeControlSrc.includes('defaultThreads = isConstrainedDevice() ? 4'),
+  'mobile play defaults cap worker threads conservatively',
 );
 assert(
   buildWasmSrc.includes('TITANIUM_WASM_THREADS') &&
