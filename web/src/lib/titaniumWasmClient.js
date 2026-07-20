@@ -87,10 +87,16 @@ export class TitaniumWasmEngineClient {
     if (this._initInFlight) {
       return this._initInFlight;
     }
-    this._initInFlight = this._initWorkerOnce(engineMode, timeoutMs, catLmrCeiling, threads).finally(() => {
-      this._initInFlight = null;
+    const initPromise = this._initWorkerOnce(engineMode, timeoutMs, catLmrCeiling, threads);
+    const trackedPromise = initPromise.finally(() => {
+      // A failed init can be replaced immediately by the single-thread
+      // fallback. Do not let the old promise clear the replacement.
+      if (this._initInFlight === trackedPromise) {
+        this._initInFlight = null;
+      }
     });
-    return this._initInFlight;
+    this._initInFlight = trackedPromise;
+    return trackedPromise;
   }
 
   async _initWorkerOnce(engineMode, timeoutMs, catLmrCeiling, threads = this.threads) {
@@ -378,10 +384,15 @@ export class TitaniumWasmEngineClient {
     }
   }
 
-  _workerCrashError(event, prefix = 'Titanium WASM worker crashed') {
+  _workerCrashError(
+    event,
+    prefix = 'Titanium WASM worker crashed',
+    requestedThreads = this.threads,
+  ) {
     const build = localBuildMeta();
     const detail = [
       event?.message ?? (typeof event === 'string' ? event : null) ?? prefix,
+      `requestedThreads=${Math.max(1, requestedThreads ?? 1)}`,
       `commit=${build.git_commit ?? 'unknown'}`,
       `wasm=${String(build.wasm_sha256 ?? 'unknown').slice(0, 16)}`,
     ];
@@ -395,13 +406,20 @@ export class TitaniumWasmEngineClient {
       filename: event?.filename ?? null,
       lineno: event?.lineno ?? null,
       colno: event?.colno ?? null,
+      requestedThreads: Math.max(1, requestedThreads ?? 1),
     };
     return error;
   }
 
   _onWorkerError(event) {
     if (this._readyWaiter) {
-      this._rejectReady(this._workerCrashError(event, 'Titanium WASM worker init failed'));
+      this._rejectReady(
+        this._workerCrashError(
+          event,
+          'Titanium WASM worker init failed',
+          this.threads,
+        ),
+      );
       return;
     }
 
@@ -676,11 +694,48 @@ export class TitaniumWasmEngineClient {
     try {
       await this.initWorkers(engineMode, { catLmrCeiling, threads: this.threads });
     } catch (err) {
-      if (this.pendingRequest === pending) {
-        this.pendingRequest = null;
+      const requestedThreads = this.threads;
+      if (requestedThreads > 1) {
+        // A worker can die while creating Rayon before it ever sends `ready`.
+        // Keep this request pending, replace the dead worker, and try once
+        // with the browser-safe single-thread WASM path. This is deliberately
+        // separate from the search-crash retry below: no search was posted.
+        this.terminateWorkers();
+        this._degradeToSingleThread = true;
+        this.threads = 1;
+        this.setStatus('connecting');
+        try {
+          await this.initWorkers(engineMode, { catLmrCeiling, threads: 1 });
+        } catch (fallbackErr) {
+          this.terminateWorkers();
+          const combinedError = new Error(
+            `Titanium WASM worker init failed with ${requestedThreads} threads; ` +
+              `single-thread fallback also failed: ${fallbackErr?.message ?? fallbackErr}`,
+          );
+          combinedError.cause = err;
+          combinedError.threadedInitError = err;
+          combinedError.singleThreadInitError = fallbackErr;
+          combinedError.diagnostics = {
+            ...(err?.diagnostics ?? {}),
+            initFallbackAttempted: true,
+            requestedThreads,
+            fallbackThreads: 1,
+            fallbackError: fallbackErr?.message ?? String(fallbackErr),
+            fallbackDiagnostics: fallbackErr?.diagnostics ?? null,
+          };
+          if (this.pendingRequest === pending) {
+            this.pendingRequest = null;
+          }
+          this.setStatus('error');
+          throw combinedError;
+        }
+      } else {
+        if (this.pendingRequest === pending) {
+          this.pendingRequest = null;
+        }
+        this.setStatus('error');
+        throw err;
       }
-      this.setStatus('error');
-      throw err;
     }
     pending.initMs = performance.now() - readyStart;
     this.setStatus('searching');

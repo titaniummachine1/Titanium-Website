@@ -111,6 +111,22 @@ assert(
   'titanium WASM resolves configured engine thread count',
 );
 assert(tiWasmClient.includes('await this.initWorkers'), 'titanium WASM awaits worker init before search');
+assert(
+  tiWasmClient.includes('if (requestedThreads > 1)') &&
+    tiWasmClient.includes('this._degradeToSingleThread = true') &&
+    tiWasmClient.includes('await this.initWorkers(engineMode, { catLmrCeiling, threads: 1 })'),
+  'threaded WASM init failure retries the same request with one thread',
+);
+assert(
+  tiWasmClient.includes('this.terminateWorkers();') &&
+    tiWasmClient.includes('single-thread fallback also failed') &&
+    tiWasmClient.includes('initFallbackAttempted: true'),
+  'threaded init fallback tears down failed worker and preserves combined diagnostics',
+);
+assert(
+  /if \(requestedThreads > 1\)[\s\S]*?else \{[\s\S]*?throw err;/.test(tiWasmClient),
+  'already-single-thread init failure skips fallback and propagates normally',
+);
 assert(tiWasmWorker.includes('wasmUrl'), 'titanium WASM worker imports hashed wasm asset URL');
 assert(tiWasmWorker.includes('ensureInit'), 'titanium WASM worker defines wasm init helper');
 assert(aceWasmClient.includes('new AceRustWasmWorker()'), 'ace rust: own worker');
@@ -163,6 +179,12 @@ assert(
     timeControlSrc.includes('pointer: coarse') &&
     timeControlSrc.includes('defaultThreads = isConstrainedDevice() ? 4'),
   'mobile play defaults cap worker threads conservatively',
+);
+assert(
+  timeControlSrc.includes('const maxThreads = isConstrainedDevice()') &&
+    timeControlSrc.includes('Math.min(4, threadsSliderMax())') &&
+    timeControlSrc.includes('return clampCores(aiSettings.cores)'),
+  'saved mobile thread settings are capped at four threads',
 );
 assert(
   buildWasmSrc.includes('TITANIUM_WASM_THREADS') &&

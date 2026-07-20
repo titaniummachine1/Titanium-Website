@@ -350,7 +350,10 @@ export function clampCores(cores) {
   if (!Number.isFinite(n)) {
     return defaultThreadCount();
   }
-  return Math.max(1, Math.min(threadsSliderMax(), Math.round(n)));
+  const maxThreads = isConstrainedDevice()
+    ? Math.min(4, threadsSliderMax())
+    : threadsSliderMax();
+  return Math.max(1, Math.min(maxThreads, Math.round(n)));
 }
 
 /** @deprecated use clampCores */
