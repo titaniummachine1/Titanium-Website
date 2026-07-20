@@ -2,7 +2,7 @@
  * Main entry point — two-column game layout
  *
  * Layout (desktop):
- *   board-row: [eval bar | top-card / board / bottom-card / controls]   sidebar: [moves card / review card]
+ *   board-row: [top-card / (eval | board) / bottom-card / controls]   sidebar: [moves card / review card]
  *
  * Play/Analysis/Review mode is chosen from the Settings dialog (ui/playerDialog.js),
  * not a page header. Collapses to a single column on narrow viewports (see styles.css).
@@ -33,13 +33,13 @@ appRoot.innerHTML =
   '<div class="app-shell">' +
     '<div class="layout" id="layout">' +
       '<div class="board-row" id="board-row">' +
-        '<div class="board-row__eval" id="eval-slot"><div id="eval-inner"></div></div>' +
-        '<div class="board-row__grid" id="board-row-grid">' +
-          '<div class="card-slot" id="top-card"></div>' +
+        '<div class="card-slot" id="top-card"></div>' +
+        '<div class="board-play-row" id="board-play-row">' +
+          '<div class="board-row__eval" id="eval-slot"><div id="eval-inner"></div></div>' +
           '<div class="board-slot" id="board-slot"></div>' +
-          '<div class="card-slot" id="bottom-card"></div>' +
-          '<div class="controls-slot" id="controls-slot"></div>' +
         '</div>' +
+        '<div class="card-slot" id="bottom-card"></div>' +
+        '<div class="controls-slot" id="controls-slot"></div>' +
       '</div>' +
       '<div class="layout__sidebar" id="sidebar-slot"></div>' +
     '</div>' +

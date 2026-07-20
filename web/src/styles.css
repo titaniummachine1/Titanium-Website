@@ -18,12 +18,15 @@
   --muted: #b8aea3;
   --card: #3d3a36;
   --border: #524e48;
-  /* Cards + controls + gaps. Board square height ≈ width, so subtract label strip. */
-  --play-chrome: 156px;
+  /* Board sizing: cards stay in the first viewport; controls may scroll below. */
+  --play-chrome-cards: 108px;
+  --play-chrome-controls: 52px;
+  --play-chrome: calc(var(--play-chrome-cards) + var(--play-chrome-controls));
   --board-frame: 22px;
+  /* Wide screens: keep a readable board without forcing tiny gutters. */
   --board-max: min(
     100%,
-    760px,
+    880px,
     calc(100dvh - var(--play-chrome) - var(--board-frame))
   );
   font-family: Roboto, system-ui, sans-serif;
@@ -54,11 +57,11 @@ body {
   gap: 8px;
   padding: 6px;
   grid-template-areas: 'board sidebar';
-  grid-template-columns: minmax(280px, min(72vw, var(--board-max))) minmax(200px, 320px);
+  grid-template-columns: minmax(320px, min(82vw, var(--board-max))) minmax(200px, 320px);
   grid-template-rows: auto;
   align-items: start;
   justify-content: center;
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
   width: 100%;
 }
@@ -81,29 +84,33 @@ body {
 
 .board-row {
   grid-area: board;
-  display: grid;
-  /* Eval column is always reserved at a fixed width -- showing/hiding the
-     eval bar must never reflow/shift the board (see evalBar.js). */
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 6px;
-  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
   width: 100%;
   max-width: var(--board-max);
   min-width: 0;
   margin-inline: auto;
 }
 
+/* Eval sits beside the board only — never beside player cards/controls. */
+.board-play-row {
+  display: grid;
+  /* Fixed-width eval column so toggling visibility never shifts the board. */
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+
 .board-row__eval {
-  grid-column: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
   align-self: stretch;
-}
-
-.board-row__grid {
-  grid-column: 2;
-  min-width: 0;
+  height: 100%;
 }
 
 .game-footer {
@@ -690,19 +697,27 @@ body {
 
 @media (max-width: 900px) {
   :root {
-    --play-chrome: 162px;
+    /* Size board against player cards only — play button / options scroll below. */
+    --play-chrome: var(--play-chrome-cards);
+    --play-chrome-cards: 100px;
+    --board-frame: 16px;
+    --board-max: min(
+      100%,
+      calc(100dvh - var(--play-chrome-cards) - var(--board-frame))
+    );
   }
 
   .layout {
     grid-template-areas:
       'board'
       'sidebar';
-    grid-template-columns: minmax(0, min(100%, var(--board-max)));
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto;
     align-content: start;
     justify-items: stretch;
     gap: 6px;
     padding: 4px;
+    max-width: none;
   }
 
   .layout__sidebar {
@@ -710,39 +725,54 @@ body {
     max-width: none;
     width: 100%;
   }
+
+  .board-row {
+    max-width: none;
+    width: 100%;
+  }
+
+  .card-slot,
+  .controls-slot {
+    width: 100%;
+  }
 }
 
 @media (max-width: 720px) {
   :root {
-    --play-chrome: 170px;
+    --play-chrome-cards: 92px;
+    --board-frame: 12px;
+    --board-max: min(
+      100%,
+      calc(100dvh - var(--play-chrome-cards) - var(--board-frame))
+    );
   }
 
   .board-row {
-    max-width: var(--board-max);
+    max-width: none;
     width: 100%;
-    margin: 0 auto;
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto;
-    gap: 3px;
-  }
-
-  .board-row__eval {
-    grid-column: 1;
-    grid-row: 1;
-    height: 18px;
-    min-height: 18px;
-  }
-
-  .board-row__grid {
-    grid-column: 1;
-    grid-row: 2;
+    margin: 0;
     gap: 2px;
+  }
+
+  /* Keep eval on the LEFT of the board — never stack it between the
+     player card and the board. */
+  .board-play-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .player-card {
+    padding: 4px 8px;
+    border-radius: 8px;
+  }
+
+  .player-card__main {
+    gap: 4px 6px;
   }
 }
 
-/* Eval bar — its own card to the left of the board, same height as the
-   board, never bigger than the board and never affecting board layout
-   (see .board-row's fixed-width eval column above). */
+/* Eval bar — card to the left of the board only (inside .board-play-row),
+   same height as the board, never spanning player cards/controls. */
 .eval-panel {
   flex: 1;
   display: flex;
@@ -821,29 +851,10 @@ body {
 }
 
 @media (max-width: 900px) {
-  .eval-bar {
-    min-height: 20px;
-  }
-
-  .eval-bar__fill {
-    transform-origin: left;
-    transform: scaleX(var(--scale));
-  }
-
-  .eval-bar--rotated .eval-bar__fill {
-    transform-origin: right;
-  }
-
-  /* Bar is a short horizontal strip here -- lay the pawn+depth widget out
-     as a row (depth to the right) instead of a column, still centered. */
-  .eval-bar__center {
-    flex-direction: row;
-    gap: 6px;
-  }
-
-  .eval-bar__pawn {
-    width: 16px;
-    height: 16px;
+  .eval-bar__score,
+  .eval-bar__depth {
+    font-size: 8px;
+    padding: 1px 3px;
   }
 }
 
@@ -1392,14 +1403,6 @@ body {
   font-size: 0.65rem;
   max-height: 20vh;
   overflow: auto;
-}
-
-.board-row__grid {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  width: 100%;
 }
 
 .card-slot {
@@ -2721,11 +2724,15 @@ body {
 
 /* Live vision tuning strip (CAT/LMR overlays — local only) */
 .vision-tuning {
+  width: 100%;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   margin: 8px 0;
   background: rgba(0, 0, 0, 0.14);
+  white-space: normal;
+  overflow-wrap: normal;
 }
 
 .vision-tuning__title {

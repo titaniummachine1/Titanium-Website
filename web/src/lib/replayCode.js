@@ -21,7 +21,7 @@ const NOTATION_TOKEN_RE =
 /** `ve1` / `hf8` (wallz prefix) → `e1v` / `f8h` for our parser. */
 export function normalizeReplayToken(token) {
   const lower = String(token ?? '').trim().toLowerCase();
-  if (lower.length === 3 && (lower[0] === 'h' || lower[0] === 'v')) {
+  if (/^[hv][a-h][1-8]$/.test(lower)) {
     return `${lower.slice(1)}${lower[0]}`;
   }
   return lower;

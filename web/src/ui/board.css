@@ -8,8 +8,8 @@
   /* Height hugs the square board. Wall rack is absolutely positioned so its
      10+10 slots cannot stretch the tan shell. */
   display: block;
-  width: min(100%, var(--board-max, 720px));
-  max-width: var(--board-max, min(720px, 100%));
+  width: 100%;
+  max-width: 100%;
   height: fit-content;
   max-height: calc(100dvh - var(--play-chrome, 156px));
   margin-inline: auto;

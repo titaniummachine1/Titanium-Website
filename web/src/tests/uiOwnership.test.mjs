@@ -65,8 +65,20 @@ assert(!dialogSrc.includes('CAT path tilt'), 'CAT path tilt slider removed from 
 
 console.log('\n[ui] development vision panel owns CAT source toggle');
 const visionPanelSrc = readSrc('ui/visionTuningPanel.js');
+const stylesSrc = readSrc('styles.css');
 assert(visionPanelSrc.includes('data-cat-vision-source'), 'CAT source toggle in vision panel');
 assert(visionPanelSrc.includes('pressure-only Lee bonus'), 'panel explains v7 pressure-only 0.25');
+assert(
+  visionPanelSrc.includes("container.querySelector('.board-play-row')")
+    && visionPanelSrc.includes('boardPlayRow?.parentElement === container')
+    && visionPanelSrc.includes("boardPlayRow.insertAdjacentElement('afterend', slot)")
+    && !visionPanelSrc.includes("boardSlot.insertAdjacentElement('afterend', slot)"),
+  'vision panel mounts after board-play-row, outside its eval|board grid',
+);
+assert(
+  /\.vision-tuning\s*\{[\s\S]*width:\s*100%;[\s\S]*min-width:\s*0;/.test(stylesSrc),
+  'vision panel uses full available width with shrink-safe sizing',
+);
 
 console.log('\n[ui] live setting restart preserved in controller');
 const controllerSrc = readSrc('game/appController.js');

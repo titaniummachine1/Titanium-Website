@@ -1,8 +1,8 @@
 /**
- * Eval bar — a fixed-width card to the left of the board, same height as the
- * board. Its column is always reserved (see .board-row__eval in styles.css)
- * so showing/hiding it never shifts the board horizontally; only this
- * component's own content fades in/out.
+ * Eval bar — fixed-width card beside the board only (inside .board-play-row).
+ * Height matches the board, not player cards/controls. The 36px column stays
+ * reserved so toggling visibility never shifts the board horizontally; only
+ * this component's content fades in/out.
  */
 
 import { formatEngineScore } from '../lib/engineScore.js';

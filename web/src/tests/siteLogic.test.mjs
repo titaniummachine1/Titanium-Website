@@ -774,6 +774,29 @@ assertEqual(
   "d3h",
   "wallz prefix normalizes before parseAlgebraic",
 );
+for (const token of ["h3h", "h4h", "h5h", "h8h"]) {
+  assertEqual(
+    normalizeReplayToken(token),
+    token,
+    `wallz suffix ${token} remains unchanged`,
+  );
+}
+const suppliedReplayLine =
+  "e2 e8 e3 e7 e4 e6 d3h f6h f3h d6h d5v e5 h3h d4 c4v a5v c6v f4 g4 h4 h4h h8h g5 g4 f7v f5h h5 h5h b7h g5 f5 e5 e6 f6 g6 h6 a4h h7 h6 h8 h7 g8 h8 g9 g8 f9 g9";
+const suppliedReplayTokens = tokenizeAlgebraicNotation(suppliedReplayLine);
+assertEqual(suppliedReplayTokens.length, 47, "supplied replay line has 47 tokens");
+assertEqual(
+  suppliedReplayTokens.join(" "),
+  suppliedReplayLine,
+  "supplied replay line tokenizes unchanged",
+);
+const suppliedReplayBoard = new QuoridorBoard();
+for (let ply = 0; ply < suppliedReplayTokens.length; ply++) {
+  const token = suppliedReplayTokens[ply];
+  const action = parseAlgebraic(token);
+  assert(suppliedReplayBoard.isValid(action), `supplied replay legal at ply ${ply + 1}`);
+  suppliedReplayBoard.takeAction(action);
+}
 const decoded = decodeReplayCode("e2 ve4 hd3 e8");
 assertEqual(decoded.algebraic.join(" "), "e2 e4v d3h e8", "decodeReplayCode normalizes walls");
 

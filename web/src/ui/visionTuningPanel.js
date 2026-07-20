@@ -75,9 +75,10 @@ export function updateVisionTuningPanel(container, state, controller) {
   if (!slot) {
     slot = document.createElement('div');
     slot.dataset.visionTuningRoot = '';
-    const boardSlot = container.querySelector('.board-slot') ?? container.querySelector('#board-slot');
-    if (boardSlot?.parentElement) {
-      boardSlot.insertAdjacentElement('afterend', slot);
+    const boardPlayRow =
+      container.querySelector('.board-play-row') ?? container.querySelector('#board-play-row');
+    if (boardPlayRow?.parentElement === container) {
+      boardPlayRow.insertAdjacentElement('afterend', slot);
     } else {
       container.prepend(slot);
     }
