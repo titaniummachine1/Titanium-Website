@@ -26,10 +26,12 @@ import {
 } from "../lib/screenTransform.js";
 import { PlayerType } from "../lib/engineConfig.js";
 import {
-  encodeFinishedGameWire,
-  finishedGamePayload,
-  finishedGameSignature,
-} from "../lib/trainingSubmit.js";
+  MAX_RECENT,
+  exportRecentGamesJson,
+  importRecentGamesJson,
+  listRecentGames,
+  rememberRecentGame,
+} from "../lib/recentGames.js";
 import {
   allocateWholeGameTime,
   chargeThinkMsForSeat,
@@ -53,6 +55,16 @@ import { getAllEngineConfigs } from "../lib/playerRegistry.js";
 
 let passed = 0;
 let failed = 0;
+
+const recentStore = new Map();
+globalThis.localStorage = {
+  getItem(key) {
+    return recentStore.get(key) ?? null;
+  },
+  setItem(key, value) {
+    recentStore.set(key, String(value));
+  },
+};
 
 function assert(condition, message) {
   if (condition) passed++;
@@ -328,32 +340,69 @@ assertEqual(trimmedClockLog.length, 1, "undo removes later clock entries");
 assertEqual(clockLogUsedMs(trimmedClockLog, 0), 1200, "white gets ply 3 time back");
 assertEqual(clockLogUsedMs(trimmedClockLog, 1), 0, "black gets ply 2 time back");
 
-console.log("\n[training] finished game payload");
-const trainingPayload = finishedGamePayload({
-  actions: winLine.map(parseAlgebraic),
-  winner: 2,
-  players: [PlayerType.Human, PlayerType.TitaniumV16],
-  playerAiSettings: [null, { threads: 2 }],
-  engineLabels: ["Human", "Titanium v16 live"],
+console.log("\n[recent games] database export/import");
+recentStore.clear();
+rememberRecentGame({
+  notation: "e2 e8",
+  winner: "white",
+  plies: 2,
+  at: 1_000,
+  label: "opening",
 });
-assertEqual(trainingPayload.result, -1, "black win maps to result -1");
-assertEqual(trainingPayload.winner, "black", "black win text");
-assertEqual(trainingPayload.moves.at(-1), "g1", "moves are algebraic");
-assert(
-  finishedGameSignature(trainingPayload).startsWith("-1|e2 e8"),
-  "signature includes result and line",
+rememberRecentGame({
+  notation: "e3 e7",
+  winner: "black",
+  plies: 2,
+  at: 2_000,
+});
+const exportedGames = JSON.parse(exportRecentGamesJson());
+assertEqual(exportedGames.schema, "titanium-game-database-v1", "export schema");
+assertEqual(exportedGames.games.length, 2, "export includes all saved games");
+assertEqual(
+  exportedGames.games[0].moves.join(" "),
+  "e3 e7",
+  "export includes move tokens",
 );
-const trainingWire = encodeFinishedGameWire(trainingPayload);
-assert(
-  trainingWire.startsWith("TI-GAME-1\n"),
-  "wire uses text protocol header",
+assertEqual(exportedGames.games[0].result, -1, "export includes numeric result");
+assertEqual(
+  exportedGames.games[0].source,
+  "website_finished_game",
+  "export identifies website source",
 );
-assert(trainingWire.includes("result=-1\n"), "wire includes numeric verdict");
-assert(
-  trainingWire.includes(`moves=${winLine.join(" ")}\n`),
-  "wire includes move list",
+const importResult = importRecentGamesJson(
+  JSON.stringify({
+    schema: "titanium-game-database-v1",
+    exportedAt: new Date().toISOString(),
+    games: [
+      {
+        moves: ["e4", "e6"],
+        result: -1,
+        source: "website_finished_game",
+        plies: 2,
+        at: 3_000,
+      },
+      { notation: "e2 e8", winner: "white", plies: 2, at: 4_000 },
+    ],
+  }),
 );
-assert(!trainingWire.includes("{"), "wire is not JSON");
+assertEqual(importResult.imported, 1, "import counts new notation");
+assertEqual(importResult.total, 3, "import merges and dedupes");
+assertEqual(
+  listRecentGames().some((entry) => entry.notation === "e4 e6"),
+  true,
+  "import derives notation from move tokens",
+);
+assertEqual(
+  listRecentGames().find((entry) => entry.notation === "e4 e6")?.winner,
+  "black",
+  "import retains numeric result metadata",
+);
+assertEqual(listRecentGames()[0].notation, "e2 e8", "newest metadata sorts first");
+assertEqual(listRecentGames()[0].at, 4_000, "import preserves valid metadata");
+for (let i = 0; i < MAX_RECENT + 5; i++) {
+  rememberRecentGame({ notation: `e${(i % 9) + 1} e${((i + 1) % 9) + 1} ${i}`, at: 10_000 + i });
+}
+assertEqual(listRecentGames().length, MAX_RECENT, "recent database remains bounded");
 
 console.log("\n[liveBestMove] last committed move not highlighted");
 assertEqual(

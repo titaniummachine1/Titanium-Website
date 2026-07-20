@@ -2643,11 +2643,29 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.load-dialog__recent-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
 .load-dialog__recent-title {
   font-size: 0.78rem;
   font-weight: 600;
   color: var(--text-muted, var(--muted));
-  margin-bottom: 6px;
+}
+
+.load-dialog__recent-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.load-dialog__file-input {
+  display: none;
 }
 
 .load-dialog__recent-list {
@@ -2657,8 +2675,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 12rem;
+  max-height: min(32rem, 50vh);
   overflow-y: auto;
+}
+
+.load-dialog__recent-empty {
+  margin: 0;
+  color: var(--text-muted, var(--muted));
+  font-size: 0.75rem;
 }
 
 .load-dialog__recent-row {

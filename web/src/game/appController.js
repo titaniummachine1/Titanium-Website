@@ -73,11 +73,6 @@ import { requestEngineMove } from "../engines/requestEngineMove.js";
 import { validateEngineResultIdentity } from "../engines/validateEngineResultIdentity.js";
 import { logAiRequestEvent } from "../engines/aiRequestLog.js";
 import { EngineBackendKind } from "../engines/engineBackend.js";
-import {
-  finishedGamePayload,
-  finishedGameSignature,
-  submitFinishedGame,
-} from "../lib/trainingSubmit.js";
 import { rememberRecentGame, formatRecentGameLabel } from "../lib/recentGames.js";
 import { AceV10JsEngineClient } from "../lib/aceV10JsEngine.js";
 import { AceV13JsEngineClient } from "../lib/aceV13JsEngine.js";
@@ -105,7 +100,7 @@ import {
 
 const DEFAULT_CAT_VISION_SETTINGS = Object.freeze({
   showSquares: true,
-  showWalls: true,
+  showWalls: false,
   squareOpacity: 1,
   wallOpacity: 1,
 });
@@ -619,7 +614,6 @@ export class AppController {
     this._engineApplyChain = Promise.resolve();
     this._terminalOverlayDismissed = false;
     this._gameHalted = false;
-    this._submittedFinishedGames = new Set();
     this._lastDiagnostic = null;
     this.startupConfirmed = false;
     this._activeAiAbort = null;
@@ -2015,7 +2009,7 @@ export class AppController {
     }
 
     if (this.session.forfeitOnTime(seatIndex + 1)) {
-      this.maybeSubmitFinishedGame();
+      this.rememberFinishedGame();
     }
     this.onChange?.();
   }
@@ -2083,7 +2077,7 @@ export class AppController {
     this.engineStatus[seatIndex] = "flagged";
     this.engineErrors[seatIndex] = null;
     if (this.session.forfeitOnTime(seatIndex + 1)) {
-      this.maybeSubmitFinishedGame();
+      this.rememberFinishedGame();
     }
     this.onChange?.();
   }
@@ -2735,7 +2729,6 @@ export class AppController {
     this._humanTimedOut = [false, false];
     this._illegalRetriesByPly = {};
     this.settingsChangelog = [];
-    this._submittedFinishedGames.clear();
     this.initialBudgetHint = describeTimeBudget(
       this.settings.players,
       this.settings.playerAiSettings,
@@ -2895,15 +2888,18 @@ export class AppController {
         wallIndex: indexCatWalls(walls),
         whiteDist: data.whiteDist,
         blackDist: data.blackDist,
-        hotCm: data.hotCm ?? 160,
-        coldCm: data.coldCm ?? 60,
-        maxCm: data.maxCm ?? 400,
+        hotCm: data.hotCm ?? 700,
+        coldCm: data.coldCm ?? 1,
+        maxCm: data.maxCm ?? 1000,
+        catVersion: data.catVersion ?? "v7",
+        catSchema: data.schema ?? null,
+        catPlane: data.plane ?? 4,
+        catPlaneName: data.planeName ?? "final reinforced CAT attention",
+        wallVision: data.wallVision === true,
         skippedSquares:
           data.skippedSquares ?? reachable?.filter((r) => !r).length ?? 0,
-        skippedWallCount: walls.filter((w) => w.skip ?? w.pruned).length,
-        searchableWallCount: walls.filter(
-          (w) => w.search ?? !(w.skip ?? w.pruned),
-        ).length,
+        skippedWallCount: 0,
+        searchableWallCount: 0,
       };
       this._catMovesKey = movesKey;
       this.catVizError = null;
@@ -3120,7 +3116,7 @@ export class AppController {
     }
 
     this.handleCatPositionChanged();
-    this.maybeSubmitFinishedGame();
+    this.rememberFinishedGame();
     this.onChange?.();
     if (freePlay || manualWhilePaused) {
       return;
@@ -3696,48 +3692,41 @@ export class AppController {
     return config?.name ?? playerType;
   }
 
-  maybeSubmitFinishedGame() {
+  rememberFinishedGame() {
     if (this.replay || (this.session.winner == null && !this.session.isDraw)) {
       return;
     }
-    const payload = finishedGamePayload({
-      actions: this.session.actions,
-      winner: this.session.winner,
-      isDraw: this.session.isDraw,
-      players: [...this.settings.players],
-      playerAiSettings: this.settings.playerAiSettings.map((settings) =>
-        settings ? { ...settings } : null,
-      ),
-      engineLabels: [this.engineLabelForSeat(0), this.engineLabelForSeat(1)],
-      initialBudgetHint: this.initialBudgetHint,
-      moveThinkLog: this.moveThinkLog.map((entry) => ({ ...entry })),
-    });
-    const signature = finishedGameSignature(payload);
-    if (!payload || !signature || this._submittedFinishedGames.has(signature)) {
+    const notation = this.session.actions
+      .map((action) => (typeof action === "string" ? action : toAlgebraic(action)))
+      .join(" ");
+    if (!notation) {
       return;
     }
-    this._submittedFinishedGames.add(signature);
+    const at = Date.now();
+    const winner = this.session.isDraw
+      ? "draw"
+      : this.session.winner === 1
+        ? "white"
+        : this.session.winner === 2
+          ? "black"
+          : null;
     try {
-      const notation = (payload.moves ?? []).join(" ");
       const label = formatRecentGameLabel({
         notation,
-        winner: payload.winner,
-        plies: payload.moves?.length ?? this.session.actions.length,
-        at: Date.now(),
+        winner,
+        plies: this.session.actions.length,
+        at,
       });
       rememberRecentGame({
         notation,
-        winner: payload.winner,
-        plies: payload.moves?.length ?? this.session.actions.length,
-        at: Date.now(),
+        winner,
+        plies: this.session.actions.length,
+        at,
         label,
       });
     } catch (err) {
       console.debug?.("recent-game remember skipped", err);
     }
-    void submitFinishedGame(payload).catch((err) => {
-      console.debug?.("finished-game training submit skipped", err);
-    });
   }
 
   /** @deprecated prefer engineLabelForSeat(seatIndex) when seat is known */
@@ -4653,7 +4642,7 @@ export class AppController {
       });
     }
     if (this.session.winner != null || this.session.isDraw) {
-      this.maybeSubmitFinishedGame();
+      this.rememberFinishedGame();
       this._cancelActiveAiSearch();
       this.stopAllPonders();
       this.engineErrors[seatIndex] = null;

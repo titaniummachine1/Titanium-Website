@@ -3,7 +3,7 @@
  * Streams iterative-deepening progress like Titanium WASM.
  */
 
-import init, { WasmAceEngine, last_panic } from '../wasm/titanium-v17/titanium.js';
+import init, * as titaniumWasm from '../wasm/titanium/titanium.js';
 
 const WASM_THREAD_STACK_SIZE = 4 << 20;
 let engine = null;
@@ -12,7 +12,12 @@ let initPromise = null;
 async function ensureEngine() {
   if (!initPromise) {
     initPromise = init({ thread_stack_size: WASM_THREAD_STACK_SIZE }).then(() => {
-      engine = new WasmAceEngine();
+      if (typeof titaniumWasm.WasmAceEngine !== 'function') {
+        throw new Error(
+          'ACE Rust WASM artifact is unavailable in this build; use ACE v13 JS or rebuild with WasmAceEngine export',
+        );
+      }
+      engine = new titaniumWasm.WasmAceEngine();
     });
   }
   await initPromise;
@@ -89,7 +94,7 @@ self.onmessage = async (event) => {
       elapsedMs: finalMeta.elapsedMs,
     });
   } catch (err) {
-    const panic = typeof last_panic === 'function' ? last_panic() : '';
+    const panic = typeof titaniumWasm.last_panic === 'function' ? titaniumWasm.last_panic() : '';
     const base = err?.message ?? String(err);
     const message = panic && !base.includes(panic) ? `${base} | ${panic}` : base;
     self.postMessage({ type: 'error', seq, message });

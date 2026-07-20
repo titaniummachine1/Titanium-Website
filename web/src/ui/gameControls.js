@@ -24,6 +24,8 @@ import {
   listRecentGames,
   rememberRecentGame,
   formatRecentGameLabel,
+  exportRecentGamesJson,
+  importRecentGamesJson,
 } from '../lib/recentGames.js';
 
 function escHtml(s) {
@@ -308,19 +310,29 @@ export function openLoadNotationDialog(controller) {
 
   const isReview = controller.getState?.().uiMode === 'replay';
   const recent = listRecentGames();
-  const recentHtml = recent.length
-    ? `<div class="load-dialog__recent">
+  const recentHtml = `
+    <div class="load-dialog__recent">
+      <div class="load-dialog__recent-heading">
         <div class="load-dialog__recent-title">Recent games</div>
-        <ul class="load-dialog__recent-list">
-          ${recent.map((entry, idx) => `
-            <li class="load-dialog__recent-row">
-              <span class="load-dialog__recent-label">${escHtml(formatRecentGameLabel(entry))}</span>
-              <button type="button" class="btn btn--small load-dialog__recent-load" data-action="load-recent" data-recent-index="${idx}">Load</button>
-            </li>
-          `).join('')}
-        </ul>
-      </div>`
-    : '';
+        <div class="load-dialog__recent-actions">
+          <button type="button" class="btn btn--small" data-action="export-games">Export games</button>
+          <button type="button" class="btn btn--small" data-action="import-games">Import games</button>
+          <input class="load-dialog__file-input" data-action="import-file" type="file" accept=".json,application/json" tabindex="-1" aria-hidden="true">
+        </div>
+      </div>
+      ${
+        recent.length
+          ? `<ul class="load-dialog__recent-list">
+              ${recent.map((entry, idx) => `
+                <li class="load-dialog__recent-row">
+                  <span class="load-dialog__recent-label">${escHtml(formatRecentGameLabel(entry))}</span>
+                  <button type="button" class="btn btn--small load-dialog__recent-load" data-action="load-recent" data-recent-index="${idx}">Load</button>
+                </li>
+              `).join('')}
+            </ul>`
+          : '<p class="load-dialog__recent-empty">No saved games yet.</p>'
+      }
+    </div>`;
 
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay load-notation-dialog';
@@ -360,6 +372,39 @@ export function openLoadNotationDialog(controller) {
     }
     if (applyLoadedNotation(controller, text, isReview, errEl)) {
       close();
+    }
+  });
+
+  overlay.querySelector('[data-action="export-games"]')?.addEventListener('click', () => {
+    const blob = new Blob([exportRecentGamesJson()], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `titanium-games-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  });
+
+  overlay.querySelector('[data-action="import-games"]')?.addEventListener('click', () => {
+    overlay.querySelector('[data-action="import-file"]')?.click();
+  });
+
+  overlay.querySelector('[data-action="import-file"]')?.addEventListener('change', async (event) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    errEl.hidden = true;
+    errEl.textContent = '';
+    try {
+      importRecentGamesJson(await file.text());
+      close();
+      openLoadNotationDialog(controller);
+    } catch (error) {
+      errEl.hidden = false;
+      errEl.textContent = error?.message ?? String(error);
+      input.value = '';
     }
   });
 

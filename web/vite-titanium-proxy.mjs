@@ -6,7 +6,6 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -837,86 +836,6 @@ function runCatSync(moves) {
   return JSON.parse(line);
 }
 
-function parseTrainingGameWire(raw) {
-  const text = String(raw || '').trim();
-  if (!text) return {};
-  if (text.startsWith('{')) {
-    return JSON.parse(text);
-  }
-  const lines = text.split(/\r?\n/);
-  if (lines[0] !== 'TI-GAME-1') {
-    throw new Error('unknown training-game wire format');
-  }
-  const payload = {};
-  for (const line of lines.slice(1)) {
-    if (!line) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq);
-    const value = line.slice(eq + 1);
-    if (key === 'moves') {
-      payload.moves = value.split(/\s+/).filter(Boolean);
-    } else if (key === 'result') {
-      payload.result = Number(value);
-    } else if (key === 'source') {
-      payload.source = value || 'website_finished_game';
-    }
-  }
-  return payload;
-}
-
-function normalizeTrainingResult(payload) {
-  if (payload.result === 1 || payload.result === '1' || payload.winner === 'white') return 1;
-  if (payload.result === -1 || payload.result === '-1' || payload.winner === 'black') return -1;
-  if (payload.result === 0 || payload.result === '0' || payload.winner === 'draw') return 0;
-  return null;
-}
-
-function ingestWebsiteFinishedGame(payload) {
-  const moves = Array.isArray(payload.moves) ? payload.moves.map(String).filter(Boolean) : [];
-  const result = normalizeTrainingResult(payload);
-  if (!moves.length || result == null) {
-    throw new Error('need moves[] and result/winner');
-  }
-  const source = String(payload.source || 'website_finished_game');
-  const python = process.env.PYTHON || 'python';
-  const script = path.join(monorepoRoot, 'training', 'tools', 'datagen', 'ingest_website_game.py');
-
-  const child = spawnSync(
-    python,
-    ['-u', script, '--result', String(result), '--source', source, '--moves', moves.join(' ')],
-    {
-    cwd: monorepoRoot,
-    encoding: 'utf8',
-    timeout: 5000,
-    maxBuffer: 1024 * 1024,
-    },
-  );
-
-  if (child.status === 0) {
-    const tokens = String(child.stdout || '')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-    if (tokens[0] === 'OK') {
-      return {
-        ok: true,
-        inserted: true,
-        gameId: Number(tokens[1]),
-        db: tokens.slice(2).join(' '),
-      };
-    }
-    return { ok: true, inserted: true };
-  }
-
-  throw new Error(
-    child.error?.message ||
-      child.stderr?.trim() ||
-      child.stdout?.trim() ||
-      `website game import exited ${child.status}`,
-  );
-}
-
 export function titaniumProxyPlugin() {
   return {
     name: 'titanium-rust-proxy',
@@ -1000,31 +919,6 @@ export function titaniumProxyPlugin() {
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ error: err.message ?? String(err) }));
             }
-          }
-        });
-      });
-
-      server.middlewares.use('/api/titanium/training-game', (req, res) => {
-        if (req.method !== 'POST') {
-          res.statusCode = 405;
-          res.end('POST only');
-          return;
-        }
-
-        let body = '';
-        req.on('data', (chunk) => {
-          body += chunk;
-        });
-        req.on('end', () => {
-          try {
-            const payload = parseTrainingGameWire(body);
-            const result = ingestWebsiteFinishedGame(payload);
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(result));
-          } catch (err) {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: false, error: err.message ?? String(err) }));
           }
         });
       });
